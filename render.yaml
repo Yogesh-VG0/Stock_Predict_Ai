@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: stock-predictor-api
+    env: python
+    buildCommand: |
+      pip install -r backend/requirements.txt
+    startCommand: |
+      cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_USER_AGENT
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.9.0
+
+  - type: worker
+    name: stock-predictor-worker
+    env: python
+    buildCommand: |
+      pip install -r backend/requirements.txt
+    startCommand: |
+      cd backend && python -c "from main import update_data; update_data()"
+    schedule: "0 4 * * 0"  # Run every Sunday at 4 AM UTC
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: REDDIT_USER_AGENT
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.9.0 
