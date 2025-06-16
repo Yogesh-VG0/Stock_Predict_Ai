@@ -1,0 +1,29 @@
+# For HuggingFace transformers compatibility
+keras==2.11.0
+# Backup compatibility package
+# If you see errors with transformers and Keras 3, also install:
+tf-keras 
+torch
+transformers
+# If you use LSTM models, also install:
+# tensorflow>=2.12 keras>=3.0 
+xgboost
+shap 
+aiohttp>=3.8 
+pandas_market_calendars 
+bs4 
+selenium>=4.9.0
+undetected-chromedriver>=3.5.0
+fake-useragent>=1.1.1
+cloudscraper>=1.2.71
+selenium-stealth>=1.0.6
+webdriver-manager>=4.0.0
+beautifulsoup4>=4.12.0
+pandas>=2.0.0
+requests>=2.31.0
+aiohttp>=3.8.5
+pymongo>=4.3.3
+python-dotenv>=1.0.0
+numpy>=1.24.0
+pathlib>=1.0.1
+ratelimit>=2.2.1 
