@@ -1,0 +1,20 @@
+{
+  "functions": {
+    "api/sentiment-cron.py": {
+      "runtime": "python3.9"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/sentiment-cron",
+      "schedule": "0 */4 * * *"
+    }
+  ],
+  "env": {
+    "MONGODB_URI": "@mongodb-uri",
+    "ALPHAVANTAGE_API_KEY": "@alphavantage-key", 
+    "REDDIT_CLIENT_ID": "@reddit-client-id",
+    "REDDIT_CLIENT_SECRET": "@reddit-client-secret",
+    "FINVIZ_API_KEY": "@finviz-key"
+  }
+} 

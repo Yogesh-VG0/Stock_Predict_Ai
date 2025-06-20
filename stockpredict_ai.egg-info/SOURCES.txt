@@ -1,0 +1,9 @@
+README.md
+setup.py
+backend/__init__.py
+backend/main.py
+stockpredict_ai.egg-info/PKG-INFO
+stockpredict_ai.egg-info/SOURCES.txt
+stockpredict_ai.egg-info/dependency_links.txt
+stockpredict_ai.egg-info/requires.txt
+stockpredict_ai.egg-info/top_level.txt

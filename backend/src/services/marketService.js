@@ -1,5 +1,6 @@
 const axios = require('axios');
 const { DateTime } = require('luxon');
+const redisClient = require('./redisClient');
 
 // US market sessions (Eastern Time)
 const SESSIONS = [
@@ -10,17 +11,45 @@ const SESSIONS = [
 const TIMEZONE = 'America/New_York';
 const EXCHANGE = 'US';
 
+// In-memory fallback cache
+const holidaysMemoryCache = {};
+
 // Helper to fetch US market holidays from a public API (e.g., NYSE holidays from Calendarific)
 async function fetchUSHolidays(year) {
+  // Try Redis cache first
+  const redisKey = `us_holidays_${year}`;
   try {
-    // You can use your own API key for Calendarific or another provider
+    if (redisClient.isOpen) {
+      const cached = await redisClient.get(redisKey);
+      if (cached) {
+        return JSON.parse(cached);
+      }
+    }
+  } catch (err) {
+    console.error('Redis error (get):', err);
+  }
+  // Try in-memory cache
+  if (holidaysMemoryCache[year]) {
+    return holidaysMemoryCache[year];
+  }
+  // Fetch from API
+  try {
     const apiKey = process.env.CALENDARIFIC_API_KEY;
     const url = `https://calendarific.com/api/v2/holidays?&api_key=${apiKey}&country=US&year=${year}&type=national`;
     const { data } = await axios.get(url);
-    // Filter for NYSE holidays (or use a static list if needed)
     const holidays = data.response.holidays
       .filter(h => h.locations === 'All' || h.locations.includes('New York Stock Exchange'))
       .map(h => h.date.iso);
+    // Cache in Redis (1 year TTL)
+    try {
+      if (redisClient.isOpen) {
+        await redisClient.set(redisKey, JSON.stringify(holidays), { EX: 60 * 60 * 24 * 365 });
+      }
+    } catch (err) {
+      console.error('Redis error (set):', err);
+    }
+    // Cache in memory
+    holidaysMemoryCache[year] = holidays;
     return holidays;
   } catch (error) {
     console.error('Error fetching US holidays:', error?.response?.data || error.message);

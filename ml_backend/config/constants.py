@@ -2,9 +2,39 @@
 Configuration constants for the stock prediction system.
 """
 
-# S&P 100 Tickers
+import os
+
+# MongoDB Configuration
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
+
+# S&P 100 Tickers (Top 25 from your list, with company names)
 TOP_100_TICKERS = [
-    "AAPL"
+    "AAPL",   # Apple Inc.
+    "MSFT",   # Microsoft Corporation
+    "NVDA",   # Nvidia Corporation
+    "AMZN",   # Amazon.com, Inc.
+    "GOOGL",  # Alphabet Inc. (Class A)
+    "META",   # Meta Platforms, Inc.
+    "BRK-B",  # Berkshire Hathaway Inc. (Class B)
+    "TSLA",   # Tesla, Inc.
+    "AVGO",   # Broadcom Inc.
+    "LLY",    # Eli Lilly and Company
+    "WMT",    # Walmart Inc.
+    "JPM",    # JPMorgan Chase & Co.
+    "V",      # Visa Inc.
+    "MA",     # Mastercard Incorporated
+    "NFLX",   # Netflix, Inc.
+    "XOM",    # Exxon Mobil Corporation
+    "COST",   # Costco Wholesale Corporation
+    "ORCL",   # Oracle Corporation
+    "PG",     # The Procter & Gamble Company
+    "JNJ",    # Johnson & Johnson
+    "UNH",    # UnitedHealth Group Incorporated
+    "HD",     # The Home Depot, Inc.
+    "ABBV",   # AbbVie Inc.
+    "KO",     # The Coca-Cola Company
+    "CRM"     # Salesforce, Inc.
 ]
 
 # API Configuration
@@ -38,21 +68,21 @@ RSS_FEEDS = {}
 
 # Model Configuration
 MODEL_CONFIG = {
-    "lstm_units": 128,
-    "dense_units": 64,
-    "dropout_rate": 0.2,
-    "batch_size": 32,
-    "epochs": 20,
-    "early_stopping_patience": 3,
+    "lstm_units": 64,
+    "dense_units": 32,
+    "dropout_rate": 0.3,
+    "batch_size": 64,
+    "epochs": 15,
+    "early_stopping_patience": 5,
     "learning_rate": 0.001,
-    "n_trials": 20,
+    "n_trials": 15,
     "default_hyperparameters": {
-        "lstm_units": 128,
-        "dense_units": 64,
-        "dropout_rate": 0.2,
+        "lstm_units": 64,
+        "dense_units": 32,
+        "dropout_rate": 0.3,
         "learning_rate": 0.001,
-        "l2_reg": 1e-4,
-        "batch_size": 32
+        "l2_reg": 1e-3,
+        "batch_size": 64
     }
 }
 
@@ -82,7 +112,16 @@ MONGO_COLLECTIONS = {
     "historical_data": "historical_data",
     "sentiment_data": "sentiment_data",
     "model_versions": "model_versions",
-    "prediction_metrics": "prediction_metrics"
+    "prediction_metrics": "prediction_metrics",
+    "economic_events": "economic_events",
+    "sec_filings": "sec_filings", 
+    "seeking_alpha_sentiment": "seeking_alpha_sentiment",
+    "seeking_alpha_comments": "seeking_alpha_comments",
+    "short_interest_data": "short_interest_data",
+    "macro_data_raw": "macro_data_raw",
+    "llm_explanations": "llm_explanations",
+    "feature_importance": "feature_importance",
+    "api_cache": "api_cache"
 }
 
 # Retry Configuration

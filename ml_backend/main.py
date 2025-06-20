@@ -1,3 +1,4 @@
+# main.py
 """
 Main application entry point for the stock prediction system.
 """

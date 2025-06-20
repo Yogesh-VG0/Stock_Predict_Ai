@@ -31,6 +31,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Global lock for sequential short interest processing to prevent bot detection
+SHORT_INTEREST_LOCK = asyncio.Lock()
+
 class BrowserFingerprint:
     """Manages browser fingerprinting to avoid detection."""
     
@@ -352,87 +355,68 @@ class ShortInterestAnalyzer:
     def _fetch_nasdaq_page(self, ticker: str) -> str:
         """
         Fetch short interest page from Nasdaq using undetected Chrome.
-        
         Args:
             ticker: Stock ticker symbol
-            
         Returns:
             HTML content of the page
         """
         driver = None
         max_retries = 1
         current_retry = 0
-        
         while current_retry < max_retries:
-        try:
+            try:
                 driver = self._create_driver()
                 if not driver:
                     raise Exception("Failed to create Chrome driver")
-                
-            url = self.base_url.format(ticker.lower())
+                url = self.base_url.format(ticker.lower())
                 logger.info(f"Fetching URL: {url}")
-                
                 # Try to load saved session
                 session_name = f"nasdaq_session_{ticker.lower()}"
                 if self.session_manager.load_session(driver, session_name):
                     logger.info(f"Loaded saved session for {ticker}")
-                
                 # Load page
                 driver.get(url)
                 logger.info("Page loaded, waiting for content...")
-                
                 # Wait for page to be ready
                 wait = WebDriverWait(driver, 30)
-                
                 # Wait for initial page load
                 self._wait_for_page_load(driver, wait)
-                
                 # Handle cookie consent if present
                 self._handle_cookie_consent(driver)
                 time.sleep(2)
-                
                 # Save initial page source for debugging
                 with open('debug_nasdaq_page_initial.html', 'w', encoding='utf-8') as f:
                     f.write(driver.page_source)
                 logger.info("Saved initial page source for debugging")
-                
                 # Check if we're blocked or need authentication
                 if "Access Denied" in driver.page_source or "Please verify you are a human" in driver.page_source:
                     logger.error("Access denied or human verification required")
                     raise Exception("Access denied or human verification required")
-                
                 # Wait for the table to be present using JavaScript
                 try:
                     # Wait for the actual table to load with data
                     wait.until(lambda d: d.execute_script("""
                         const table = document.querySelector('div[class*="short-interest"] table');
                         if (!table) return false;
-                        
                         // Check if we have actual data (not just skeleton)
                         const tbody = table.querySelector('tbody');
                         if (!tbody || !tbody.children.length) return false;
-                        
                         // Check if first row has actual data
                         const firstRow = tbody.children[0];
                         const cells = firstRow.querySelectorAll('td');
                         if (cells.length < 4) return false;
-                        
                         // Check if cells have actual content
                         return Array.from(cells).every(cell => cell.textContent.trim() !== '');
                     """))
                     logger.info("Table found and loaded with data")
-                    
                     # Log the actual table structure for debugging
                     table_structure = driver.execute_script("""
                         const table = document.querySelector('div[class*="short-interest"] table');
                         if (!table) return 'No table found';
-                        
                         const tbody = table.querySelector('tbody');
                         if (!tbody) return 'No tbody found';
-                        
                         const firstRow = tbody.children[0];
                         const cells = firstRow.querySelectorAll('td');
-                        
                         return {
                             hasTbody: true,
                             rowCount: tbody.children.length,
@@ -445,51 +429,40 @@ class ShortInterestAnalyzer:
                         };
                     """)
                     logger.info(f"Table structure: {table_structure}")
-                    
                 except TimeoutException:
                     logger.error("Table not found or not loaded with data")
                     raise TimeoutException("Table did not load in time")
-                
                 # Try to scroll to trigger content load
                 try:
                     # First try to find the table
                     table = driver.execute_script("""
                         return document.querySelector('div[class*="short-interest"] table');
                     """)
-                    
                     if table:
                         # Scroll the table into view
                         driver.execute_script("arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});", table)
                         time.sleep(2)
-                        
                         # Try to trigger any lazy loading
                         driver.execute_script("""
                             const event = new Event('scroll');
                             window.dispatchEvent(event);
                         """)
                         time.sleep(2)
-                    
                 except Exception as e:
                     logger.warning(f"Error during scrolling: {str(e)}")
-                
                 # Additional wait for dynamic content
                 time.sleep(5)
-                
                 # Get the final page source
                 page_source = driver.page_source
                 if not page_source:
                     raise Exception("Empty page source received")
-                
                 # Save final page source for debugging
                 with open('debug_nasdaq_page_final.html', 'w', encoding='utf-8') as f:
                     f.write(page_source)
                 logger.info("Saved final page source for debugging")
-                
                 # Save session for future use
                 self.session_manager.save_session(driver, session_name)
-                
                 return page_source
-                
             except Exception as e:
                 logger.error(f"Failed to fetch Nasdaq page: {str(e)}")
                 if driver:
@@ -502,7 +475,7 @@ class ShortInterestAnalyzer:
                         pass
                 current_retry += 1
                 if current_retry >= max_retries:
-            raise
+                    raise
                 time.sleep(2)
             finally:
                 if driver:
@@ -510,9 +483,8 @@ class ShortInterestAnalyzer:
                         driver.quit()
                     except:
                         pass
-                
         raise Exception(f"Failed to fetch page after {max_retries} attempts")
-            
+
     def _parse_short_interest_table(self, html_content: str) -> List[Dict]:
         """
         Parse short interest data from the HTML content.
@@ -606,12 +578,37 @@ class ShortInterestAnalyzer:
                 logger.warning("MongoDB client not initialized")
                 return False
                 
-            # Validate data
-            required_fields = ['settlement_date', 'short_interest', 'avg_daily_volume']
-            if not all(field in data for field in required_fields):
-                logger.error(f"Missing required fields in short interest data: {data}")
-                return False
+            # Check if data has 'data' field (batch storage) or individual record
+            if 'data' in data and isinstance(data['data'], list):
+                # Batch storage - store all rows
+                for row in data['data']:
+                    # Validate individual row
+                    required_fields = ['settlement_date', 'short_interest', 'avg_daily_volume']
+                    if not all(field in row for field in required_fields):
+                        logger.warning(f"Skipping row with missing fields: {row}")
+                        continue
+                        
+                    # Store individual row
+                    self._store_single_row(ticker, row)
+                        
+                logger.info(f"Stored {len(data['data'])} short interest rows for {ticker}")
+                return True
+            else:
+                # Single record storage
+                required_fields = ['settlement_date', 'short_interest', 'avg_daily_volume']
+                if not all(field in data for field in required_fields):
+                    logger.error(f"Missing required fields in short interest data: {data}")
+                    return False
+                    
+                return self._store_single_row(ticker, data)
                 
+        except Exception as e:
+            logger.error(f"Error storing short interest data in MongoDB: {e}")
+            return False
+            
+    def _store_single_row(self, ticker: str, data: Dict) -> bool:
+        """Store a single row of short interest data."""
+        try:
             # Convert settlement_date to datetime if it's a string
             if isinstance(data['settlement_date'], str):
                 try:
@@ -621,7 +618,7 @@ class ShortInterestAnalyzer:
                     return False
                     
             # Check for duplicate data
-            existing_data = self.mongo_client.db['short_interest'].find_one({
+            existing_data = self.mongo_client.db['short_interest_data'].find_one({
                 'ticker': ticker,
                 'settlement_date': data['settlement_date']
             })
@@ -630,22 +627,22 @@ class ShortInterestAnalyzer:
                 # Update only if new data is different
                 if existing_data.get('short_interest') != data['short_interest'] or \
                    existing_data.get('avg_daily_volume') != data['avg_daily_volume']:
-                    self.mongo_client.db['short_interest'].update_one(
+                    self.mongo_client.db['short_interest_data'].update_one(
                         {'_id': existing_data['_id']},
                         {'$set': data}
                     )
-                    logger.info(f"Updated short interest data for {ticker} on {data['settlement_date']}")
+                    logger.debug(f"Updated short interest data for {ticker} on {data['settlement_date']}")
             else:
                 # Add new data
                 data['ticker'] = ticker
                 data['fetched_at'] = datetime.utcnow()
-                self.mongo_client.db['short_interest'].insert_one(data)
-                logger.info(f"Stored new short interest data for {ticker} on {data['settlement_date']}")
+                self.mongo_client.db['short_interest_data'].insert_one(data)
+                logger.debug(f"Stored new short interest data for {ticker} on {data['settlement_date']}")
                 
             return True
             
         except Exception as e:
-            logger.error(f"Error storing short interest data in MongoDB: {e}")
+            logger.error(f"Error storing single row in MongoDB: {e}")
             return False
             
     def get_short_interest_data(self, ticker: str, date: datetime) -> Dict:
@@ -664,7 +661,7 @@ class ShortInterestAnalyzer:
                     return None
                     
             # Get the most recent data before or on the given date
-            data = self.mongo_client.db['short_interest'].find_one(
+            data = self.mongo_client.db['short_interest_data'].find_one(
                 {
                     'ticker': ticker,
                     'settlement_date': {'$lte': date}
@@ -685,7 +682,7 @@ class ShortInterestAnalyzer:
 
     async def fetch_short_interest(self, ticker: str) -> List[Dict]:
         """
-        Fetch short interest data using Playwright.
+        Fetch short interest data using Playwright with anti-detection measures.
         
         Args:
             ticker: Stock ticker symbol
@@ -694,15 +691,32 @@ class ShortInterestAnalyzer:
             List of dictionaries containing short interest data
         """
         async with async_playwright() as p:
+            # Add randomization to browser launch
             browser = await p.chromium.launch(
-                headless=False,
-                args=['--disable-web-security', '--disable-features=IsolateOrigins,site-per-process']
+                headless=True,  # Use headless to reduce detection
+                args=[
+                    '--disable-web-security', 
+                    '--disable-features=IsolateOrigins,site-per-process',
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-first-run',
+                    '--no-default-browser-check',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu'
+                ]
             )
             context = await browser.new_context(
                 viewport={'width': 1920, 'height': 1080},
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             page = await context.new_page()
+            
+            # Add anti-detection script
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                window.chrome = {runtime: {}};
+            """)
 
             try:
                 url = self.base_url.format(ticker.lower())
@@ -804,7 +818,7 @@ async def main():
         data = await analyzer.fetch_short_interest(ticker)
         print(f"Successfully fetched short interest data for {ticker}:")
         print(data)
-        except Exception as e:
+    except Exception as e:
         print(f"Error fetching short interest data: {str(e)}")
 
 if __name__ == "__main__":

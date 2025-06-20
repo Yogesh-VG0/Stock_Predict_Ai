@@ -1,8 +1,10 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Menu, Bell, Clock, Moon, CircleDot, Search, ChevronDown } from "lucide-react"
+import { Menu, Clock, Moon, CircleDot } from "lucide-react"
 import { getMarketStatus, MarketStatus } from "@/lib/api"
+import NotificationWidget from "@/components/market/NotificationWidget"
+import SearchWidget from "@/components/market/SearchWidget"
 
 // Helper functions (copy from pages/home.tsx for consistency)
 function getSessionLabel(session: string | null) {
@@ -116,29 +118,11 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
         </div>
 
         <div className="hidden md:block flex-1 max-w-md mx-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
-            <input
-              type="text"
-              placeholder="Search stocks, news, predictions..."
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-          </div>
+          <SearchWidget />
         </div>
 
         <div className="flex items-center gap-2">
-          <button className="p-2 rounded-md hover:bg-zinc-800 transition-colors relative">
-            <Bell className="h-5 w-5" />
-            <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-emerald-500"></span>
-          </button>
-
-          <div className="hidden md:flex items-center gap-2 ml-2">
-            <button className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-zinc-800 transition-colors text-sm">
-              <span>S&P 500</span>
-              <span className="text-emerald-500">+1.24%</span>
-              <ChevronDown className="h-4 w-4" />
-            </button>
-          </div>
+          <NotificationWidget />
         </div>
       </div>
     </div>

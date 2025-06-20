@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi_limiter import FastAPILimiter
 from fastapi_limiter.depends import RateLimiter
 import logging
+import traceback
 from starlette.concurrency import run_in_threadpool
 import json
 import httpx
@@ -26,6 +27,8 @@ import google.generativeai as genai
 import numpy as np
 from ml_backend.data.economic_calendar import EconomicCalendar
 import asyncio
+import sys
+import random
 
 from ml_backend.config.constants import (
     API_PREFIX,
@@ -43,7 +46,8 @@ from ml_backend.config.constants import (
     REDDIT_SUBREDDITS,
     RSS_FEEDS,
     RETRY_CONFIG,
-    HISTORICAL_DATA_YEARS
+    HISTORICAL_DATA_YEARS,
+    MONGODB_URI
 )
 from ml_backend.utils.mongodb import MongoDBClient
 from ml_backend.data.ingestion import DataIngestion
@@ -61,7 +65,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Stock Prediction API",
     description="API for S&P 100 stock predictions and analysis. Organized endpoints for predictions, sentiment, training, ingestion, and explainability.",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # CORS middleware
@@ -86,31 +90,74 @@ except Exception as e:
     logger.warning(f"Could not connect to Redis: {str(e)}. Redis features will be disabled")
     redis_client = None
 
+# Global instances
+mongo_client = None
+predictor = None
+
 @app.on_event("startup")
 async def startup():
     """Initialize rate limiter, DB, models, and other components on startup."""
     try:
+        logger.info("Starting API initialization...")
+        
         # Initialize MongoDB client and other components
-        app.state.mongo_client = MongoDBClient(os.getenv("MONGODB_URI"))
-        app.state.data_ingestion = DataIngestion(app.state.mongo_client)
-        app.state.sentiment_analyzer = SentimentAnalyzer(app.state.mongo_client)
-        app.state.feature_engineer = FeatureEngineer()
-        app.state.stock_predictor = StockPredictor(feature_engineer=app.state.feature_engineer)
+        logger.info("Initializing MongoDB client...")
+        mongo_client = MongoDBClient(MONGODB_URI)
+        if mongo_client.db is None:
+            raise Exception("Failed to connect to MongoDB")
+        app.state.mongo_client = mongo_client
+        logger.info("MongoDB connected successfully")
+        
+        logger.info("Initializing data ingestion...")
+        app.state.data_ingestion = DataIngestion(mongo_client)
+        
+        logger.info("Initializing economic calendar...")
         app.state.calendar_fetcher = EconomicCalendar(app.state.mongo_client)
+        
+        logger.info("Initializing sentiment analyzer...")
+        app.state.sentiment_analyzer = SentimentAnalyzer(mongo_client, calendar_fetcher=app.state.calendar_fetcher)
+        
+        logger.info("Initializing feature engineer...")
+        app.state.feature_engineer = FeatureEngineer(
+            sentiment_analyzer=app.state.sentiment_analyzer,
+            mongo_client=app.state.mongo_client,
+            calendar_fetcher=app.state.calendar_fetcher
+        )
+        
+        logger.info("Initializing stock predictor...")
+        predictor = StockPredictor(app.state.mongo_client)
+        predictor.set_feature_engineer(app.state.feature_engineer)
+        app.state.stock_predictor = predictor
+        
         if redis_client is not None:
+            logger.info("Initializing Redis...")
             await redis_client.ping()
             await FastAPILimiter.init(redis_client)
-        app.state.stock_predictor.load_models()
-        logger.info("API startup completed")
+        else:
+            logger.info("Redis not configured, skipping rate limiting")
+            
+        logger.info("Loading models...")
+        predictor.load_models()
+        
+        logger.info("API startup completed successfully")
     except Exception as e:
-        logger.error(f"Error during startup: {str(e)}")
-
+        logger.error(f"CRITICAL: Error during startup: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        # Set default values to prevent attribute errors
+        if not hasattr(app.state, 'sentiment_analyzer'):
+            app.state.sentiment_analyzer = None
+        if not hasattr(app.state, 'mongo_client'):
+            app.state.mongo_client = None
+        raise e  # Re-raise to prevent app from starting with broken state
+        
 @app.on_event("shutdown")
 async def shutdown():
     """Clean up resources on shutdown."""
     try:
-        app.state.stock_predictor.save_models()
-        app.state.mongo_client.close()
+        if hasattr(app.state, 'stock_predictor') and app.state.stock_predictor:
+            app.state.stock_predictor.save_models()
+        if hasattr(app.state, 'mongo_client') and app.state.mongo_client:
+            app.state.mongo_client.close()
         if redis_client is not None:
             await redis_client.close()
         logger.info("API shutdown completed")
@@ -163,6 +210,16 @@ class HistoricalDataResponse(BaseModel):
     data: List[Dict[str, Any]]
     last_updated: datetime
 
+class PredictionRequest(BaseModel):
+    ticker: str
+    days_back: Optional[int] = 252  # 1 year of trading days
+
+class TrainingRequest(BaseModel):
+    ticker: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    retrain: Optional[bool] = False
+
 # Routes
 @app.get("/api/v1/metadata/{ticker}", tags=["Metadata"], summary="Get Metadata", description="Get metadata for a given ticker.")
 async def get_metadata(ticker: str) -> Dict:
@@ -209,7 +266,7 @@ async def get_metadata(ticker: str) -> Dict:
 
 @app.get("/", tags=["Root"], summary="Root Endpoint", description="API root endpoint.")
 async def root():
-    return {"message": "Welcome to the Stock Prediction API"}
+    return {"message": "Stock Prediction API v2.0 - Enhanced with consistent feature engineering"}
 
 def load_all_historical_data_from_mongodb(mongo_client, tickers, start_date, end_date):
     results = {}
@@ -556,18 +613,422 @@ async def ingest_data(ticker: Optional[str] = None):
 async def fetch_sentiment(ticker: Optional[str] = None):
     """Fetch and store sentiment for all tickers or a specific ticker."""
     try:
+        # Check if sentiment analyzer is available
+        if not hasattr(app.state, 'sentiment_analyzer') or app.state.sentiment_analyzer is None:
+            logger.error("Sentiment analyzer not initialized during startup")
+            raise HTTPException(status_code=503, detail="Sentiment analyzer service unavailable")
+        
         if ticker:
             logger.info(f"Fetching sentiment for {ticker} via API endpoint...")
             await app.state.sentiment_analyzer.get_combined_sentiment(ticker, force_refresh=True)
             return {"status": "success", "message": f"Fetched and stored sentiment for {ticker}"}
         else:
-            logger.info("Fetching sentiment for all tickers via API endpoint...")
-            tasks = [app.state.sentiment_analyzer.get_combined_sentiment(t, force_refresh=True) for t in TOP_100_TICKERS]
-            await asyncio.gather(*tasks)
-            return {"status": "success", "message": "Fetched and stored sentiment for all tickers"}
+            logger.info("Fetching sentiment for all tickers via API endpoint with sequential processing...")
+            results = []
+            for i, ticker in enumerate(TOP_100_TICKERS):
+                try:
+                    logger.info(f"Processing ticker {i+1}/{len(TOP_100_TICKERS)}: {ticker}")
+                    result = await app.state.sentiment_analyzer.get_combined_sentiment(ticker, force_refresh=True)
+                    results.append({"ticker": ticker, "status": "success"})
+                    
+                    # Add delay between tickers to prevent rate limiting
+                    if i < len(TOP_100_TICKERS) - 1:
+                        await asyncio.sleep(random.uniform(2, 3))  # Increased from 1 second
+                        
+                except Exception as e:
+                    logger.error(f"Error processing sentiment for {ticker}: {e}")
+                    results.append({"ticker": ticker, "status": "error", "error": str(e)})
+            
+            success_count = len([r for r in results if r["status"] == "success"])
+            return {
+                "status": "completed", 
+                "message": f"Processed {success_count}/{len(TOP_100_TICKERS)} tickers successfully",
+                "results": results
+            }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in /api/v1/sentiment: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/optimization/insights/{ticker}")
+async def get_optimization_insights(ticker: str):
+    """Get optimization insights and feature importance for a ticker."""
+    try:
+        # Use shared MongoDB client
+        if not hasattr(app.state, 'mongo_client') or app.state.mongo_client is None:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        mongo_client = app.state.mongo_client
+        
+        # Get feature importance
+        feature_importance_doc = mongo_client.db['feature_importance'].find_one(
+            {'ticker': ticker.upper()},
+            sort=[('timestamp', -1)]
+        )
+        
+        # Get data utilization stats
+        collections_stats = {}
+        for collection_name in ['sentiment_data', 'sec_filings', 'short_interest_data', 'seeking_alpha_sentiment']:
+            try:
+                count = mongo_client.db[collection_name].count_documents({'ticker': ticker.upper()})
+                collections_stats[collection_name] = count
+            except:
+                collections_stats[collection_name] = 0
+        
+        # Get API cache efficiency
+        cache_stats = mongo_client.db['api_cache'].aggregate([
+            {
+                '$match': {
+                    'cache_key': {'$regex': ticker.upper()}
+                }
+            },
+            {
+                '$group': {
+                    '_id': None,
+                    'total_cached_requests': {'$sum': 1},
+                    'avg_cache_age_hours': {
+                        '$avg': {
+                            '$divide': [
+                                {'$subtract': [datetime.utcnow(), '$timestamp']},
+                                3600000  # Convert to hours
+                            ]
+                        }
+                    }
+                }
+            }
+        ])
+        
+        cache_efficiency = list(cache_stats)
+        
+        optimization_insights = {
+            'ticker': ticker.upper(),
+            'feature_importance': feature_importance_doc.get('feature_scores', {}) if feature_importance_doc else {},
+            'total_features_tracked': feature_importance_doc.get('total_features', 0) if feature_importance_doc else 0,
+            'last_optimization': feature_importance_doc.get('timestamp') if feature_importance_doc else None,
+            'data_utilization': {
+                'sentiment_records': collections_stats.get('sentiment_data', 0),
+                'sec_filings': collections_stats.get('sec_filings', 0),
+                'short_interest_records': collections_stats.get('short_interest_data', 0),
+                'seeking_alpha_records': collections_stats.get('seeking_alpha_sentiment', 0),
+            },
+            'cache_efficiency': {
+                'total_cached_requests': cache_efficiency[0].get('total_cached_requests', 0) if cache_efficiency else 0,
+                'avg_cache_age_hours': cache_efficiency[0].get('avg_cache_age_hours', 0) if cache_efficiency else 0,
+            },
+            'optimization_recommendations': []
+        }
+        
+        # Add optimization recommendations
+        if collections_stats.get('sentiment_data', 0) < 10:
+            optimization_insights['optimization_recommendations'].append(
+                "Low sentiment data volume - consider increasing sentiment analysis frequency"
+            )
+        
+        if collections_stats.get('sec_filings', 0) == 0:
+            optimization_insights['optimization_recommendations'].append(
+                "No SEC filings data found - this is a valuable data source for prediction accuracy"
+            )
+        
+        if feature_importance_doc and len(feature_importance_doc.get('feature_scores', {})) < 20:
+            optimization_insights['optimization_recommendations'].append(
+                "Low feature count - consider adding more external data sources"
+            )
+        
+        # Don't close shared connection
+        
+        return optimization_insights
+        
+    except Exception as e:
+        logger.error(f"Error getting optimization insights for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error getting insights: {str(e)}")
+
+@app.post("/optimization/trigger/{ticker}")
+async def trigger_optimization(ticker: str):
+    """Trigger a comprehensive data optimization for a ticker."""
+    try:
+        # Use shared components
+        if not hasattr(app.state, 'mongo_client') or app.state.mongo_client is None:
+            raise HTTPException(status_code=500, detail="Database connection not available")
+        mongo_client = app.state.mongo_client
+        
+        # Create advanced indexes
+        mongo_client.create_advanced_indexes()
+        
+        # Use shared sentiment analyzer
+        if not hasattr(app.state, 'sentiment_analyzer') or app.state.sentiment_analyzer is None:
+            raise HTTPException(status_code=500, detail="Sentiment analyzer not available")
+        sentiment_data = await app.state.sentiment_analyzer.get_combined_sentiment(ticker.upper())
+        
+        # Use shared feature engineer
+        if not hasattr(app.state, 'feature_engineer') or app.state.feature_engineer is None:
+            raise HTTPException(status_code=500, detail="Feature engineer not available")
+        optimized_features = app.state.feature_engineer.get_optimized_feature_set(ticker.upper(), mongo_client)
+        
+        results = {
+            'ticker': ticker.upper(),
+            'optimization_completed': True,
+            'sentiment_updated': bool(sentiment_data),
+            'optimized_feature_count': len(optimized_features) if optimized_features else 0,
+            'indexes_created': True,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+        
+        # Don't close shared connection
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"Error triggering optimization for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error triggering optimization: {str(e)}")
+
+@app.post("/predict/{ticker}")
+async def predict_stock(ticker: str, request: PredictionRequest):
+    """
+    Get predictions for next day, 7 days, and 30 days with consistent feature engineering.
+    """
+    try:
+        logger.info(f"Prediction request for {ticker}")
+        
+        # Fetch historical data
+        collection = app.state.mongo_client.db.stock_data
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=request.days_back)
+        
+        query = {
+            'ticker': ticker,
+            'date': {'$gte': start_date, '$lte': end_date}
+        }
+        
+        cursor = collection.find(query).sort('date', 1)
+        data = list(cursor)
+        
+        if len(data) < 50:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Insufficient historical data for {ticker}. Found {len(data)} records, need at least 50."
+            )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
+        df = df.set_index('date') if 'date' in df.columns else df
+        
+        # Validate required columns
+        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required columns: {missing_cols}"
+            )
+        
+        # Make predictions for all windows
+        predictions = app.state.stock_predictor.predict_all_windows(ticker, df)
+        
+        if not predictions:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No predictions could be generated for {ticker}. Ensure models are trained."
+            )
+        
+        return {
+            "ticker": ticker,
+            "timestamp": datetime.now().isoformat(),
+            "current_price": float(df['Close'].iloc[-1]),
+            "predictions": predictions,
+            "data_points_used": len(df),
+            "api_version": "2.0.0"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error predicting {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/train/{ticker}")
+async def train_models(ticker: str, request: TrainingRequest):
+    """
+    Train models for a specific ticker with improved feature engineering.
+    """
+    try:
+        logger.info(f"Training request for {ticker}")
+        
+        # Check if models exist and retrain is not forced
+        model_dir = f"models/{ticker}"
+        if os.path.exists(model_dir) and not request.retrain:
+            return {
+                "ticker": ticker,
+                "status": "models_exist",
+                "message": f"Models for {ticker} already exist. Use retrain=true to force retraining.",
+                "model_directory": model_dir
+            }
+        
+        # Start training
+        success = app.state.stock_predictor.train_all_models(
+            ticker=ticker,
+            start_date=request.start_date,
+            end_date=request.end_date
+        )
+        
+        if success:
+            return {
+                "ticker": ticker,
+                "status": "success",
+                "message": f"Models trained successfully for {ticker}",
+                "windows": app.state.stock_predictor.prediction_windows,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Training failed for {ticker}"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error training {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/models")
+async def list_available_models():
+    """List all available trained models."""
+    try:
+        models_info = {}
+        models_dir = "models"
+        
+        if os.path.exists(models_dir):
+            for ticker_dir in os.listdir(models_dir):
+                ticker_path = os.path.join(models_dir, ticker_dir)
+                if os.path.isdir(ticker_path):
+                    models_info[ticker_dir] = {
+                        "windows": [],
+                        "model_files": []
+                    }
+                    
+                    for file in os.listdir(ticker_path):
+                        if file.endswith(('.h5', '.joblib')):
+                            models_info[ticker_dir]["model_files"].append(file)
+                            
+                            # Extract window from filename
+                            for window in ['next_day', '7_day', '30_day']:
+                                if window in file and window not in models_info[ticker_dir]["windows"]:
+                                    models_info[ticker_dir]["windows"].append(window)
+        
+        return {
+            "available_models": models_info,
+            "total_tickers": len(models_info),
+            "supported_windows": ["next_day", "7_day", "30_day"]
+        }
+        
+    except Exception as e:
+        logger.error(f"Error listing models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    try:
+        # Test MongoDB connection
+        if hasattr(app.state, 'mongo_client') and app.state.mongo_client and app.state.mongo_client.db is not None:
+            stats = app.state.mongo_client.db.command("ping")
+            mongodb_status = "connected" if stats else "disconnected"
+        else:
+            mongodb_status = "not_initialized"
+        
+        return {
+            "status": "healthy",
+            "mongodb": mongodb_status,
+            "timestamp": datetime.now().isoformat(),
+            "api_version": "2.0.0"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+@app.get("/debug/sec-filing-extraction/{ticker}")
+async def debug_sec_filing_extraction(ticker: str):
+    """Debug endpoint to test SEC filing text extraction for a specific ticker."""
+    try:
+        if not hasattr(app.state, 'sentiment_analyzer') or app.state.sentiment_analyzer is None:
+            return {"error": "Sentiment analyzer not available"}
+        
+        # Get SEC analyzer
+        sec_analyzer = app.state.sentiment_analyzer.sec_analyzer
+        if not sec_analyzer:
+            return {"error": "SEC analyzer not available"}
+            
+        logger.info(f"Debugging SEC filing extraction for {ticker}")
+        result = await sec_analyzer.analyze_filings_sentiment(ticker, lookback_days=30)
+        
+        # Get raw filings data from MongoDB to show the difference
+        raw_filings = []
+        if app.state.mongo_client:
+            try:
+                collection = app.state.mongo_client.db['sec_filings_raw']
+                raw_docs = collection.find(
+                    {"ticker": ticker}, 
+                    {"form_type": 1, "filing_date": 1, "sentiment_score": 1, "text_content": 1, "processed_at": 1}
+                ).sort("processed_at", -1).limit(5)
+                raw_filings = [
+                    {
+                        "form_type": doc.get("form_type", ""),
+                        "filing_date": doc.get("filing_date", ""),
+                        "sentiment_score": doc.get("sentiment_score", 0),
+                        "text_preview": doc.get("text_content", "")[:500] + "..." if doc.get("text_content") else "",
+                        "text_length": len(doc.get("text_content", "")),
+                        "processed_at": doc.get("processed_at", "")
+                    }
+                    for doc in raw_docs
+                ]
+            except Exception as e:
+                logger.warning(f"Error fetching raw SEC data: {e}")
+        
+        return {
+            "ticker": ticker,
+            "sec_sentiment_result": result,
+            "raw_filings_sample": raw_filings,
+            "total_raw_filings": len(raw_filings),
+            "debug_info": {
+                "narrative_extraction_approach": "Targets MD&A, Risk Factors, Business sections for sentiment",
+                "extraction_methods": [
+                    "1. Section-by-heading extraction (MD&A, Risk Factors, Business Overview)",
+                    "2. Content following section headings (h1-h4, div, p, span)",
+                    "3. General business narrative as fallback",
+                    "4. Minimal XBRL metadata for context"
+                ],
+                "target_sections": [
+                    "Management's Discussion and Analysis",
+                    "Risk Factors", 
+                    "Business Overview",
+                    "Legal Proceedings",
+                    "Forward-Looking Statements",
+                    "Results of Operations",
+                    "Financial Condition"
+                ],
+                "expected_improvements": {
+                    "sentiment_scores": "Should be non-zero with narrative content",
+                    "text_length": "Should see >2000 chars of business narrative",
+                    "content_quality": "Actual business discussions, not just HTML headers",
+                    "section_detection": "Identifies specific SEC filing sections"
+                },
+                "boilerplate_filtering": "Removes SEC headers, commission info, form references"
+            },
+            "extraction_validation": {
+                "narrative_indicators": ["management", "risk", "business", "operations", "results", "financial condition"],
+                "section_numbers": ["Item 1", "Item 1A", "Item 7"],
+                "quality_threshold": "500+ chars per section with business keywords"
+            },
+            "debug_timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in SEC filing debug for {ticker}: {e}")
+        return {"error": str(e), "ticker": ticker}
 
 if __name__ == "__main__":
     import uvicorn
