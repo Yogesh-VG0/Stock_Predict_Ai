@@ -25,36 +25,21 @@ import io
 from ml_backend.data.sentiment import SentimentAnalyzer
 from ml_backend.utils.mongodb import MongoDBClient
 from ml_backend.data.economic_calendar import EconomicCalendar
+from ml_backend.data.fred_macro import fetch_and_store_all_fred_indicators, FRED_INDICATORS
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Placeholder macro and sector data fetchers
 class MacroDataFetcher:
     def __init__(self):
-        self.fred_api_key = os.getenv('FRED_API_KEY')
-        self.fred = Fred(api_key=self.fred_api_key) if self.fred_api_key else None
-        # Use comprehensive FRED indicators from fred_macro.py
-        self.series = {
-            'GDP': 'GDP',
-            'REAL_GDP': 'GDPC1',
-            'REAL_GDP_PER_CAPITA': 'A939RX0Q048SBEA',
-            'CPI': 'CPIAUCSL',
-            'UNEMPLOYMENT': 'UNRATE',
-            'INFLATION': 'FPCPITOTLZGUSA',
-            'FEDERAL_FUNDS_RATE': 'FEDFUNDS',
-            'TREASURY_10Y': 'GS10',
-            'TREASURY_2Y': 'GS2',
-            'TREASURY_30Y': 'GS30',
-            'RETAIL_SALES': 'RSXFSN',
-            'DURABLES': 'UMDMNO',
-            'NONFARM_PAYROLL': 'PAYEMS'
-        }
+        # Use centralized FRED fetcher from fred_macro.py
+        self.fred_indicators = FRED_INDICATORS
         self.cache = {}
         self.cache_expiry = 3600  # 1 hour
 
     def fetch_all(self, start_date, end_date, mongo_client=None):
-        """Fetch all macro indicators with caching."""
+        """Fetch all macro indicators with caching using centralized fred_macro."""
         try:
             # Check cache first
             cache_key = f"{start_date}_{end_date}"
@@ -63,39 +48,26 @@ class MacroDataFetcher:
                 if (datetime.now() - cache_time).seconds < self.cache_expiry:
                     return cache_data
 
+            # Use centralized FRED fetcher
+            results = fetch_and_store_all_fred_indicators(start_date, end_date, mongo_client)
+            
+            # Convert to DataFrame format expected by features
             dates = pd.date_range(start=start_date, end=end_date)
             df = pd.DataFrame({'date': dates})
-
-            if self.fred:
-                for name, series_id in self.series.items():
-                    try:
-                        # Try to get from MongoDB first
-                        if mongo_client:
-                            cached_data = mongo_client.get_macro_data(name, start_date, end_date)
-                            if cached_data:
-                                data = pd.Series(cached_data)
-                            else:
-                                data = self.fred.get_series(series_id, observation_start=start_date, observation_end=end_date)
-                                # Store in MongoDB
-                                data_dict = {d.strftime('%Y-%m-%d'): float(v) for d, v in data.items() if pd.notna(v)}
-                                mongo_client.store_macro_data(name, data_dict, source='FRED')
-                        else:
-                            data = self.fred.get_series(series_id, observation_start=start_date, observation_end=end_date)
-
-                        data = data.reindex(dates, method='ffill')
-                        df[name] = data.values
-
-                        # Calculate derived features
-                        if len(data) > 1:
-                            df[f'{name}_change'] = data.pct_change().values
-                            df[f'{name}_ma5'] = data.rolling(5).mean().values
-                            df[f'{name}_ma20'] = data.rolling(20).mean().values
-
-                    except Exception as e:
-                        logger.error(f"FRED fetch failed for {name}: {e}")
-                        df[name] = np.nan
-            else:
-                df[list(self.series.keys())] = np.nan
+            
+            for indicator, data_dict in results.items():
+                if data_dict:
+                    # Convert data_dict to series
+                    data_series = pd.Series(data_dict, name=indicator)
+                    data_series.index = pd.to_datetime(data_series.index)
+                    data_series = data_series.reindex(dates, method='ffill')
+                    df[indicator] = data_series.values
+                    
+                    # Calculate derived features
+                    if len(data_series) > 1:
+                        df[f'{indicator}_change'] = data_series.pct_change().values
+                        df[f'{indicator}_ma5'] = data_series.rolling(5).mean().values
+                        df[f'{indicator}_ma20'] = data_series.rolling(20).mean().values
 
             # Fill missing values
             df = df.ffill().bfill()
@@ -107,7 +79,7 @@ class MacroDataFetcher:
 
         except Exception as e:
             logger.error(f"Error fetching macro data: {e}")
-            return pd.DataFrame({'date': dates})
+            return pd.DataFrame({'date': pd.date_range(start=start_date, end=end_date)})
 
 class SectorDataFetcher:
     def __init__(self):
@@ -188,7 +160,7 @@ class FeatureEngineer:
     Always prefers FRED for macro indicators, but will automatically fallback to FMP, then AlphaVantage if FRED data is missing for any date/indicator.
     Only one source per indicator is used per date to avoid duplication. Always uses the latest available macro data.
     """
-    def __init__(self, macro_sources: list = None, sentiment_window_days: int = None, sentiment_analyzer: SentimentAnalyzer = None, mongo_client: MongoDBClient = None):
+    def __init__(self, macro_sources: list = None, sentiment_window_days: int = None, sentiment_analyzer: SentimentAnalyzer = None, mongo_client: MongoDBClient = None, calendar_fetcher=None):
         """
         macro_sources: ordered list of sources to try, e.g. ['FRED', 'FMP', 'AlphaVantage']
         sentiment_window_days: number of days to aggregate sentiment/news features (default from FEATURE_CONFIG or 7)
@@ -204,7 +176,7 @@ class FeatureEngineer:
         self.sentiment_window_days = sentiment_window_days or FEATURE_CONFIG.get("sentiment_window_days", 7)
         self.mongo_client = mongo_client or MongoDBClient(os.getenv("MONGODB_URI"))
         self.sentiment_analyzer = sentiment_analyzer or SentimentAnalyzer(self.mongo_client)
-        self.calendar_fetcher = EconomicCalendar(self.mongo_client)
+        self.calendar_fetcher = calendar_fetcher or EconomicCalendar(self.mongo_client)
         self.short_interest_analyzer = None  # Will be initialized when needed
 
     def _init_short_interest_analyzer(self, mongo_client):
@@ -384,29 +356,59 @@ class FeatureEngineer:
             pd.DataFrame: DataFrame with merged features
         """
         try:
-            # Get macro and sector data from MongoDB
-            macro_data = self.mongo_client.get_macro_data(ticker)
-            sector_data = self.mongo_client.get_sector_data(ticker)
+            # Get date range from dataframe
+            if 'date' in df.columns:
+                start_date = df['date'].min().strftime('%Y-%m-%d')
+                end_date = df['date'].max().strftime('%Y-%m-%d')
+            else:
+                # Use index if no date column
+                start_date = df.index.min().strftime('%Y-%m-%d') if hasattr(df.index.min(), 'strftime') else '2023-01-01'
+                end_date = df.index.max().strftime('%Y-%m-%d') if hasattr(df.index.max(), 'strftime') else '2024-01-01'
             
-            # Merge macro data if available
-            if macro_data is not None and not macro_data.empty:
-                df = pd.merge(
-                    df,
-                    macro_data,
-                    left_index=True,
-                    right_index=True,
-                    how='left'
-                )
+            # Get macro data from MongoDBClient
+            try:
+                macro_data_dict = {}
+                # Get key macro indicators
+                macro_indicators = ['FEDFUNDS', 'CPIAUCSL', 'UNRATE', 'GDP', 'GS10', 'GS2']
+                for indicator in macro_indicators:
+                    data = self.mongo_client.get_macro_data(indicator, start_date, end_date)
+                    if data:
+                        # Convert to series and add to macro_data_dict
+                        macro_data_dict[indicator] = data
+                
+                # Convert to DataFrame if we have data
+                if macro_data_dict:
+                    macro_df = pd.DataFrame(macro_data_dict)
+                    macro_df.index = pd.to_datetime(macro_df.index)
+                    
+                    # Merge with main dataframe
+                    df = pd.merge(
+                        df,
+                        macro_df,
+                        left_index=True,
+                        right_index=True,
+                        how='left'
+                    )
+            except Exception as e:
+                logger.warning(f"Error fetching macro data: {e}")
             
-            # Merge sector data if available
-            if sector_data is not None and not sector_data.empty:
-                df = pd.merge(
-                    df,
-                    sector_data,
-                    left_index=True,
-                    right_index=True,
-                    how='left'
-                )
+            # Get sector data (sector ETF performance)
+            try:
+                # Get sector mapping for the ticker
+                sector_etfs = ['XLK', 'XLF', 'XLE', 'XLV', 'XLY', 'XLP', 'XLI', 'XLB', 'XLU', 'XLRE']
+                sector_data = self.sector_fetcher.fetch_all(start_date, end_date, self.mongo_client)
+                
+                if sector_data is not None and not sector_data.empty:
+                    # Merge sector data
+                    df = pd.merge(
+                        df,
+                        sector_data,
+                        left_index=True,
+                        right_index=True,
+                        how='left'
+                    )
+            except Exception as e:
+                logger.warning(f"Error fetching sector data: {e}")
             
             # Merge Alpha Vantage data if available
             if alpha_vantage_dict is not None:
@@ -763,6 +765,332 @@ class FeatureEngineer:
             logger.warning(f"Error calculating put/call ratio: {e}")
         return 1.0
 
+    def add_sec_filings_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
+        """Add comprehensive SEC filings features beyond basic sentiment."""
+        try:
+            from .sec_filings import SECFilingsAnalyzer
+            
+            df = df.copy()
+            sec_analyzer = SECFilingsAnalyzer(mongo_client)
+            
+            # Get SEC filings data for each date
+            sec_features_list = []
+            for date in df['date']:
+                try:
+                    # Get filings within 30 days of the date
+                    filings_data = sec_analyzer.analyze_filings_sentiment(ticker, lookback_days=30)
+                    
+                    # Extract comprehensive features
+                    features = {
+                        # Basic sentiment
+                        'sec_sentiment': filings_data.get('sec_filings_sentiment', 0.0),
+                        'sec_volume': filings_data.get('sec_filings_volume', 0),
+                        'sec_confidence': filings_data.get('sec_filings_confidence', 0.0),
+                        
+                        # Form-specific features
+                        'sec_10k_count': len(filings_data.get('categorized_filings', {}).get('10-K', [])),
+                        'sec_10q_count': len(filings_data.get('categorized_filings', {}).get('10-Q', [])),
+                        'sec_8k_count': len(filings_data.get('categorized_filings', {}).get('8-K', [])),
+                        'sec_proxy_count': len(filings_data.get('categorized_filings', {}).get('DEF 14A', [])),
+                        
+                        # Derived features
+                        'sec_filing_frequency': filings_data.get('sec_filings_volume', 0) / 30,  # filings per day
+                        'sec_major_filings': len(filings_data.get('categorized_filings', {}).get('10-K', [])) + len(filings_data.get('categorized_filings', {}).get('10-Q', [])),
+                        'sec_current_events': len(filings_data.get('categorized_filings', {}).get('8-K', [])),
+                        
+                        # Risk indicators
+                        'sec_high_activity': 1 if filings_data.get('sec_filings_volume', 0) > 10 else 0,
+                        'sec_recent_10k': 1 if len(filings_data.get('categorized_filings', {}).get('10-K', [])) > 0 else 0,
+                        'sec_recent_8k_spike': 1 if len(filings_data.get('categorized_filings', {}).get('8-K', [])) > 3 else 0,
+                    }
+                    
+                    sec_features_list.append(features)
+                    
+                except Exception as e:
+                    logger.warning(f"Error getting SEC features for {ticker} on {date}: {e}")
+                    # Add default values on error
+                    default_features = {
+                        'sec_sentiment': 0.0, 'sec_volume': 0, 'sec_confidence': 0.0,
+                        'sec_10k_count': 0, 'sec_10q_count': 0, 'sec_8k_count': 0, 'sec_proxy_count': 0,
+                        'sec_filing_frequency': 0.0, 'sec_major_filings': 0, 'sec_current_events': 0,
+                        'sec_high_activity': 0, 'sec_recent_10k': 0, 'sec_recent_8k_spike': 0
+                    }
+                    sec_features_list.append(default_features)
+            
+            if sec_features_list:
+                sec_df = pd.DataFrame(sec_features_list)
+                sec_df.index = df.index
+                df = pd.concat([df, sec_df], axis=1)
+                logger.info(f"Added comprehensive SEC filings features for {ticker}")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding SEC filings features for {ticker}: {e}")
+            return df
+
+    def add_seeking_alpha_advanced_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
+        """Add advanced Seeking Alpha features beyond basic sentiment."""
+        try:
+            from .seeking_alpha import SeekingAlphaAnalyzer
+            
+            df = df.copy()
+            sa_analyzer = SeekingAlphaAnalyzer(mongo_client)
+            
+            # Get Seeking Alpha data for each date
+            sa_features_list = []
+            for date in df['date']:
+                try:
+                    # Get both article sentiment and comments
+                    comments_data = sa_analyzer.analyze_comments_sentiment(ticker, lookback_days=7)
+                    
+                    features = {
+                        # Basic sentiment from comments
+                        'sa_comments_sentiment': comments_data.get('sentiment_score', 0.0),
+                        'sa_comments_volume': comments_data.get('comment_count', 0),
+                        'sa_comments_confidence': comments_data.get('confidence', 0.0),
+                        
+                        # Advanced comment features
+                        'sa_positive_ratio': comments_data.get('positive_ratio', 0.5),
+                        'sa_negative_ratio': comments_data.get('negative_ratio', 0.5),
+                        'sa_engagement_score': comments_data.get('comment_count', 0) / 7,  # comments per day
+                        
+                        # Comment quality indicators
+                        'sa_high_engagement': 1 if comments_data.get('comment_count', 0) > 50 else 0,
+                        'sa_sentiment_consensus': 1 if abs(comments_data.get('sentiment_score', 0)) > 0.3 else 0,
+                        'sa_polarized_discussion': 1 if comments_data.get('sentiment_std', 0) > 0.5 else 0,
+                        
+                        # Derived features
+                        'sa_bullish_signal': 1 if (comments_data.get('sentiment_score', 0) > 0.2 and comments_data.get('comment_count', 0) > 20) else 0,
+                        'sa_bearish_signal': 1 if (comments_data.get('sentiment_score', 0) < -0.2 and comments_data.get('comment_count', 0) > 20) else 0,
+                    }
+                    
+                    sa_features_list.append(features)
+                    
+                except Exception as e:
+                    logger.warning(f"Error getting Seeking Alpha features for {ticker} on {date}: {e}")
+                    # Add default values on error
+                    default_features = {
+                        'sa_comments_sentiment': 0.0, 'sa_comments_volume': 0, 'sa_comments_confidence': 0.0,
+                        'sa_positive_ratio': 0.5, 'sa_negative_ratio': 0.5, 'sa_engagement_score': 0.0,
+                        'sa_high_engagement': 0, 'sa_sentiment_consensus': 0, 'sa_polarized_discussion': 0,
+                        'sa_bullish_signal': 0, 'sa_bearish_signal': 0
+                    }
+                    sa_features_list.append(default_features)
+            
+            if sa_features_list:
+                sa_df = pd.DataFrame(sa_features_list)
+                sa_df.index = df.index
+                df = pd.concat([df, sa_df], axis=1)
+                logger.info(f"Added comprehensive Seeking Alpha features for {ticker}")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding Seeking Alpha features for {ticker}: {e}")
+            return df
+
+    def create_prediction_features(
+        self,
+        df: pd.DataFrame,
+        ticker: str,
+        window: str,
+        mongo_client=None,
+        use_stored_pipeline: bool = True
+    ) -> np.ndarray:
+        """
+        Create features for prediction using the exact same pipeline as training.
+        This ensures feature consistency between training and prediction phases.
+        """
+        try:
+            window_size_map = {'next_day': 1, '7_day': 7, '30_day': 30, '90_day': 90}
+            window_size = window_size_map.get(window, 1)
+            
+            # Load stored feature pipeline if available
+            feature_pipeline_path = f"models/{ticker}/feature_pipeline_{ticker}_{window}.json"
+            
+            if use_stored_pipeline and os.path.exists(feature_pipeline_path):
+                with open(feature_pipeline_path, 'r') as f:
+                    pipeline_info = json.load(f)
+                
+                # Apply the exact same feature engineering steps as training
+                logger.info(f"Using stored feature pipeline for {ticker}-{window}")
+                
+                # Step 1: Technical indicators (always consistent)
+                df = self.add_technical_indicators(df)
+                
+                # Step 2: Get current values for external features that were used in training
+                feature_columns = pipeline_info.get('feature_columns', [])
+                external_features = pipeline_info.get('external_features', {})
+                
+                # Add placeholder external features with current/latest values
+                for feature_name, default_value in external_features.items():
+                    if feature_name not in df.columns:
+                        # Try to get current value from MongoDB or use default
+                        if mongo_client and 'sentiment' in feature_name:
+                            current_sentiment = mongo_client.get_latest_sentiment(ticker)
+                            if current_sentiment and feature_name in current_sentiment:
+                                df[feature_name] = current_sentiment[feature_name]
+                            else:
+                                df[feature_name] = default_value
+                        else:
+                            df[feature_name] = default_value
+                
+                # Step 3: Rolling features
+                df = self.add_rolling_features(df)
+                df = self.add_lagged_and_volatility_features(df)
+                
+                # Step 4: Handle outliers if it was done during training
+                if pipeline_info.get('outlier_handling_applied', False):
+                    df = self.handle_outliers(df)
+                
+                # Step 5: Select only the features that were used during training
+                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+                available_features = [col for col in feature_columns if col in numeric_cols]
+                
+                if len(available_features) < len(feature_columns) * 0.8:
+                    logger.warning(f"Only {len(available_features)}/{len(feature_columns)} features available for prediction")
+                
+                # Fill missing features with zeros or stored defaults
+                for col in feature_columns:
+                    if col not in df.columns:
+                        default_val = external_features.get(col, 0.0)
+                        df[col] = default_val
+                        logger.debug(f"Added missing feature {col} with default value {default_val}")
+                
+                # Reorder columns to match training
+                df_features = df[feature_columns].copy()
+                
+            else:
+                # Fallback: Create features using current pipeline (may have dimension mismatch)
+                logger.warning(f"No stored pipeline found for {ticker}-{window}, using current pipeline")
+                df_features, _ = self.prepare_features(
+                    df,
+                    window_size=window_size,
+                    ticker=ticker,
+                    mongo_client=mongo_client,
+                    handle_outliers=True
+                )
+                return df_features
+            
+            # Handle NaN values
+            df_features = df_features.ffill().bfill().fillna(0)
+            
+            # Convert to numpy array
+            features = df_features.values
+            
+            # Save feature pipeline if requested (during training)
+            if save_pipeline and ticker and window:
+                # Collect external feature defaults
+                external_features = {}
+                for col in feature_df.columns:
+                    if col not in ['Close', 'Open', 'High', 'Low', 'Volume'] and 'SMA' not in col and 'EMA' not in col and 'RSI' not in col:
+                        # This is likely an external feature
+                        external_features[col] = float(feature_df[col].iloc[-1]) if not feature_df[col].empty else 0.0
+                
+                self.save_feature_pipeline(
+                    ticker=ticker,
+                    window=window,
+                    feature_columns=list(feature_df.columns),
+                    external_features=external_features,
+                    outlier_handling_applied=handle_outliers
+                )
+            
+            # Create targets (price changes for next day, next 30 days, next 90 days)
+            targets = None
+            if 'Close' in df.columns:
+                close_prices = df['Close'].values
+                if window_size == 1:
+                    # Next day prediction: tomorrow's price - today's price
+                    targets = np.diff(close_prices)  # Shape: (n-1,)
+                    features = features[:-1]  # Align features with targets
+                elif window_size > 1:
+                    # Multi-day prediction: price N days in future - current price
+                    targets = []
+                    for i in range(len(close_prices) - window_size):
+                        current_price = close_prices[i]
+                        future_price = close_prices[i + window_size] if i + window_size < len(close_prices) else current_price
+                        price_change = future_price - current_price
+                        targets.append(price_change)
+                    targets = np.array(targets)
+                    
+                    # Align features - we need to remove the last window_size-1 samples
+                    # because we can't predict future prices for them
+                    features = features[:-window_size] if len(features) > window_size else features
+                
+            # Handle reshaping based on model type expectations
+            if window_size > 1:
+                # For LSTM models: Create 3D arrays (samples, time_steps, features)
+                n_samples = len(targets) if targets is not None else features.shape[0] - window_size + 1
+                n_features = features.shape[1]
+                
+                if n_samples <= 0:
+                    raise ValueError(f"Not enough data for window_size {window_size}. Need at least {window_size} samples, got {features.shape[0]}")
+                
+                # Create sliding windows for LSTM - each sample contains window_size time steps
+                max_samples = features.shape[0] - window_size + 1
+                n_samples = min(n_samples, max_samples)
+                
+                if n_samples <= 0:
+                    raise ValueError(f"Not enough data for windowing. Features: {features.shape[0]}, window_size: {window_size}")
+                
+                windowed_features = np.zeros((n_samples, window_size, n_features))
+                for i in range(n_samples):
+                    end_idx = i + window_size
+                    if end_idx <= features.shape[0]:
+                        windowed_features[i] = features[i:end_idx]
+                    else:
+                        # Handle edge case by padding with last available features
+                        available_features = features[i:]
+                        windowed_features[i, :len(available_features)] = available_features
+                        # Pad remaining with last feature
+                        if len(available_features) > 0:
+                            windowed_features[i, len(available_features):] = available_features[-1]
+                
+                # For LightGBM/XGBoost: We'll flatten in the predictor, keep 3D here for LSTM
+                features = windowed_features
+                
+                # Ensure targets align with features
+                if targets is not None and len(targets) > n_samples:
+                    targets = targets[:n_samples]
+                    
+            return features, targets if targets is not None else feature_stats
+            
+        except Exception as e:
+            logger.error(f"Error creating prediction features for {ticker}-{window}: {e}")
+            raise
+    
+    def save_feature_pipeline(
+        self,
+        ticker: str,
+        window: str,
+        feature_columns: List[str],
+        external_features: Dict[str, float],
+        outlier_handling_applied: bool = False
+    ):
+        """Save the feature engineering pipeline for consistent prediction."""
+        try:
+            os.makedirs(f"models/{ticker}", exist_ok=True)
+            
+            pipeline_info = {
+                'ticker': ticker,
+                'window': window,
+                'feature_columns': feature_columns,
+                'external_features': external_features,
+                'outlier_handling_applied': outlier_handling_applied,
+                'created_at': datetime.utcnow().isoformat(),
+                'feature_count': len(feature_columns)
+            }
+            
+            pipeline_path = f"models/{ticker}/feature_pipeline_{ticker}_{window}.json"
+            with open(pipeline_path, 'w') as f:
+                json.dump(pipeline_info, f, indent=2)
+            
+            logger.info(f"Saved feature pipeline for {ticker}-{window}: {len(feature_columns)} features")
+            
+        except Exception as e:
+            logger.error(f"Error saving feature pipeline for {ticker}-{window}: {e}")
+
     def prepare_features(
         self,
         df: pd.DataFrame,
@@ -773,7 +1101,9 @@ class FeatureEngineer:
         ticker: str = None,
         handle_outliers: bool = True,
         enable_shap_selection: bool = False,
-        feature_select_k: int = 20
+        feature_select_k: int = 20,
+        save_pipeline: bool = False,
+        window: str = None
     ) -> Tuple[np.ndarray, Dict]:
         """Prepare features for model training/prediction."""
         try:
@@ -799,25 +1129,31 @@ class FeatureEngineer:
                 
             # Add technical indicators
             df = self.add_technical_indicators(df)
-            
+
             # Add external features if ticker is provided
             if ticker:
                 # Add macro and sector data
                 df = self.merge_external_features(df, ticker=ticker, alpha_vantage_dict=alpha_vantage_dict)
-                
                 # Add event features (earnings, dividends, FOMC)
                 df = self.add_event_features(df, ticker=ticker, apikey=os.getenv('ALPHAVANTAGE_API_KEY'))
-                
                 # Add economic event features
                 df = self.add_economic_event_features(df, ticker)
-                
                 # Add short interest features
                 df = self.add_short_interest_features(df, ticker, mongo_client)
-                
-                # Add sentiment features (only if not already in event features)
-                if sentiment_dict and 'economic_event_features' not in sentiment_dict:
-                    df = self.add_sentiment_features(df, sentiment_dict)
-                    
+                # Add comprehensive SEC filings features
+                df = self.add_sec_filings_features(df, ticker, mongo_client)
+                # Add advanced Seeking Alpha features
+                df = self.add_seeking_alpha_advanced_features(df, ticker, mongo_client)
+
+            # Inject flat sentiment fields as columns (no double-counting, no re-normalization)
+            if sentiment_dict:
+                flat_sent = {
+                    k: v for k, v in sentiment_dict.items()
+                    if any(k.endswith(suffix) for suffix in ["_sentiment", "_volume", "_confidence"])
+                }
+                for field, value in flat_sent.items():
+                    df[field] = value if not isinstance(value, list) else len(value)
+
             # Add rolling features
             df = self.add_rolling_features(df)
             
@@ -828,17 +1164,28 @@ class FeatureEngineer:
             if handle_outliers:
                 df = self.handle_outliers(df)
                 
+            # Auto-optimize features based on historical performance
+            if ticker and mongo_client:
+                df = self.auto_feature_selection_and_optimization(df, ticker, mongo_client)
+                
             # Remove duplicate features
             df = df.loc[:, ~df.columns.duplicated()]
             
-            # Remove features with all NaN values
-            df = df.dropna(axis=1, how='all')
+            # Exclude non-numeric columns (like MongoDB _id ObjectId) before processing
+            non_numeric_cols = ['_id', 'ticker', 'date']
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             
-            # Fill remaining NaN values
-            df = df.fillna(method='ffill').fillna(method='bfill').fillna(0)
+            # Keep only numeric columns for feature processing
+            feature_df = df[numeric_cols].copy()
+            
+            # Remove features with all NaN values
+            feature_df = feature_df.dropna(axis=1, how='all')
+            
+            # Fill remaining NaN values using modern pandas syntax
+            feature_df = feature_df.ffill().bfill().fillna(0)
             
             # Normalize features
-            feature_stats = self._normalize_features(df)
+            feature_stats = self._normalize_features(feature_df)
             
             # Select features if requested
             if enable_shap_selection and ticker:
@@ -848,20 +1195,95 @@ class FeatureEngineer:
                     if feature_importance:
                         # Use stored feature importance
                         selected_features = list(feature_importance.get('features', {}).keys())[:feature_select_k]
-                        df = df[selected_features]
+                        # Filter to only include features that exist in our dataframe
+                        selected_features = [f for f in selected_features if f in feature_df.columns]
+                        if selected_features:
+                            feature_df = feature_df[selected_features]
                 else:
                     # Use SHAP for feature selection
-                    self.select_features(df.values, None, k=feature_select_k)
-                    df = df[self.selected_features]
+                    self.select_features(feature_df.values, None, k=feature_select_k)
+                    if self.selected_features is not None:
+                        feature_df = feature_df.iloc[:, self.selected_features]
                     
             # Convert to numpy array
-            features = df.values
+            features = feature_df.values
             
-            # Reshape for LSTM if needed
-            if window_size > 1:
-                features = features.reshape(-1, window_size, features.shape[1])
+            # Save feature pipeline if requested (during training)
+            if save_pipeline and ticker and window:
+                # Collect external feature defaults
+                external_features = {}
+                for col in feature_df.columns:
+                    if col not in ['Close', 'Open', 'High', 'Low', 'Volume'] and 'SMA' not in col and 'EMA' not in col and 'RSI' not in col:
+                        # This is likely an external feature
+                        external_features[col] = float(feature_df[col].iloc[-1]) if not feature_df[col].empty else 0.0
                 
-            return features, feature_stats
+                self.save_feature_pipeline(
+                    ticker=ticker,
+                    window=window,
+                    feature_columns=list(feature_df.columns),
+                    external_features=external_features,
+                    outlier_handling_applied=handle_outliers
+                )
+            
+            # Create targets (price changes for next day, next 30 days, next 90 days)
+            targets = None
+            if 'Close' in df.columns:
+                close_prices = df['Close'].values
+                if window_size == 1:
+                    # Next day prediction: tomorrow's price - today's price
+                    targets = np.diff(close_prices)  # Shape: (n-1,)
+                    features = features[:-1]  # Align features with targets
+                elif window_size > 1:
+                    # Multi-day prediction: price N days in future - current price
+                    targets = []
+                    for i in range(len(close_prices) - window_size):
+                        current_price = close_prices[i]
+                        future_price = close_prices[i + window_size] if i + window_size < len(close_prices) else current_price
+                        price_change = future_price - current_price
+                        targets.append(price_change)
+                    targets = np.array(targets)
+                    
+                    # Align features - we need to remove the last window_size-1 samples
+                    # because we can't predict future prices for them
+                    features = features[:-window_size] if len(features) > window_size else features
+                
+            # Handle reshaping based on model type expectations
+            if window_size > 1:
+                # For LSTM models: Create 3D arrays (samples, time_steps, features)
+                n_samples = len(targets) if targets is not None else features.shape[0] - window_size + 1
+                n_features = features.shape[1]
+                
+                if n_samples <= 0:
+                    raise ValueError(f"Not enough data for window_size {window_size}. Need at least {window_size} samples, got {features.shape[0]}")
+                
+                # Create sliding windows for LSTM - each sample contains window_size time steps
+                max_samples = features.shape[0] - window_size + 1
+                n_samples = min(n_samples, max_samples)
+                
+                if n_samples <= 0:
+                    raise ValueError(f"Not enough data for windowing. Features: {features.shape[0]}, window_size: {window_size}")
+                
+                windowed_features = np.zeros((n_samples, window_size, n_features))
+                for i in range(n_samples):
+                    end_idx = i + window_size
+                    if end_idx <= features.shape[0]:
+                        windowed_features[i] = features[i:end_idx]
+                    else:
+                        # Handle edge case by padding with last available features
+                        available_features = features[i:]
+                        windowed_features[i, :len(available_features)] = available_features
+                        # Pad remaining with last feature
+                        if len(available_features) > 0:
+                            windowed_features[i, len(available_features):] = available_features[-1]
+                
+                # For LightGBM/XGBoost: We'll flatten in the predictor, keep 3D here for LSTM
+                features = windowed_features
+                
+                # Ensure targets align with features
+                if targets is not None and len(targets) > n_samples:
+                    targets = targets[:n_samples]
+                    
+            return features, targets if targets is not None else feature_stats
             
         except Exception as e:
             logger.error(f"Error preparing features: {e}")
@@ -871,32 +1293,48 @@ class FeatureEngineer:
         """Normalize features for model input, returning only scalars (last value in sequence)."""
         try:
             normalized = {}
-            # Price features
+            
+            # Only process numeric columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            # Price features (if they exist)
             price_cols = ['Close', 'Open', 'High', 'Low']
             for col in price_cols:
-                if df[col].std() != 0:
-                    series = (df[col] - df[col].mean()) / df[col].std()
-                    normalized[f'{col}_norm'] = series.iloc[-1] if not series.empty else 0
+                if col in numeric_cols and col in df.columns:
+                    if df[col].std() != 0:
+                        series = (df[col] - df[col].mean()) / df[col].std()
+                        normalized[f'{col}_norm'] = float(series.iloc[-1]) if not series.empty else 0.0
+                    else:
+                        normalized[f'{col}_norm'] = 0.0
+                        
+            # Volume features (if it exists)
+            if 'Volume' in numeric_cols and 'Volume' in df.columns:
+                if df['Volume'].std() != 0:
+                    series = (df['Volume'] - df['Volume'].mean()) / df['Volume'].std()
+                    normalized['Volume_norm'] = float(series.iloc[-1]) if not series.empty else 0.0
                 else:
-                    normalized[f'{col}_norm'] = 0
-            # Volume features
-            if df['Volume'].std() != 0:
-                series = (df['Volume'] - df['Volume'].mean()) / df['Volume'].std()
-                normalized['Volume_norm'] = series.iloc[-1] if not series.empty else 0
-            else:
-                normalized['Volume_norm'] = 0
-            # Technical indicators
-            tech_cols = [col for col in df.columns if col not in price_cols + ['Volume']]
+                    normalized['Volume_norm'] = 0.0
+                    
+            # Technical indicators (all other numeric columns)
+            tech_cols = [col for col in numeric_cols if col not in price_cols + ['Volume']]
             for col in tech_cols:
-                if df[col].std() != 0:
-                    series = (df[col] - df[col].mean()) / df[col].std()
-                    normalized[f'{col}_norm'] = series.iloc[-1] if not series.empty else 0
-                else:
-                    normalized[f'{col}_norm'] = 0
+                if col in df.columns:
+                    try:
+                        if df[col].std() != 0:
+                            series = (df[col] - df[col].mean()) / df[col].std()
+                            normalized[f'{col}_norm'] = float(series.iloc[-1]) if not series.empty else 0.0
+                        else:
+                            normalized[f'{col}_norm'] = 0.0
+                    except (TypeError, ValueError) as e:
+                        # Skip columns that can't be normalized (e.g., ObjectId, strings)
+                        logger.warning(f"Skipping normalization for column {col}: {e}")
+                        continue
+                        
             return normalized
+            
         except Exception as e:
             logger.error(f"Error normalizing features: {str(e)}")
-            return {col: 0 for col in df.columns}
+            return {}  # Return empty dict instead of trying to process all columns
 
     def select_features(self, features: np.ndarray, targets: np.ndarray, k: int = 20) -> None:
         """Select the most important features using SelectKBest."""
@@ -1071,4 +1509,177 @@ class FeatureEngineer:
             
         except Exception as e:
             logger.error(f"Error retrieving recent LLM explanations for {ticker}: {e}")
-            return [] 
+            return []
+
+    def auto_feature_selection_and_optimization(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
+        """Automatically select and optimize features based on prediction performance."""
+        try:
+            if not mongo_client:
+                return df
+                
+            # Get stored feature importance for this ticker
+            feature_importance_doc = mongo_client.db['feature_importance'].find_one(
+                {'ticker': ticker},
+                sort=[('timestamp', -1)]
+            )
+            
+            if feature_importance_doc and 'feature_scores' in feature_importance_doc:
+                feature_scores = feature_importance_doc['feature_scores']
+                
+                # More aggressive feature selection with higher threshold
+                threshold = 0.02  # Increased from 0.01 - Features must contribute at least 2%
+                important_features = [
+                    feature for feature, score in feature_scores.items() 
+                    if score > threshold
+                ]
+                
+                # Keep essential features always
+                essential_features = ['Open', 'High', 'Low', 'Close', 'Volume', 'date']
+                all_important = list(set(important_features + essential_features))
+                
+                # Filter dataframe to only important features
+                available_features = [col for col in all_important if col in df.columns]
+                if len(available_features) > len(essential_features):
+                    df = df[available_features]
+                    logger.info(f"Auto-selected {len(available_features)} important features for {ticker}")
+                
+            # Remove highly correlated features with lower threshold for more aggressive removal
+            df = self._remove_correlated_features(df, correlation_threshold=0.90)  # Reduced from 0.95
+            
+            # Reduce feature interactions for efficiency
+            df = self._add_feature_interactions(df, max_interactions=5)  # Reduced from 10
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error in auto feature selection for {ticker}: {e}")
+            return df
+    
+    def _remove_correlated_features(self, df: pd.DataFrame, correlation_threshold: float = 0.95) -> pd.DataFrame:
+        """Remove highly correlated features to reduce multicollinearity."""
+        try:
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) < 2:
+                return df
+                
+            correlation_matrix = df[numeric_cols].corr().abs()
+            
+            # Find highly correlated pairs
+            upper_triangle = correlation_matrix.where(
+                np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool)
+            )
+            
+            # Identify features to drop
+            to_drop = [
+                column for column in upper_triangle.columns 
+                if any(upper_triangle[column] > correlation_threshold)
+            ]
+            
+            # Keep essential features
+            essential = ['Open', 'High', 'Low', 'Close', 'Volume']
+            to_drop = [col for col in to_drop if col not in essential]
+            
+            if to_drop:
+                df = df.drop(columns=to_drop)
+                logger.info(f"Removed {len(to_drop)} highly correlated features: {to_drop[:5]}...")
+                
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error removing correlated features: {e}")
+            return df
+    
+    def _add_feature_interactions(self, df: pd.DataFrame, max_interactions: int = 10) -> pd.DataFrame:
+        """Add feature interaction terms for important features."""
+        try:
+            # Select top features for interactions (price and volume related)
+            interaction_candidates = [
+                col for col in df.columns 
+                if any(keyword in col.lower() for keyword in ['close', 'volume', 'rsi', 'macd', 'sentiment'])
+            ][:5]  # Limit to top 5 to avoid explosion
+            
+            interaction_count = 0
+            for i in range(len(interaction_candidates)):
+                for j in range(i+1, len(interaction_candidates)):
+                    if interaction_count >= max_interactions:
+                        break
+                        
+                    col1, col2 = interaction_candidates[i], interaction_candidates[j]
+                    if col1 in df.columns and col2 in df.columns:
+                        # Add interaction term
+                        interaction_name = f"{col1}_x_{col2}"
+                        df[interaction_name] = df[col1] * df[col2]
+                        interaction_count += 1
+                        
+                if interaction_count >= max_interactions:
+                    break
+            
+            if interaction_count > 0:
+                logger.info(f"Added {interaction_count} feature interaction terms")
+                
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding feature interactions: {e}")
+            return df
+
+    def store_feature_importance(self, ticker: str, feature_scores: Dict[str, float], window: str, mongo_client=None):
+        """Store feature importance scores for future optimization."""
+        try:
+            if not mongo_client:
+                return
+                
+            # Normalize scores
+            total_score = sum(abs(score) for score in feature_scores.values())
+            if total_score > 0:
+                normalized_scores = {
+                    feature: abs(score) / total_score 
+                    for feature, score in feature_scores.items()
+                }
+            else:
+                normalized_scores = feature_scores
+            
+            # Store in MongoDB
+            mongo_client.db['feature_importance'].replace_one(
+                {'ticker': ticker, 'window': window},
+                {
+                    'ticker': ticker,
+                    'window': window,
+                    'feature_scores': normalized_scores,
+                    'timestamp': datetime.utcnow(),
+                    'total_features': len(feature_scores)
+                },
+                upsert=True
+            )
+            
+            logger.info(f"Stored feature importance for {ticker} ({window}): top feature = {max(normalized_scores, key=normalized_scores.get)}")
+            
+        except Exception as e:
+            logger.error(f"Error storing feature importance: {e}")
+
+    def get_optimized_feature_set(self, ticker: str, mongo_client=None) -> Optional[List[str]]:
+        """Get the optimized feature set for a ticker based on historical performance."""
+        try:
+            if not mongo_client:
+                return None
+                
+            # Get latest feature importance
+            importance_doc = mongo_client.db['feature_importance'].find_one(
+                {'ticker': ticker},
+                sort=[('timestamp', -1)]
+            )
+            
+            if importance_doc and 'feature_scores' in importance_doc:
+                # Return features above the significance threshold
+                threshold = 0.005  # 0.5% minimum contribution
+                important_features = [
+                    feature for feature, score in importance_doc['feature_scores'].items()
+                    if score > threshold
+                ]
+                return important_features
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting optimized feature set: {e}")
+            return None 

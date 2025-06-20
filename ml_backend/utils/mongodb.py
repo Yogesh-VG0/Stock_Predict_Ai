@@ -6,7 +6,7 @@ from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ServerSelectionTimeoutError, BulkWriteError
 from typing import Dict, List, Optional, Any
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import pandas as pd
 from dotenv import load_dotenv
@@ -214,62 +214,12 @@ class MongoDBClient:
             logger.error(f"Error storing historical data for {ticker}: {str(e)}")
             return False
 
-    def store_sentiment_data(self, ticker: str, sentiment: Dict[str, Any]) -> bool:
-        """Store sentiment data with proper validation and error handling."""
-        try:
-            if not ticker or not sentiment:
-                logger.error("Invalid ticker or sentiment data")
-                return False
-
-            # Validate required fields
-            required_fields = ['ticker', 'timestamp', 'sources']
-            if not all(field in sentiment for field in required_fields):
-                logger.error(f"Missing required fields in sentiment data: {required_fields}")
-                return False
-
-            # Store main sentiment data
-            sentiment_collection = self.db['sentiment']
-            sentiment_collection.update_one(
-                {'ticker': ticker, 'timestamp': sentiment['timestamp']},
-                {'$set': sentiment},
-                upsert=True
-            )
-
-            # Store individual source data
-            sources_collection = self.db['sentiment_sources']
-            for source, data in sentiment.get('sources', {}).items():
-                if isinstance(data, dict):
-                    source_doc = {
-                        'ticker': ticker,
-                        'timestamp': sentiment['timestamp'],
-                        'source': source,
-                        'data': data
-                    }
-                    sources_collection.update_one(
-                        {'ticker': ticker, 'timestamp': sentiment['timestamp'], 'source': source},
-                        {'$set': source_doc},
-                        upsert=True
-                    )
-
-            # Store economic event features if present
-            if 'economic_event_features' in sentiment:
-                events_collection = self.db['economic_events']
-                events_doc = {
-                    'ticker': ticker,
-                    'timestamp': sentiment['timestamp'],
-                    'features': sentiment['economic_event_features']
-                }
-                events_collection.update_one(
-                    {'ticker': ticker, 'timestamp': sentiment['timestamp']},
-                    {'$set': events_doc},
-                    upsert=True
-                )
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Error storing sentiment data for {ticker}: {e}")
-            return False
+    def store_sentiment(self, ticker: str, sentiment: dict):
+        collection = self.db['sentiment']
+        sentiment['ticker'] = ticker
+        sentiment['last_updated'] = datetime.utcnow()
+        sentiment['date'] = sentiment['timestamp'].replace(hour=0, minute=0, second=0, microsecond=0)
+        collection.insert_one(sentiment)
 
     def get_latest_predictions(self, ticker: str) -> Dict[str, Dict[str, float]]:
         """Get latest predictions for a ticker."""
@@ -348,23 +298,33 @@ class MongoDBClient:
             return None
 
     def _validate_sentiment_data(self, sentiment: Dict[str, Any]) -> bool:
-        """Validate sentiment data structure."""
+        """Validate sentiment data structure (supports both flat and nested formats)."""
         try:
-            required_fields = ['ticker', 'timestamp', 'sources']
+            required_fields = ['ticker', 'timestamp']
             if not all(field in sentiment for field in required_fields):
                 return False
 
-            if not isinstance(sentiment['sources'], dict):
-                return False
-
-            # Validate each source
-            for source, data in sentiment['sources'].items():
-                if not isinstance(data, dict):
+            # Check if it's the new flat format (preferred)
+            if any(key.endswith('_sentiment') for key in sentiment.keys()):
+                # Flat format - look for sentiment fields like finviz_sentiment, sec_sentiment, etc.
+                sentiment_fields = [k for k in sentiment.keys() if k.endswith('_sentiment')]
+                if len(sentiment_fields) > 0:
+                    return True
+            
+            # Check if it's the old nested format (for backward compatibility)
+            elif 'sources' in sentiment:
+                if not isinstance(sentiment['sources'], dict):
                     return False
-                if not all(key in data for key in ['sentiment_score', 'volume', 'confidence']):
-                    return False
 
-            return True
+                # Validate each source
+                for source, data in sentiment['sources'].items():
+                    if not isinstance(data, dict):
+                        return False
+                    if not all(key in data for key in ['sentiment_score', 'volume', 'confidence']):
+                        return False
+                return True
+
+            return False
 
         except Exception as e:
             logger.error(f"Error validating sentiment data: {e}")
@@ -431,24 +391,44 @@ class MongoDBClient:
             return None
 
     def store_alpha_vantage_data(self, ticker: str, endpoint: str, data: dict) -> bool:
-        """Store Alpha Vantage data with proper validation"""
+        """Store Alpha Vantage data with proper validation and error handling"""
         try:
-            if not ticker or not endpoint or not data:
+            if not ticker or not endpoint:
                 return False
+            
+            # Validate data structure - handle both dict and list cases
+            if isinstance(data, list):
+                logger.warning(f"Alpha Vantage data is a list, converting to dict structure for {ticker}/{endpoint}")
+                data = {
+                    'data': data,
+                    'timestamp': datetime.utcnow(),
+                    'ticker': ticker,
+                    'endpoint': endpoint
+                }
+            elif not isinstance(data, dict):
+                logger.warning(f"Alpha Vantage data is not dict or list, skipping storage for {ticker}/{endpoint}")
+                return False
+            
+            # Ensure required fields exist
+            if 'timestamp' not in data:
+                data['timestamp'] = datetime.utcnow()
+            if 'ticker' not in data:
+                data['ticker'] = ticker
+            if 'endpoint' not in data:
+                data['endpoint'] = endpoint
                 
             # Store raw data
-            self.db['alpha_vantage_raw'].update_one(
+            self.db['alpha_vantage_data'].update_one(
                 {
                     'ticker': ticker,
-                    'endpoint': endpoint,
-                    'timestamp': data.get('timestamp')
+                    'endpoint': endpoint
                 },
                 {'$set': data},
                 upsert=True
             )
             
             # Store processed data if available
-            if 'processed' in data:
+            if isinstance(data, dict) and 'processed' in data:
                 self.db['alpha_vantage_processed'].update_one(
                     {
                         'ticker': ticker,
@@ -462,7 +442,7 @@ class MongoDBClient:
             return True
             
         except Exception as e:
-            logger.error(f"Error storing Alpha Vantage data: {e}")
+            logger.error(f"Error storing Alpha Vantage data for {ticker}/{endpoint}: {e}")
             return False
 
     def get_alpha_vantage_data(self, ticker: str, endpoint: str) -> dict:
@@ -615,6 +595,154 @@ class MongoDBClient:
                 logger.info("Closed MongoDB connection")
         except Exception as e:
             logger.error(f"Error closing MongoDB connection: {str(e)}")
+
+    def optimize_sentiment_storage(self, ticker: str, sentiment: dict):
+        """Optimized sentiment storage with deduplication and compression."""
+        try:
+            collection = self.collections[MONGO_COLLECTIONS["sentiment_data"]]
+            
+            # Check for recent duplicate data
+            recent_sentiment = collection.find_one(
+                {
+                    'ticker': ticker,
+                    'timestamp': {'$gte': datetime.utcnow() - timedelta(hours=1)}
+                },
+                sort=[('timestamp', -1)]
+            )
+            
+            # Only store if data has changed significantly
+            if recent_sentiment:
+                # Compare sentiment scores for significant changes
+                threshold = 0.05  # 5% change threshold
+                has_significant_change = False
+                
+                for key in sentiment.keys():
+                    if key.endswith('_sentiment'):
+                        old_val = recent_sentiment.get(key, 0)
+                        new_val = sentiment.get(key, 0)
+                        if abs(new_val - old_val) > threshold:
+                            has_significant_change = True
+                            break
+                
+                if not has_significant_change:
+                    logger.info(f"No significant sentiment change for {ticker}, skipping storage")
+                    return True
+            
+            # Store with compression for large sentiment objects
+            if len(str(sentiment)) > 10000:  # If sentiment data is large
+                import gzip
+                import pickle
+                compressed_data = gzip.compress(pickle.dumps(sentiment))
+                sentiment['_compressed'] = True
+                sentiment['_data'] = compressed_data
+            
+            collection.insert_one({
+                **sentiment,
+                'ticker': ticker,
+                'timestamp': datetime.utcnow()
+            })
+            
+            # Cleanup old data (keep only last 30 days)
+            cutoff_date = datetime.utcnow() - timedelta(days=30)
+            collection.delete_many({
+                'ticker': ticker,
+                'timestamp': {'$lt': cutoff_date}
+            })
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in optimized sentiment storage for {ticker}: {e}")
+            return False
+
+    def get_cached_data(self, cache_key: str, max_age_hours: int = 1) -> Optional[Dict]:
+        """Generic cached data retrieval with age validation."""
+        try:
+            collection = self.db['api_cache']
+            
+            cached = collection.find_one({'cache_key': cache_key})
+            if cached:
+                age = (datetime.utcnow() - cached['timestamp']).total_seconds() / 3600
+                if age < max_age_hours:
+                    # Decompress if needed
+                    if cached.get('_compressed'):
+                        import gzip
+                        import pickle
+                        return pickle.loads(gzip.decompress(cached['_data']))
+                    return cached.get('data')
+                else:
+                    # Remove expired data
+                    collection.delete_one({'cache_key': cache_key})
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error retrieving cached data for {cache_key}: {e}")
+            return None
+
+    def store_cached_data(self, cache_key: str, data: Dict, expire_hours: int = 1):
+        """Generic cached data storage with compression for large objects."""
+        try:
+            collection = self.db['api_cache']
+            
+            cache_doc = {
+                'cache_key': cache_key,
+                'timestamp': datetime.utcnow(),
+                'expire_hours': expire_hours
+            }
+            
+            # Compress large data
+            if len(str(data)) > 5000:
+                import gzip
+                import pickle
+                cache_doc['_compressed'] = True
+                cache_doc['_data'] = gzip.compress(pickle.dumps(data))
+            else:
+                cache_doc['data'] = data
+            
+            collection.replace_one(
+                {'cache_key': cache_key},
+                cache_doc,
+                upsert=True
+            )
+            
+            # Cleanup expired cache entries
+            expiry_time = datetime.utcnow() - timedelta(hours=24)  # Clean entries older than 24h
+            collection.delete_many({'timestamp': {'$lt': expiry_time}})
+            
+        except Exception as e:
+            logger.error(f"Error storing cached data for {cache_key}: {e}")
+
+    def create_advanced_indexes(self):
+        """Create advanced indexes for optimal performance."""
+        try:
+            # Sentiment data indexes
+            sentiment_collection = self.collections[MONGO_COLLECTIONS["sentiment_data"]]
+            sentiment_collection.create_index([
+                ("ticker", 1), 
+                ("timestamp", -1)
+            ], background=True)
+            
+            # Cache collection indexes
+            self.db['api_cache'].create_index([
+                ("cache_key", 1)
+            ], unique=True, background=True)
+            
+            self.db['api_cache'].create_index([
+                ("timestamp", 1)
+            ], expireAfterSeconds=86400*2, background=True)  # Auto-expire after 2 days
+            
+            # Feature importance index
+            self.db['feature_importance'].create_index([
+                ("ticker", 1),
+                ("window", 1),
+                ("timestamp", -1)
+            ], background=True)
+            
+            logger.info("Created advanced MongoDB indexes for optimization")
+            
+        except Exception as e:
+            logger.error(f"Error creating advanced indexes: {e}")
 
 if __name__ == "__main__":
     # Test MongoDB connection

@@ -1,3 +1,4 @@
+# ensemble.py
 import numpy as np
 from .predictor import StockPredictor
 import xgboost as xgb
@@ -18,13 +19,13 @@ class GRUPredictor:
         self.model = None
         self.input_shape = input_shape
         self.hyperparams = hyperparams or {
-            'gru_units': 64,
-            'dense_units': 32,
-            'dropout_rate': 0.2,
+            'gru_units': 48,
+            'dense_units': 24,
+            'dropout_rate': 0.3,
             'learning_rate': 1e-3,
-            'l2_reg': 1e-4,
+            'l2_reg': 1e-3,
             'batch_size': 64,
-            'epochs': 30
+            'epochs': 20
         }
 
     def build_model(self, input_shape):
@@ -75,14 +76,14 @@ class TransformerPredictor:
         self.model = None
         self.input_shape = input_shape
         self.hyperparams = hyperparams or {
-            'embed_dim': 32,
+            'embed_dim': 24,
             'num_heads': 2,
-            'ff_dim': 32,
-            'dropout_rate': 0.1,
-            'dense_units': 32,
+            'ff_dim': 24,
+            'dropout_rate': 0.2,
+            'dense_units': 24,
             'learning_rate': 1e-3,
             'batch_size': 64,
-            'epochs': 30
+            'epochs': 20
         }
 
     def build_model(self, input_shape):
@@ -177,4 +178,87 @@ class EnsemblePredictor:
         X_flat = X.reshape((X.shape[0], X.shape[1] * X.shape[2]))
         df = np.concatenate([X_flat, y.reshape(-1, 1)], axis=1)
         col_names = [f'{c}_{i}' for c in columns for i in range(X.shape[1])] + ['Close']
-        return pd.DataFrame(df, columns=col_names) 
+        return pd.DataFrame(df, columns=col_names)
+
+    def train_ensemble(self, X_train, y_train, feature_names=None, ticker=None, mongo_client=None):
+        """Train all models in the ensemble and store feature importance."""
+        try:
+            logger.info("Training ensemble models...")
+            
+            # Convert to numpy array if needed
+            if hasattr(X_train, 'values'):
+                X_train = X_train.values
+            if hasattr(y_train, 'values'):
+                y_train = y_train.values
+            
+            # Store feature names
+            if feature_names is not None:
+                self.feature_names = feature_names
+            
+            # Train individual models
+            self.rf_model.fit(X_train, y_train)
+            self.gb_model.fit(X_train, y_train)
+            self.xgb_model.fit(X_train, y_train)
+            
+            # Train neural network
+            if self.nn_model:
+                self.nn_model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0)
+            
+            logger.info("Ensemble training completed successfully")
+            
+            # Calculate and store feature importance
+            if ticker and mongo_client and feature_names is not None:
+                self._calculate_and_store_feature_importance(ticker, mongo_client)
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error training ensemble: {e}")
+            return False
+    
+    def _calculate_and_store_feature_importance(self, ticker: str, mongo_client):
+        """Calculate combined feature importance from all models and store in MongoDB."""
+        try:
+            feature_importance = {}
+            
+            # Get Random Forest importance
+            if hasattr(self.rf_model, 'feature_importances_'):
+                rf_importance = self.rf_model.feature_importances_
+                for i, importance in enumerate(rf_importance):
+                    if i < len(self.feature_names):
+                        feature_name = self.feature_names[i]
+                        feature_importance[feature_name] = feature_importance.get(feature_name, 0) + importance * 0.3
+            
+            # Get Gradient Boosting importance
+            if hasattr(self.gb_model, 'feature_importances_'):
+                gb_importance = self.gb_model.feature_importances_
+                for i, importance in enumerate(gb_importance):
+                    if i < len(self.feature_names):
+                        feature_name = self.feature_names[i]
+                        feature_importance[feature_name] = feature_importance.get(feature_name, 0) + importance * 0.3
+            
+            # Get XGBoost importance
+            if hasattr(self.xgb_model, 'feature_importances_'):
+                xgb_importance = self.xgb_model.feature_importances_
+                for i, importance in enumerate(xgb_importance):
+                    if i < len(self.feature_names):
+                        feature_name = self.feature_names[i]
+                        feature_importance[feature_name] = feature_importance.get(feature_name, 0) + importance * 0.4
+            
+            # Store in MongoDB using FeatureEngineer's method
+            if feature_importance:
+                from ml_backend.data.features import FeatureEngineer
+                feature_engineer = FeatureEngineer()
+                feature_engineer.store_feature_importance(
+                    ticker=ticker,
+                    feature_scores=feature_importance,
+                    window="ensemble_training",
+                    mongo_client=mongo_client
+                )
+                
+                # Log top 5 features
+                top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:5]
+                logger.info(f"Top 5 features for {ticker}: {[f'{name}: {score:.4f}' for name, score in top_features]}")
+                
+        except Exception as e:
+            logger.error(f"Error calculating feature importance for {ticker}: {e}") 

@@ -360,6 +360,13 @@ class EconomicCalendar:
         self.fingerprint_manager = BrowserFingerprint()
         self.human_behavior = HumanBehavior()
         
+        # Instance-level cache to prevent multiple fetches per session
+        self._events_cache = {
+            'data': None,
+            'timestamp': None,
+            'cache_duration': timedelta(hours=6)
+        }
+        
         # Initialize proxy list (you should add your proxies here)
         self.proxy_manager.add_proxy("http://proxy1.example.com:8080")
         self.proxy_manager.add_proxy("http://proxy2.example.com:8080")
@@ -654,7 +661,16 @@ class EconomicCalendar:
             return False
 
     def fetch_high_impact_us_events(self) -> List[Dict]:
-        """Fetch high-impact US economic events from Investing.com"""
+        """Fetch high-impact US economic events from Investing.com with instance-level caching"""
+        
+        # Check instance-level cache first
+        if (self._events_cache['data'] is not None and 
+            self._events_cache['timestamp'] is not None and
+            (datetime.now() - self._events_cache['timestamp']) < self._events_cache['cache_duration']):
+            
+            logger.info("Using instance-cached economic events (no web scraping needed)")
+            return self._events_cache['data']
+        
         driver = None
         try:
             driver = self._create_undetected_driver()
@@ -746,6 +762,11 @@ class EconomicCalendar:
                 except Exception as e:
                     logger.warning(f"Failed to parse event row: {e}")
                     continue
+
+            # Cache the fetched events for 6 hours
+            self._events_cache['data'] = events
+            self._events_cache['timestamp'] = datetime.now()
+            logger.info(f"Cached {len(events)} economic events for 6 hours")
 
             return events
         except Exception as e:
@@ -893,7 +914,12 @@ class EconomicCalendar:
             'next_earnings_revenue_estimate': None,
             'next_dividend_record_date': None,
             'next_dividend_payment_date': None,
-            'dividend_frequency': None
+            'dividend_frequency': None,
+            'data_sources_checked': [],
+            'fmp_earnings_count': 0,
+            'fmp_dividends_count': 0,
+            'economic_events_count': 0,
+            'sentiment_data_available': False
         }
         
         try:
@@ -903,71 +929,161 @@ class EconomicCalendar:
             events = self.fetch_economic_events(start_date, end_date)
             
             # Get latest sentiment data from MongoDB which includes FMP data
-            if self.mongo_client:
+            features['data_sources_checked'].append('sentiment_data')
+            if self.mongo_client and self.mongo_client.db is not None:
                 sentiment_data = self.mongo_client.get_latest_sentiment(ticker)
                 if sentiment_data:
-                    logger.info(f"Found sentiment data for {ticker} with keys: {list(sentiment_data.keys())}")
+                    features['sentiment_data_available'] = True
+                    logger.info(f"✓ Found sentiment data for {ticker} with keys: {list(sentiment_data.keys())}")
                     
-                    # Process earnings calendar data
+                    # Check for FMP raw data in the sentiment data (based on actual FMP API structure)
+                    fmp_data = sentiment_data.get('fmp_raw_data', {})
+                    if isinstance(fmp_data, dict):
+                        logger.info(f"Found FMP raw data for {ticker} with keys: {list(fmp_data.keys())}")
+                        
+                        # Check earnings data using FMP API structure
+                        earnings_data = []
+                        
+                        # Try different possible locations for earnings data
+                        earnings_sources = [
+                            fmp_data.get('earnings', []),           # Direct earnings array
+                            fmp_data.get('earnings_calendar', []),  # Calendar-specific earnings
+                            sentiment_data.get('fmp_earnings_calendar', [])  # Legacy location
+                        ]
+                        
+                        for source in earnings_sources:
+                            if source and isinstance(source, list):
+                                earnings_data = source
+                                break
+                                
+                        if earnings_data:
+                            features['fmp_earnings_count'] = len(earnings_data)
+                            features['data_sources_checked'].append('fmp_earnings')
+                            logger.info(f"Processing {len(earnings_data)} FMP earnings entries for {ticker}")
+                            
+                            for event in earnings_data:
+                                try:
+                                    # FMP earnings API structure: {"symbol": "AAPL", "date": "2025-07-30", "epsEstimated": 1.42, "revenueEstimated": 88667738130}
+                                    event_date_str = event.get('date')
+                                    if not event_date_str:
+                                        continue
+                                        
+                                    event_date = datetime.strptime(event_date_str, '%Y-%m-%d')
+                                    days_diff = (event_date - date).days
+                                    
+                                    logger.info(f"Processing earnings event: {event_date_str}, days_diff: {days_diff}")
+                                    
+                                    if days_diff == 0:
+                                        features['has_earnings_today'] = 1
+                                        features['next_earnings_eps_estimate'] = event.get('epsEstimated')
+                                        features['next_earnings_revenue_estimate'] = event.get('revenueEstimated')
+                                        logger.info(f"✓ Earnings TODAY for {ticker}: EPS={event.get('epsEstimated')}, Revenue={event.get('revenueEstimated')}")
+                                    elif days_diff > 0 and days_diff < features['days_to_next_earnings']:
+                                        features['days_to_next_earnings'] = days_diff
+                                        features['next_earnings_eps_estimate'] = event.get('epsEstimated')
+                                        features['next_earnings_revenue_estimate'] = event.get('revenueEstimated')
+                                        logger.info(f"✓ Next earnings for {ticker} in {days_diff} days: EPS={event.get('epsEstimated')}, Revenue={event.get('revenueEstimated')}")
+                                    elif days_diff < 0 and abs(days_diff) < features['days_since_last_earnings']:
+                                        features['days_since_last_earnings'] = abs(days_diff)
+                                        logger.info(f"✓ Last earnings for {ticker} was {abs(days_diff)} days ago: EPS_Actual={event.get('epsActual')}")
+                                except Exception as e:
+                                    logger.warning(f"Error processing earnings event for {ticker}: {e}")
+                        else:
+                            logger.warning(f"No earnings data found in FMP raw data for {ticker}")
+                        
+                        # Check dividends data using FMP API structure
+                        dividends_data = []
+                        
+                        # Try different possible locations for dividends data
+                        dividends_sources = [
+                            fmp_data.get('dividends', []),           # Direct dividends array
+                            fmp_data.get('dividends_calendar', []),  # Calendar-specific dividends
+                            sentiment_data.get('fmp_dividends_calendar', [])  # Legacy location
+                        ]
+                        
+                        for source in dividends_sources:
+                            if source and isinstance(source, list):
+                                dividends_data = source
+                                break
+                                
+                        if dividends_data:
+                            features['fmp_dividends_count'] = len(dividends_data)
+                            features['data_sources_checked'].append('fmp_dividends')
+                            logger.info(f"Processing {len(dividends_data)} FMP dividends entries for {ticker}")
+                            
+                            for div in dividends_data:
+                                try:
+                                    # FMP dividends API structure: {"symbol": "AAPL", "date": "2025-05-12", "dividend": 0.26, "yield": 0.479}
+                                    div_date_str = div.get('date')  # Ex-dividend date
+                                    if not div_date_str:
+                                        continue
+                                        
+                                    div_date = datetime.strptime(div_date_str, '%Y-%m-%d')
+                                    days_diff = (div_date - date).days
+                                    
+                                    logger.info(f"Processing dividend event: {div_date_str}, days_diff: {days_diff}")
+                                    
+                                    if days_diff == 0:
+                                        features['has_dividend_today'] = 1
+                                        features['dividend_amount'] = float(div.get('dividend', 0) or div.get('adjDividend', 0))
+                                        features['dividend_yield'] = float(div.get('yield', 0))
+                                        features['next_dividend_record_date'] = div.get('recordDate')
+                                        features['next_dividend_payment_date'] = div.get('paymentDate')
+                                        features['dividend_frequency'] = div.get('frequency')
+                                        logger.info(f"✓ Dividend TODAY for {ticker}: ${features['dividend_amount']:.3f} ({features['dividend_yield']:.2f}% yield)")
+                                    elif days_diff > 0 and days_diff < features['days_to_next_dividend']:
+                                        features['days_to_next_dividend'] = days_diff
+                                        features['dividend_amount'] = float(div.get('dividend', 0) or div.get('adjDividend', 0))
+                                        features['dividend_yield'] = float(div.get('yield', 0))
+                                        features['next_dividend_record_date'] = div.get('recordDate')
+                                        features['next_dividend_payment_date'] = div.get('paymentDate')
+                                        features['dividend_frequency'] = div.get('frequency')
+                                        logger.info(f"✓ Next dividend for {ticker} in {days_diff} days: ${features['dividend_amount']:.3f} ({features['dividend_yield']:.2f}% yield)")
+                                    elif days_diff < 0 and abs(days_diff) < features['days_since_last_dividend']:
+                                        features['days_since_last_dividend'] = abs(days_diff)
+                                        logger.info(f"✓ Last dividend for {ticker} was {abs(days_diff)} days ago: ${div.get('dividend', 0):.3f}")
+                                except Exception as e:
+                                    logger.warning(f"Error processing dividend event for {ticker}: {e}")
+                        else:
+                            logger.warning(f"No dividends data found in FMP raw data for {ticker}")
+                                    
+                    else:
+                        logger.warning(f"No FMP raw data found in sentiment data for {ticker}")
+                        
+                    # Check for any calendar-specific data stored separately (legacy support)
                     if 'fmp_earnings_calendar' in sentiment_data:
-                        logger.info(f"Processing earnings calendar data for {ticker}")
-                        for event in sentiment_data['fmp_earnings_calendar']:
-                            try:
-                                event_date = datetime.strptime(event.get('date', ''), '%Y-%m-%d')
-                                days_diff = (event_date - date).days
-                                
-                                if days_diff == 0:
-                                    features['has_earnings_today'] = 1
-                                    features['next_earnings_eps_estimate'] = event.get('epsEstimated')
-                                    features['next_earnings_revenue_estimate'] = event.get('revenueEstimated')
-                                    logger.info(f"Found earnings today for {ticker}")
-                                elif days_diff > 0 and days_diff < features['days_to_next_earnings']:
-                                    features['days_to_next_earnings'] = days_diff
-                                    features['next_earnings_eps_estimate'] = event.get('epsEstimated')
-                                    features['next_earnings_revenue_estimate'] = event.get('revenueEstimated')
-                                    logger.info(f"Next earnings for {ticker} in {days_diff} days")
-                                elif days_diff < 0 and abs(days_diff) < features['days_since_last_earnings']:
-                                    features['days_since_last_earnings'] = abs(days_diff)
-                            except Exception as e:
-                                logger.warning(f"Error processing earnings event for {ticker}: {e}")
-                    else:
-                        logger.warning(f"No earnings calendar data found for {ticker}")
-
-                    # Process dividends calendar data
+                        earnings_calendar = sentiment_data.get('fmp_earnings_calendar', [])
+                        if earnings_calendar and not earnings_data:  # Only use if no direct earnings found
+                            features['data_sources_checked'].append('fmp_earnings_calendar_legacy')
+                            features['fmp_earnings_count'] = len(earnings_calendar)
+                            logger.info(f"Using {len(earnings_calendar)} legacy earnings calendar entries for {ticker}")
+                    
                     if 'fmp_dividends_calendar' in sentiment_data:
-                        logger.info(f"Processing dividends calendar data for {ticker}")
-                        for div in sentiment_data['fmp_dividends_calendar']:
-                            try:
-                                div_date = datetime.strptime(div.get('date', ''), '%Y-%m-%d')
-                                days_diff = (div_date - date).days
-                                
-                                if days_diff == 0:
-                                    features['has_dividend_today'] = 1
-                                    features['dividend_amount'] = float(div.get('dividend', 0))
-                                    features['dividend_yield'] = float(div.get('yield', 0))
-                                    features['next_dividend_record_date'] = div.get('recordDate')
-                                    features['next_dividend_payment_date'] = div.get('paymentDate')
-                                    features['dividend_frequency'] = div.get('frequency')
-                                    logger.info(f"Found dividend today for {ticker}")
-                                elif days_diff > 0 and days_diff < features['days_to_next_dividend']:
-                                    features['days_to_next_dividend'] = days_diff
-                                    features['dividend_amount'] = float(div.get('dividend', 0))
-                                    features['dividend_yield'] = float(div.get('yield', 0))
-                                    features['next_dividend_record_date'] = div.get('recordDate')
-                                    features['next_dividend_payment_date'] = div.get('paymentDate')
-                                    features['dividend_frequency'] = div.get('frequency')
-                                    logger.info(f"Next dividend for {ticker} in {days_diff} days")
-                                elif days_diff < 0 and abs(days_diff) < features['days_since_last_dividend']:
-                                    features['days_since_last_dividend'] = abs(days_diff)
-                            except Exception as e:
-                                logger.warning(f"Error processing dividend event for {ticker}: {e}")
-                    else:
-                        logger.warning(f"No dividends calendar data found for {ticker}")
+                        dividends_calendar = sentiment_data.get('fmp_dividends_calendar', [])
+                        if dividends_calendar and not dividends_data:  # Only use if no direct dividends found
+                            features['data_sources_checked'].append('fmp_dividends_calendar_legacy')
+                            features['fmp_dividends_count'] = len(dividends_calendar)
+                            logger.info(f"Using {len(dividends_calendar)} legacy dividends calendar entries for {ticker}")
+                            
+                    # Log final feature values for debugging
+                    logger.info(f"Final economic features for {ticker}:")
+                    logger.info(f"  - FMP earnings count: {features['fmp_earnings_count']}")
+                    logger.info(f"  - FMP dividends count: {features['fmp_dividends_count']}")
+                    logger.info(f"  - Days to next earnings: {features['days_to_next_earnings']}")
+                    logger.info(f"  - Days to next dividend: {features['days_to_next_dividend']}")
+                    logger.info(f"  - Data sources checked: {features['data_sources_checked']}")
                 else:
+                    features['sentiment_data_available'] = False
                     logger.warning(f"No sentiment data found for {ticker}")
 
             # Process economic events - only high impact events
+            features['economic_events_count'] = len(events)
+            features['data_sources_checked'].append('economic_events')
+            logger.info(f"Found {len(events)} economic events in date range for processing")
+            
             ticker_events = [e for e in events if ticker in e.get('affected_tickers', [])]
+            logger.info(f"Found {len(ticker_events)} events specifically affecting {ticker}")
+            
             for event in ticker_events:
                 event_date = datetime.strptime(event['date'], '%Y-%m-%d')
                 days_diff = (event_date - date).days
@@ -1027,7 +1143,7 @@ class EconomicCalendar:
     def _get_cached_events(self, start_date: datetime, end_date: datetime) -> List[Dict]:
         """Get cached events from MongoDB"""
         try:
-            if not self.mongo_client:
+            if not self.mongo_client or self.mongo_client.db is None:
                 return []
             
             # Query MongoDB for events in date range
@@ -1038,7 +1154,7 @@ class EconomicCalendar:
                 }
             }
             
-            events = list(self.mongo_client.economic_events.find(query))
+            events = list(self.mongo_client.db.economic_events.find(query))
             if events:
                 logger.info(f"Found {len(events)} cached events")
             return events
@@ -1048,14 +1164,30 @@ class EconomicCalendar:
             return []
     
     def _store_events(self, events: List[Dict]):
-        """Store events in MongoDB"""
+        """Store events in MongoDB with duplicate prevention"""
         try:
-            if not self.mongo_client or not events:
+            if not self.mongo_client or self.mongo_client.db is None or not events:
                 return
             
-            # Insert events into MongoDB
-            self.mongo_client.economic_events.insert_many(events)
-            logger.info(f"Stored {len(events)} events in MongoDB")
+            stored_count = 0
+            for event in events:
+                # Use upsert to prevent duplicates based on date and event name
+                unique_key = {
+                    'date': event.get('date'),
+                    'event': event.get('event'),
+                    'country': event.get('country', 'US')
+                }
+                
+                result = self.mongo_client.db.economic_events.replace_one(
+                    unique_key,
+                    event,
+                    upsert=True
+                )
+                
+                if result.upserted_id or result.modified_count > 0:
+                    stored_count += 1
+            
+            logger.info(f"Stored/Updated {stored_count} unique events in MongoDB (processed {len(events)} total)")
             
         except Exception as e:
             logger.error(f"Error storing events: {e}")
@@ -1064,9 +1196,16 @@ def integrate_economic_events_sentiment(sentiment_dict: Dict, ticker: str, mongo
     """
     Integrate economic event data into sentiment analysis.
     High-impact events increase uncertainty and potential volatility.
+    Uses shared EconomicCalendar instance when possible to prevent multiple web scraping.
     """
     try:
-        calendar = EconomicCalendar(mongo_client)
+        # Try to use shared calendar instance from sentiment analyzer
+        from .sentiment import SHARED_ECONOMIC_CALENDAR
+        if SHARED_ECONOMIC_CALENDAR is not None:
+            calendar = SHARED_ECONOMIC_CALENDAR
+        else:
+            # Fallback to creating new instance
+            calendar = EconomicCalendar(mongo_client)
         
         # Get event features for today
         event_features = calendar.get_event_features(ticker, datetime.now())

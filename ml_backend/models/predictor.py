@@ -4,16 +4,17 @@ Machine learning model module for stock price prediction.
 
 import tensorflow as tf
 from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, Callback
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, BatchNormalization
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, Callback, ReduceLROnPlateau
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.regularizers import l2
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import optuna
@@ -29,8 +30,13 @@ import shap
 import xgboost as xgb
 import shutil
 import lightgbm as lgb
-from sklearn.ensemble import RandomForestRegressor, StackingRegressor
+from sklearn.ensemble import StackingRegressor
 from sklearn.linear_model import Ridge
+from sklearn.feature_selection import SelectKBest, f_regression
+import joblib
+from sklearn.neural_network import MLPRegressor
+from sklearn.preprocessing import StandardScaler
+from ml_backend.data.features import FeatureEngineer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,22 +57,86 @@ class LoggingCallback(Callback):
         logger.info(f"Epoch {epoch+1}/{self.epochs}: loss={logs.get('loss', 0):.4f}, val_loss={logs.get('val_loss', 0):.4f}, elapsed={elapsed:.1f}s, ETA={eta:.1f}s")
 
 class StockPredictor:
-    def __init__(self, feature_engineer=None):
-        self.model_config = MODEL_CONFIG
-        self.prediction_windows = PREDICTION_WINDOWS
+    def __init__(self, mongo_client):
+        self.mongo_client = mongo_client
         self.models = {}
-        self.xgb_models = {}
-        self.rf_models = {}
         self.lgbm_models = {}
-        self.feature_engineer = feature_engineer
-        self.hyperparameters = {}
-        self.metrics = {}
-        self.model_dir = "models"
-        os.makedirs(self.model_dir, exist_ok=True)
-        self.target_stats = {}  # Store mean/std for each window
-        self.feature_columns = []  # Store feature columns for later use
-        self.recent_residuals = {w: [] for w in self.prediction_windows}  # For price range
-        self.feature_importances_ = {}
+        self.xgb_models = {}
+        self.feature_selectors = {}
+        self.feature_selector = None
+        self.feature_engineer = None  # Will be set via set_feature_engineer
+        self.scaler = StandardScaler()
+        self.model_metadata = {}
+        self.model_dir = "models"  # Default models directory
+        # Updated windows: next_day, 7_day (1 week), 30_day (1 month)
+        self.prediction_windows = ['next_day', '7_day', '30_day']
+        
+    def prepare_training_data(self, ticker: str, window: str, 
+                            start_date: str = None, end_date: str = None):
+        """Prepare data for training with consistent feature engineering."""
+        try:
+            # Window size mapping
+            window_size_map = {'next_day': 1, '7_day': 7, '30_day': 30}
+            window_size = window_size_map.get(window, 1)
+            
+            logger.info(f"Preparing training data for {ticker} - {window} window (size: {window_size})")
+            
+            # Get historical data
+            collection = self.mongo_client.get_database().stock_data
+            
+            # Build query
+            query = {'ticker': ticker}
+            if start_date or end_date:
+                date_filter = {}
+                if start_date:
+                    date_filter['$gte'] = datetime.strptime(start_date, '%Y-%m-%d')
+                if end_date:
+                    date_filter['$lte'] = datetime.strptime(end_date, '%Y-%m-%d')
+                query['date'] = date_filter
+            
+            # Fetch data
+            cursor = collection.find(query).sort('date', 1)
+            data = list(cursor)
+            
+            if len(data) < window_size + 50:  # Need enough data for windowing + minimum training
+                raise ValueError(f"Insufficient data for {ticker}: {len(data)} records. Need at least {window_size + 50}")
+            
+            # Convert to DataFrame
+            df = pd.DataFrame(data)
+            if 'date' in df.columns:
+                df = df.set_index('date')
+            
+            # Ensure required columns exist
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                raise ValueError(f"Missing required columns for {ticker}: {missing_columns}")
+            
+            # Get sentiment and external data
+            sentiment_data = self.mongo_client.get_aggregated_sentiment(ticker)
+            
+            # Prepare features with pipeline saving
+            features, targets = self.feature_engineer.prepare_features(
+                df=df,
+                sentiment_dict=sentiment_data,
+                window_size=window_size,
+                ticker=ticker,
+                mongo_client=self.mongo_client,
+                handle_outliers=True,
+                save_pipeline=True,  # Save pipeline for consistency
+                window=window
+            )
+            
+            if features is None or targets is None:
+                raise ValueError(f"Feature engineering failed for {ticker}-{window}")
+            
+            logger.info(f"Training data prepared: Features shape: {features.shape}, Targets shape: {targets.shape}")
+            
+            return features, targets
+            
+        except Exception as e:
+            logger.error(f"Error preparing training data for {ticker}-{window}: {e}")
+            raise
 
     def set_feature_engineer(self, feature_engineer):
         self.feature_engineer = feature_engineer
@@ -140,50 +210,98 @@ class StockPredictor:
         )
         return model
 
-    def build_rf_model(self, **params):
-        return RandomForestRegressor(**params)
+
 
     def build_lgbm_model(self, **params):
         return lgb.LGBMRegressor(**params)
 
     def objective(self, trial: optuna.Trial, X_train: np.ndarray, y_train: np.ndarray, X_val: np.ndarray, y_val: np.ndarray) -> float:
         """Objective function for hyperparameter optimization."""
-        hyperparams = {
-            'lstm_units': trial.suggest_int('lstm_units', 32, 64),
-            'dense_units': trial.suggest_int('dense_units', 16, 32),
-            'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.3),
-            'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True),
-            'l2_reg': trial.suggest_float('l2_reg', 1e-5, 1e-2, log=True),
-            'batch_size': trial.suggest_categorical('batch_size', [64, 128])
-        }
-        # Use stored feature columns to find 'Close' index
-        close_idx = self.feature_columns.index('Close')
-        # Get mean and std from the current window's stats if available, else use y_train
-        y_mean = y_train.mean() if hasattr(y_train, 'mean') else 0
-        y_std = y_train.std() if hasattr(y_train, 'std') and y_train.std() != 0 else 1
-        # Normalize targets and current price
-        y_train_norm = (y_train - y_mean) / y_std
-        y_val_norm = (y_val - y_mean) / y_std
-        current_price_train = (X_train[:, -1, close_idx] - y_mean) / y_std
-        current_price_val = (X_val[:, -1, close_idx] - y_mean) / y_std
-        y_train_combined = np.column_stack([y_train_norm, current_price_train])
-        y_val_combined = np.column_stack([y_val_norm, current_price_val])
-        model = self.build_model((X_train.shape[1], X_train.shape[2]), hyperparams)
-        early_stopping = EarlyStopping(
-            monitor='val_loss',
-            patience=self.model_config['early_stopping_patience'],
-            restore_best_weights=True
-        )
-        model.fit(
-            X_train, y_train_combined,
-            validation_data=(X_val, y_val_combined),
-            epochs=self.model_config['epochs'],
-            batch_size=hyperparams['batch_size'],
-            callbacks=[early_stopping],
-            verbose=0
-        )
-        val_loss = model.evaluate(X_val, y_val_combined, verbose=0)[0]
-        return val_loss
+        try:
+            hyperparams = {
+                'lstm_units': trial.suggest_int('lstm_units', 32, 64),
+                'dense_units': trial.suggest_int('dense_units', 16, 32),
+                'dropout_rate': trial.suggest_float('dropout_rate', 0.1, 0.3),
+                'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True),
+                'l2_reg': trial.suggest_float('l2_reg', 1e-5, 1e-2, log=True),
+                'batch_size': trial.suggest_categorical('batch_size', [64, 128])
+            }
+            
+            # Validate input shapes
+            if len(X_train.shape) != 3 or len(X_val.shape) != 3:
+                logger.warning("Invalid input shapes for hyperparameter tuning. Skipping trial.")
+                return float('inf')
+            
+            # Use stored feature columns to find 'Close' index
+            if not hasattr(self, 'feature_columns') or not self.feature_columns:
+                logger.warning("No feature columns available. Using last feature column.")
+                close_idx = -1
+            else:
+                close_idx = self.feature_columns.index('Close') if 'Close' in self.feature_columns else -1
+                
+            # Get mean and std from the current window's stats if available, else use y_train
+            y_mean = y_train.mean() if hasattr(y_train, 'mean') else 0
+            y_std = y_train.std() if hasattr(y_train, 'std') and y_train.std() != 0 else 1
+            
+            # Normalize targets and current price
+            y_train_norm = (y_train - y_mean) / y_std
+            y_val_norm = (y_val - y_mean) / y_std
+            
+            # Handle current price extraction safely
+            try:
+                current_price_train = (X_train[:, -1, close_idx] - y_mean) / y_std
+                current_price_val = (X_val[:, -1, close_idx] - y_mean) / y_std
+            except IndexError:
+                logger.warning("Index error extracting current price. Using zeros.")
+                current_price_train = np.zeros(len(X_train))
+                current_price_val = np.zeros(len(X_val))
+            
+            # Ensure proper shapes
+            if len(y_train_norm.shape) == 1:
+                y_train_norm = y_train_norm.reshape(-1, 1)
+            if len(y_val_norm.shape) == 1:
+                y_val_norm = y_val_norm.reshape(-1, 1)
+            if len(current_price_train.shape) == 1:
+                current_price_train = current_price_train.reshape(-1, 1)
+            if len(current_price_val.shape) == 1:
+                current_price_val = current_price_val.reshape(-1, 1)
+                
+            # Align lengths
+            min_train_len = min(len(y_train_norm), len(current_price_train), len(X_train))
+            min_val_len = min(len(y_val_norm), len(current_price_val), len(X_val))
+            
+            y_train_combined = np.column_stack([
+                y_train_norm[:min_train_len], 
+                current_price_train[:min_train_len]
+            ])
+            y_val_combined = np.column_stack([
+                y_val_norm[:min_val_len], 
+                current_price_val[:min_val_len]
+            ])
+            
+            # Align X arrays
+            X_train_aligned = X_train[:min_train_len]
+            X_val_aligned = X_val[:min_val_len]
+            
+            model = self.build_model((X_train_aligned.shape[1], X_train_aligned.shape[2]), hyperparams)
+            early_stopping = EarlyStopping(
+                monitor='val_loss',
+                patience=self.model_config['early_stopping_patience'],
+                restore_best_weights=True
+            )
+            model.fit(
+                X_train_aligned, y_train_combined,
+                validation_data=(X_val_aligned, y_val_combined),
+                epochs=self.model_config['epochs'],
+                batch_size=hyperparams['batch_size'],
+                callbacks=[early_stopping],
+                verbose=0
+            )
+            val_loss = model.evaluate(X_val_aligned, y_val_combined, verbose=0)[0]
+            return val_loss
+        except Exception as e:
+            logger.warning(f"Error in hyperparameter trial: {str(e)}")
+            return float('inf')  # Return very high loss for failed trials
 
     def tune_hyperparameters(self, X: np.ndarray, y: np.ndarray) -> Dict:
         """Tune hyperparameters using Optuna."""
@@ -212,22 +330,7 @@ class StockPredictor:
             logger.error(f"Error tuning hyperparameters: {str(e)}")
             return self.model_config['default_hyperparameters']
 
-    def tune_rf(self, X, y):
-        def objective(trial):
-            params = {
-                'n_estimators': trial.suggest_int('n_estimators', 50, 200),
-                'max_depth': trial.suggest_int('max_depth', 3, 10),
-                'min_samples_split': trial.suggest_int('min_samples_split', 2, 10),
-                'min_samples_leaf': trial.suggest_int('min_samples_leaf', 1, 5),
-                'random_state': 42
-            }
-            model = self.build_rf_model(**params)
-            model.fit(X, y)
-            preds = model.predict(X)
-            return mean_squared_error(y, preds)
-        study = optuna.create_study(direction='minimize')
-        study.optimize(objective, n_trials=10)
-        return study.best_params
+
 
     def tune_lgbm(self, X, y):
         def objective(trial):
@@ -255,14 +358,21 @@ class StockPredictor:
         y_test: np.ndarray,
         window: str
     ) -> tf.keras.Model:
-        """Train the model for a specific prediction window."""
+        """Train LSTM model for a specific window."""
         try:
-            # Save feature columns after feature engineering
-            if hasattr(self, 'feature_columns') and self.feature_columns:
-                with open('models/feature_columns.json', 'w') as f:
-                    json.dump(self.feature_columns, f)
             # Print the exact features used for training
             print(f"Features used for training {window}: {self.feature_columns}")
+            
+            # Validate input shapes
+            logger.info(f"Input shapes - X_train: {X_train.shape}, y_train: {y_train.shape}")
+            logger.info(f"Input shapes - X_val: {X_val.shape}, y_val: {y_val.shape}")
+            logger.info(f"Input shapes - X_test: {X_test.shape}, y_test: {y_test.shape}")
+            
+            # Check for valid data
+            if X_train.shape[0] == 0 or y_train.shape[0] == 0:
+                logger.error(f"Empty training data for {window}")
+                return None
+            
             # --- Target normalization ---
             y_mean = y_train.mean()
             y_std = y_train.std() if y_train.std() != 0 else 1
@@ -270,58 +380,145 @@ class StockPredictor:
             y_train_norm = (y_train - y_mean) / y_std
             y_val_norm = (y_val - y_mean) / y_std
             y_test_norm = (y_test - y_mean) / y_std
-            # Use stored feature columns to find 'Close' index
-            close_idx = self.feature_columns.index('Close')
-            # Extract and normalize current price
-            current_price_train = (X_train[:, -1, close_idx] - y_mean) / y_std
-            current_price_val = (X_val[:, -1, close_idx] - y_mean) / y_std
-            current_price_test = (X_test[:, -1, close_idx] - y_mean) / y_std
-            y_train_combined = np.column_stack([y_train_norm, current_price_train])
-            y_val_combined = np.column_stack([y_val_norm, current_price_val])
-            y_test_combined = np.column_stack([y_test_norm, current_price_test])
+            
+            # Handle different array shapes for different window sizes
+            if len(X_train.shape) == 3:  # 3D array for multi-day windows
+                # Use stored feature columns to find 'Close' index
+                close_idx = self.feature_columns.index('Close') if 'Close' in self.feature_columns else -1
+                if close_idx == -1:
+                    logger.warning(f"'Close' column not found in features for {window}. Using last column.")
+                    close_idx = -1
+                # Extract and normalize current price from last time step
+                current_price_train = X_train[:, -1, close_idx] 
+                current_price_val = X_val[:, -1, close_idx] 
+                current_price_test = X_test[:, -1, close_idx] 
+            else:  # 2D array for next_day window
+                # For 2D arrays, Close should be at a specific column
+                close_idx = self.feature_columns.index('Close') if 'Close' in self.feature_columns else -1
+                if close_idx == -1:
+                    logger.warning(f"'Close' column not found in features for {window}. Using last column.")
+                    close_idx = -1
+                current_price_train = X_train[:, close_idx] 
+                current_price_val = X_val[:, close_idx] 
+                current_price_test = X_test[:, close_idx] 
+            
+            # Normalize current prices
+            current_price_train_norm = (current_price_train - y_mean) / y_std
+            current_price_val_norm = (current_price_val - y_mean) / y_std
+            current_price_test_norm = (current_price_test - y_mean) / y_std
+            
+            # Ensure arrays have compatible shapes for concatenation
+            if len(y_train_norm.shape) == 1:
+                y_train_norm = y_train_norm.reshape(-1, 1)
+            if len(y_val_norm.shape) == 1:
+                y_val_norm = y_val_norm.reshape(-1, 1)
+            if len(y_test_norm.shape) == 1:
+                y_test_norm = y_test_norm.reshape(-1, 1)
+            if len(current_price_train_norm.shape) == 1:
+                current_price_train_norm = current_price_train_norm.reshape(-1, 1)
+            if len(current_price_val_norm.shape) == 1:
+                current_price_val_norm = current_price_val_norm.reshape(-1, 1)
+            if len(current_price_test_norm.shape) == 1:
+                current_price_test_norm = current_price_test_norm.reshape(-1, 1)
+            
+            # Align array lengths (take minimum length to avoid mismatch)
+            min_train_len = min(len(y_train_norm), len(current_price_train_norm), len(X_train))
+            min_val_len = min(len(y_val_norm), len(current_price_val_norm), len(X_val))
+            min_test_len = min(len(y_test_norm), len(current_price_test_norm), len(X_test))
+            
+            logger.info(f"Aligning array lengths: train={min_train_len}, val={min_val_len}, test={min_test_len}")
+            
+            y_train_combined = np.column_stack([
+                y_train_norm[:min_train_len], 
+                current_price_train_norm[:min_train_len]
+            ])
+            y_val_combined = np.column_stack([
+                y_val_norm[:min_val_len], 
+                current_price_val_norm[:min_val_len]
+            ])
+            y_test_combined = np.column_stack([
+                y_test_norm[:min_test_len], 
+                current_price_test_norm[:min_test_len]
+            ])
+            
+            # Also align X arrays with y arrays
+            X_train = X_train[:min_train_len]
+            X_val = X_val[:min_val_len]
+            X_test = X_test[:min_test_len]
+            
             logger.info(f"Target normalization for {window}: mean={y_mean}, std={y_std}")
-            logger.info(f"Tuning hyperparameters for {window} window...")
-            # Tune hyperparameters
-            hyperparams = self.tune_hyperparameters(X_train, y_train_norm)
+            logger.info(f"Final array shapes - X_train: {X_train.shape}, y_train: {y_train_combined.shape}")
+            
+            # Skip hyperparameter tuning if insufficient data
+            if min_train_len < 50:
+                logger.warning(f"Insufficient data ({min_train_len} samples) for hyperparameter tuning. Using defaults.")
+                hyperparams = self.model_config['default_hyperparameters']
+            else:
+                logger.info(f"Tuning hyperparameters for {window} window...")
+                # Tune hyperparameters
+                hyperparams = self.tune_hyperparameters(X_train, y_train_norm[:min_train_len])
+            
             self.hyperparameters[window] = hyperparams
             logger.info(f"Building model for {window} window...")
+            
+            # Determine correct input shape based on array dimensions
+            if len(X_train.shape) == 3:
+                input_shape = (X_train.shape[1], X_train.shape[2])
+            else:
+                # For 2D arrays, reshape to 3D with timesteps=1
+                X_train = X_train.reshape(X_train.shape[0], 1, X_train.shape[1])
+                X_val = X_val.reshape(X_val.shape[0], 1, X_val.shape[1])
+                X_test = X_test.reshape(X_test.shape[0], 1, X_test.shape[1])
+                input_shape = (X_train.shape[1], X_train.shape[2])
+            
+            logger.info(f"Model input shape: {input_shape}")
+            
             # Build and train model
-            model = self.build_model((X_train.shape[1], X_train.shape[2]), hyperparams)
+            model = self.build_model(input_shape, hyperparams)
             early_stopping = EarlyStopping(
                 monitor='val_loss',
                 patience=self.model_config['early_stopping_patience'],
                 restore_best_weights=True
             )
-            model_checkpoint = ModelCheckpoint(
-                os.path.join(self.model_dir, f'model_{window}.h5'),
-                monitor='val_loss',
-                save_best_only=True
-            )
+            # Note: Model saving is handled in train_all_models with proper ticker-specific naming
+            
             logger.info(f"Starting model training for {window} window...")
             history = model.fit(
                 X_train, y_train_combined,
                 validation_data=(X_val, y_val_combined),
                 epochs=self.model_config['epochs'],
                 batch_size=hyperparams['batch_size'],
-                callbacks=[early_stopping, model_checkpoint, LoggingCallback()],
+                callbacks=[early_stopping, LoggingCallback()],
                 verbose=1
             )
             logger.info(f"Finished model training for {window} window.")
             # Evaluate on test set
             y_pred_norm = model.predict(X_test)
+            # Handle prediction output shape
+            if len(y_pred_norm.shape) > 1 and y_pred_norm.shape[1] > 1:
+                y_pred_norm = y_pred_norm[:, 0]  # Take first column if multiple outputs
             y_pred = y_pred_norm * y_std + y_mean
+            
+            # Ensure y_test has correct shape for metrics
+            y_test_eval = y_test[:min_test_len]
+            if len(y_test_eval.shape) > 1:
+                y_test_eval = y_test_eval.flatten()
+            if len(y_pred.shape) > 1:
+                y_pred = y_pred.flatten()
+                
             metrics = {
-                'mse': mean_squared_error(y_test, y_pred),
-                'mae': mean_absolute_error(y_test, y_pred),
-                'r2': r2_score(y_test, y_pred)
+                'mse': mean_squared_error(y_test_eval, y_pred),
+                'mae': mean_absolute_error(y_test_eval, y_pred),
+                'r2': r2_score(y_test_eval, y_pred)
             }
             self.metrics[window] = metrics
             logger.info(f"Test set metrics for {window}: {metrics}")
-            # Save model
-            self.models[window] = model
+            # Note: Model will be stored with ticker-specific key in train_all_models
             return model
         except Exception as e:
             logger.error(f"Error training model for {window}: {str(e)}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return None
 
     def prepare_data(
@@ -409,72 +606,288 @@ class StockPredictor:
             logger.error(f"Error preparing data for {window} window: {str(e)}")
             return None, None, None, None, None, None
 
-    def train_all_models(self, historical_data: Dict[str, pd.DataFrame], model_type: str = 'lstm'):
-        feature_columns_saved = False
-        for ticker, df in historical_data.items():
-            if df is None or df.empty:
-                logger.warning(f"No historical data for {ticker}, skipping.")
-                continue
-            logger.info(f"Training models for ticker: {ticker}")
-            ticker_dir = os.path.join(self.model_dir, ticker)
-            os.makedirs(ticker_dir, exist_ok=True)
+    def train_models(self, ticker: str, features: np.ndarray, targets: np.ndarray, window: str):
+        """Train multiple models for ensemble prediction."""
+        try:
+            logger.info(f"Training models for {ticker}-{window}")
+            
+            # Split data for training and validation
+            split_index = int(0.8 * len(features))
+            X_train, X_test = features[:split_index], features[split_index:]
+            y_train, y_test = targets[:split_index], targets[split_index:]
+            
+            # Handle different shapes for different model types
+            window_size_map = {'next_day': 1, '7_day': 7, '30_day': 30}
+            window_size = window_size_map.get(window, 1)
+            
+            models = {}
+            
+            # 1. LSTM Model (handles 3D input)
+            try:
+                from tensorflow.keras.models import Sequential
+                from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization
+                from tensorflow.keras.optimizers import Adam
+                from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+                
+                if len(X_train.shape) == 3:  # Already windowed for LSTM
+                    lstm_X_train, lstm_X_test = X_train, X_test
+                else:  # Need to create windows
+                    lstm_X_train = X_train.reshape(X_train.shape[0], 1, X_train.shape[1])
+                    lstm_X_test = X_test.reshape(X_test.shape[0], 1, X_test.shape[1])
+                
+                # Build LSTM model
+                lstm_model = Sequential([
+                    LSTM(128, return_sequences=True, input_shape=(lstm_X_train.shape[1], lstm_X_train.shape[2])),
+                    Dropout(0.2),
+                    LSTM(64, return_sequences=False),
+                    Dropout(0.2),
+                    BatchNormalization(),
+                    Dense(32, activation='relu'),
+                    Dropout(0.1),
+                    Dense(1)
+                ])
+                
+                lstm_model.compile(
+                    optimizer=Adam(learning_rate=0.001),
+                    loss='mse',
+                    metrics=['mae']
+                )
+                
+                # Train LSTM
+                early_stopping = EarlyStopping(patience=10, restore_best_weights=True)
+                reduce_lr = ReduceLROnPlateau(patience=5, factor=0.5, min_lr=1e-6)
+                
+                history = lstm_model.fit(
+                    lstm_X_train, y_train,
+                    validation_data=(lstm_X_test, y_test),
+                    epochs=100,
+                    batch_size=32,
+                    callbacks=[early_stopping, reduce_lr],
+                    verbose=0
+                )
+                
+                models['lstm'] = lstm_model
+                logger.info(f"LSTM model trained for {ticker}-{window}")
+                
+            except Exception as e:
+                logger.warning(f"LSTM training failed for {ticker}-{window}: {e}")
+            
+            # 2. Flatten features for sklearn models
+            if len(X_train.shape) == 3:
+                flat_X_train = X_train.reshape(X_train.shape[0], -1)
+                flat_X_test = X_test.reshape(X_test.shape[0], -1)
+            else:
+                flat_X_train, flat_X_test = X_train, X_test
+            
+            # 3. XGBoost
+            try:
+                import xgboost as xgb
+                
+                xgb_model = xgb.XGBRegressor(
+                    n_estimators=200,
+                    max_depth=6,
+                    learning_rate=0.1,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    random_state=42,
+                    n_jobs=-1
+                )
+                
+                xgb_model.fit(
+                    flat_X_train, y_train,
+                    eval_set=[(flat_X_test, y_test)],
+                    early_stopping_rounds=20,
+                    verbose=False
+                )
+                
+                models['xgboost'] = xgb_model
+                logger.info(f"XGBoost model trained for {ticker}-{window}")
+                
+            except Exception as e:
+                logger.warning(f"XGBoost training failed for {ticker}-{window}: {e}")
+            
+            # 4. LightGBM
+            try:
+                import lightgbm as lgb
+                
+                lgb_model = lgb.LGBMRegressor(
+                    n_estimators=200,
+                    max_depth=6,
+                    learning_rate=0.1,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    random_state=42,
+                    n_jobs=-1,
+                    verbose=-1
+                )
+                
+                lgb_model.fit(
+                    flat_X_train, y_train,
+                    eval_set=[(flat_X_test, y_test)],
+                    callbacks=[lgb.early_stopping(20), lgb.log_evaluation(0)]
+                )
+                
+                models['lightgbm'] = lgb_model
+                logger.info(f"LightGBM model trained for {ticker}-{window}")
+                
+            except Exception as e:
+                logger.warning(f"LightGBM training failed for {ticker}-{window}: {e}")
+            
+
+            
+            # Store models and metadata
+            if not ticker in self.models:
+                self.models[ticker] = {}
+            self.models[ticker][window] = models
+            
+            # Store metadata for evaluation
+            self.model_metadata[f"{ticker}_{window}"] = {
+                'feature_shape': X_train.shape,
+                'target_mean': np.mean(y_train),
+                'target_std': np.std(y_train),
+                'n_samples': len(X_train),
+                'window_size': window_size
+            }
+            
+            logger.info(f"Trained {len(models)} models for {ticker}-{window}")
+            return models
+            
+        except Exception as e:
+            logger.error(f"Error training models for {ticker}-{window}: {e}")
+            raise
+    
+    def train_all_models(self, ticker: str, start_date: str = None, end_date: str = None):
+        """Train models for all prediction windows."""
+        try:
+            logger.info(f"Training all models for {ticker}")
+            
             for window in self.prediction_windows:
-                logger.info(f"Training model for {ticker} - {window} window")
-                X_train, y_train, X_val, y_val, X_test, y_test = self.prepare_data(df, window)
-                if X_train is not None and X_train.size > 0:
-                    # Quantile regression with LightGBM
-                    X_flat = X_train.reshape(X_train.shape[0], -1)
-                    quantiles = [0.1, 0.5, 0.9]
-                    lgbm_quantile_models = {}
-                    for q in quantiles:
-                        lgbm = lgb.LGBMRegressor(objective='quantile', alpha=q, n_estimators=200, max_depth=5, learning_rate=0.05, subsample=0.8, random_state=42)
-                        lgbm.fit(X_flat, y_train)
-                        lgbm_quantile_models[q] = lgbm
-                    self.lgbm_models[(ticker, window, 'quantile')] = lgbm_quantile_models
-                    logger.info(f"Trained LightGBM quantile models for {ticker} - {window} window.")
-                    # Classic regression models for point prediction
-                    # LightGBM (classic)
-                    lgbm_model = lgb.LGBMRegressor(objective='regression', n_estimators=200, max_depth=5, learning_rate=0.05, subsample=0.8, random_state=42)
-                    lgbm_model.fit(X_flat, y_train)
-                    self.lgbm_models[(ticker, window, 'classic')] = lgbm_model
-                    # XGBoost
-                    xgb_model = xgb.XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.05, subsample=0.8, random_state=42)
-                    xgb_model.fit(X_flat, y_train)
-                    self.xgb_models[(ticker, window)] = xgb_model
-                    # Random Forest
-                    rf_model = RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42)
-                    rf_model.fit(X_flat, y_train)
-                    self.rf_models[(ticker, window)] = rf_model
-                    # LSTM (optional, only if model_type == 'lstm')
-                    if model_type == 'lstm':
-                        model = self.train_model(X_train, y_train, X_val, y_val, X_test, y_test, window)
-                        if model is not None:
-                            self.models[(ticker, window)] = model
-                            model_path = os.path.join(ticker_dir, f"model_{ticker}_{window}_lstm.h5")
-                            model.save(model_path)
-                    # Save feature columns for later use
-                    if not feature_columns_saved and hasattr(self, 'feature_columns') and self.feature_columns:
-                        with open(os.path.join(self.model_dir, 'feature_columns.json'), 'w') as f:
-                            json.dump(self.feature_columns, f)
-                        feature_columns_saved = True
-                else:
-                    logger.warning(f"No training data for {ticker} - {window} window. Skipping.")
+                logger.info(f"Training {window} models for {ticker}")
+                
+                # Prepare training data
+                features, targets = self.prepare_training_data(
+                    ticker=ticker,
+                    window=window,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+                
+                # Train models
+                models = self.train_models(ticker, features, targets, window)
+                
+                # Save models
+                self.save_models(ticker, window, models)
+            
+            logger.info(f"All models trained for {ticker}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error training all models for {ticker}: {e}")
+            return False
 
     def load_models(self):
-        """Load trained models for all tickers and windows from disk, using only the new naming convention."""
-        for ticker in os.listdir(self.model_dir):
-            ticker_dir = os.path.join(self.model_dir, ticker)
-            if not os.path.isdir(ticker_dir):
+        """Load trained models from disk or download from cloud storage if needed."""
+        # Check if models directory exists and has models
+        if not os.path.exists(self.model_dir) or not any(Path(self.model_dir).rglob('*.h5')):
+            logger.info("No local models found, attempting to download from cloud storage...")
+            try:
+                # Try to download models from cloud storage
+                import subprocess
+                script_path = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'download_models.py')
+                result = subprocess.run(['python', script_path], 
+                                      capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    logger.info("Successfully downloaded models from cloud storage")
+                else:
+                    logger.warning(f"Model download failed: {result.stderr}")
+            except Exception as e:
+                logger.warning(f"Could not download models from cloud storage: {e}")
+        
+        if not os.path.exists(self.model_dir):
+            logger.warning(f"Model directory {self.model_dir} does not exist")
+            return
+            
+        # Load feature columns
+        feature_columns_path = os.path.join(self.model_dir, 'feature_columns.json')
+        if os.path.exists(feature_columns_path):
+            with open(feature_columns_path, 'r') as f:
+                self.feature_columns = json.load(f)
+            logger.info(f"Loaded feature columns from {feature_columns_path}")
+        
+        # Initialize feature selectors dict
+        self.feature_selectors = {}
+        
+        # Look for ticker directories
+        for ticker_dir in os.listdir(self.model_dir):
+            ticker_path = os.path.join(self.model_dir, ticker_dir)
+            if not os.path.isdir(ticker_path):
                 continue
-            for filename in os.listdir(ticker_dir):
-                if filename.startswith(f"model_{ticker}_") and filename.endswith(".h5"):
-                    parts = filename.replace(f"model_{ticker}_", "").replace(".h5", "").split("_")
-                    if len(parts) >= 2:
-                        window = "_".join(parts[:-1])
-                        model_type = parts[-1]
-                        model_path = os.path.join(ticker_dir, filename)
-                        self.models[(ticker, window)] = load_model(model_path, custom_objects={'custom_loss': self.custom_loss})
-                        logger.info(f"Loaded model for {ticker} - {window} ({model_type}) from {model_path}")
+                
+            ticker = ticker_dir
+            logger.info(f"Loading models for {ticker}")
+            
+            # Load models for each window
+            for window in self.prediction_windows:
+                # Load LSTM models
+                lstm_model_path = os.path.join(ticker_path, f'model_{ticker}_{window}_lstm.h5')
+                if os.path.exists(lstm_model_path):
+                    try:
+                        model = load_model(lstm_model_path, custom_objects={'custom_loss': self.custom_loss})
+                        self.models[(ticker, window)] = model
+                        logger.info(f"Loaded LSTM model for {ticker}-{window}")
+                    except Exception as e:
+                        logger.error(f"Error loading LSTM model for {ticker}-{window}: {e}")
+                
+                # Load LightGBM models
+                for model_type in ['classic', 'quantile']:
+                    lgbm_model_path = os.path.join(ticker_path, f'model_{ticker}_{window}_{model_type}_lgbm.joblib')
+                    if os.path.exists(lgbm_model_path):
+                        try:
+                            if model_type == 'quantile':
+                                # For quantile models, load the dictionary of quantile models
+                                quantile_models = joblib.load(lgbm_model_path)
+                                self.lgbm_models[(ticker, window, model_type)] = quantile_models
+                                logger.info(f"Loaded LightGBM {model_type} models for {ticker}-{window}")
+                            else:
+                                model = joblib.load(lgbm_model_path)
+                                self.lgbm_models[(ticker, window, model_type)] = model
+                                logger.info(f"Loaded LightGBM {model_type} model for {ticker}-{window}")
+                        except Exception as e:
+                            logger.error(f"Error loading LightGBM {model_type} model for {ticker}-{window}: {e}")
+                
+                # Load XGBoost models
+                xgb_model_path = os.path.join(ticker_path, f'model_{ticker}_{window}_xgb.joblib')
+                if os.path.exists(xgb_model_path):
+                    try:
+                        model = joblib.load(xgb_model_path)
+                        self.xgb_models[(ticker, window)] = model
+                        logger.info(f"Loaded XGBoost model for {ticker}-{window}")
+                    except Exception as e:
+                        logger.error(f"Error loading XGBoost model for {ticker}-{window}: {e}")
+                
+
+                
+                # Load feature selectors
+                selector_path = os.path.join(ticker_path, f"feature_selector_{ticker}_{window}.joblib")
+                if os.path.exists(selector_path):
+                    try:
+                        selector = joblib.load(selector_path)
+                        self.feature_selectors[(ticker, window)] = selector
+                        logger.info(f"Loaded feature selector for {ticker}-{window}")
+                    except Exception as e:
+                        logger.error(f"Error loading feature selector for {ticker}-{window}: {e}")
+                
+                # Load feature info (for debugging)
+                feature_info_path = os.path.join(ticker_path, f"feature_info_{ticker}_{window}.json")
+                if os.path.exists(feature_info_path):
+                    try:
+                        with open(feature_info_path, 'r') as f:
+                            feature_info = json.load(f)
+                        logger.info(f"Feature info for {ticker}-{window}: {feature_info}")
+                    except Exception as e:
+                        logger.error(f"Error loading feature info for {ticker}-{window}: {e}")
+        
+        logger.info(f"Model loading completed. Loaded {len(self.models)} LSTM models, {len(self.lgbm_models)} LightGBM models, {len(self.xgb_models)} XGBoost models, {len(self.feature_selectors)} feature selectors.")
 
     def predict(
         self,
@@ -487,7 +900,9 @@ class StockPredictor:
         """Make quantile and point predictions for a given ticker and window, including short interest data."""
         try:
             if isinstance(df, pd.DataFrame):
-                with open('models/feature_columns.json', 'r') as f:
+                # Use proper path to feature_columns.json
+                feature_columns_path = os.path.join(self.model_dir, 'feature_columns.json')
+                with open(feature_columns_path, 'r') as f:
                     feature_columns = json.load(f)
                 df = df.reindex(columns=feature_columns, fill_value=0)
                 
@@ -511,6 +926,12 @@ class StockPredictor:
             if features.ndim == 2:
                 features = features[np.newaxis, ...]
             X_flat = features.reshape(1, -1)
+            
+            # Apply the same feature selection used during training
+            if hasattr(self, 'feature_selectors') and (ticker, window) in self.feature_selectors:
+                selector = self.feature_selectors[(ticker, window)]
+                X_flat = selector.transform(X_flat)
+                logger.info(f"Applied feature selection: {X_flat.shape[1]} features for {ticker}-{window}")
 
             # Quantile regression (LightGBM)
             lgbm_quantile_models = self.lgbm_models.get((ticker, window, 'quantile'), {})
@@ -527,17 +948,47 @@ class StockPredictor:
             lgbm_pred = lgbm_model.predict(X_flat)[0] if lgbm_model else None
             xgb_model = self.xgb_models.get((ticker, window))
             xgb_pred = xgb_model.predict(X_flat)[0] if xgb_model else None
-            rf_model = self.rf_models.get((ticker, window))
-            rf_pred = rf_model.predict(X_flat)[0] if rf_model else None
+
 
             # LSTM (if available)
             lstm_pred = None
             if (ticker, window) in self.models:
-                close_idx = self.feature_columns.index('Close')
-                pred_norm = self.models[(ticker, window)].predict(features)[0][0]
-                stats = self.target_stats.get(window, {"mean": 0, "std": 1})
-                predicted_delta = float(pred_norm * stats["std"] + stats["mean"])
-                lstm_pred = raw_current_price + predicted_delta
+                try:
+                    # Prepare features for LSTM prediction
+                    if window == 'next_day':
+                        # For next_day, features should be 2D -> reshape to 3D
+                        if len(features.shape) == 2:
+                            lstm_features = features.reshape(1, 1, features.shape[1])
+                        else:
+                            lstm_features = features
+                    else:
+                        # For 30_day and 90_day, features should already be 3D
+                        lstm_features = features
+                    
+                    # Ensure we have the right shape
+                    logger.info(f"LSTM input shape for {window}: {lstm_features.shape}")
+                    
+                    # Make prediction
+                    pred_norm = self.models[(ticker, window)].predict(lstm_features, verbose=0)[0]
+                    
+                    # Handle prediction output - take first column if multiple outputs
+                    if len(pred_norm.shape) > 0 and len(pred_norm) > 1:
+                        pred_norm = pred_norm[0]
+                    elif len(pred_norm.shape) == 0:
+                        pred_norm = float(pred_norm)
+                    else:
+                        pred_norm = float(pred_norm)
+                    
+                    # Denormalize prediction
+                    stats = self.target_stats.get(window, {"mean": 0, "std": 1})
+                    predicted_delta = float(pred_norm * stats["std"] + stats["mean"])
+                    lstm_pred = raw_current_price + predicted_delta
+                    
+                    logger.info(f"LSTM prediction successful for {ticker}-{window}: {lstm_pred}")
+                    
+                except Exception as e:
+                    logger.error(f"Error making LSTM prediction for {ticker} - {window}: {str(e)}")
+                    lstm_pred = None
 
             # Calculate main prediction (use median)
             median_pred = raw_current_price + preds[0.5] if preds[0.5] is not None else None
@@ -558,7 +1009,7 @@ class StockPredictor:
                 "median": median_pred,
                 "lstm": lstm_pred,
                 "xgb": raw_current_price + xgb_pred if xgb_pred is not None else None,
-                "rf": raw_current_price + rf_pred if rf_pred is not None else None,
+
                 "lgbm": raw_current_price + lgbm_pred if lgbm_pred is not None else None,
                 "quantiles": preds
             }
@@ -760,146 +1211,250 @@ class StockPredictor:
             logger.error(f"Error generating LLM explanation: {e}")
             return "Unable to generate detailed explanation at this time."
 
-    def predict_all_windows(self, features: np.ndarray, ticker: str, raw_current_price: float = None, model_type: str = 'lstm') -> Dict[str, Dict[str, float]]:
-        logger.info(f"Predicting all windows for ticker={ticker} with features: {features}")
-        predictions = {}
-        for window in self.prediction_windows:
-            if (ticker, window) not in self.models:
-                logger.warning(f"No model trained for {ticker} - {window} window. Skipping prediction.")
-                continue
-            # LSTM/RNN
-            lstm_result = self.predict(features, window, ticker, raw_current_price=raw_current_price)
-            # Ensure confidence is present
-            confidence = lstm_result.get('confidence', 0.5) if lstm_result else 0.5
-            # Stacking Ensemble
-            stacking_model = self.models.get((ticker, window, 'stacking'))
-            stacking_pred = None
-            if stacking_model is not None:
-                stacking_pred_delta = stacking_model.predict(features.reshape(1, -1))[0]
-                stacking_pred = raw_current_price + stacking_pred_delta if raw_current_price is not None else stacking_pred_delta
-            # XGBoost
-            xgb_model = self.xgb_models.get((ticker, window))
-            xgb_pred_delta = xgb_model.predict(features.reshape(1, -1))[0] if xgb_model else 0
-            xgb_pred_price = raw_current_price + xgb_pred_delta if raw_current_price is not None else xgb_pred_delta
-            # RandomForest
-            rf_model = self.rf_models.get((ticker, window))
-            rf_pred_delta = rf_model.predict(features.reshape(1, -1))[0] if rf_model else 0
-            rf_pred_price = raw_current_price + rf_pred_delta if raw_current_price is not None else rf_pred_delta
-            # LightGBM
-            lgbm_model = self.lgbm_models.get((ticker, window))
-            lgbm_pred_delta = lgbm_model.predict(features.reshape(1, -1))[0] if lgbm_model else 0
-            lgbm_pred_price = raw_current_price + lgbm_pred_delta if raw_current_price is not None else lgbm_pred_delta
-            # Ensemble: average all
-            preds = [lstm_result['prediction'], xgb_pred_price, rf_pred_price, lgbm_pred_price]
-            ensemble_pred = np.mean(preds)
-            # Super-ensemble: average LSTM and stacking ensemble
-            if stacking_pred is not None:
-                super_ensemble_pred = np.mean([lstm_result['prediction'], stacking_pred])
-                logger.info(f"Super-ensemble: LSTM={lstm_result['prediction']}, Stacking={stacking_pred}, Blended={super_ensemble_pred}")
-            else:
-                super_ensemble_pred = lstm_result['prediction']
-            # --- Price range logic for ensemble ---
-            residuals = self.recent_residuals.get(window, [])
-            if len(residuals) >= 20:
-                rolling_std = np.std(residuals[-100:])
-            else:
-                stats = self.target_stats.get(window, {"std": 1})
-                rolling_std = stats["std"]
-            k = 1.28
-            lower = super_ensemble_pred - k * rolling_std
-            upper = super_ensemble_pred + k * rolling_std
-            logger.info(f"Super-ensemble: {super_ensemble_pred}, range=({lower}, {upper})")
-            predictions[window] = {
-                'prediction': super_ensemble_pred,
-                'confidence': confidence,
-                'range': [lower, upper],
-                'model_preds': {
-                    'lstm': lstm_result['prediction'] if lstm_result else None,
-                    'stacking': stacking_pred,
-                    'xgb': xgb_pred_price,
-                    'rf': rf_pred_price,
-                    'lgbm': lgbm_pred_price
-                }
-            }
-        return predictions
-
-    def save_models(self):
-        """Save trained models to disk."""
-        os.makedirs("models", exist_ok=True)
-        for window, model in self.models.items():
-            model_path = os.path.join(self.model_dir, f'model_{window}.h5')
-            model.save(model_path)
-            logger.info(f"Saved model for {window} to {model_path}")
-
-    def walk_forward_validation(self, df: pd.DataFrame, window: str, n_splits: int = 5) -> Dict[str, float]:
-        """Perform walk-forward validation for realistic backtesting."""
+    def predict_all_windows(self, ticker: str, df: pd.DataFrame) -> Dict[str, Dict]:
+        """Make predictions for all windows using consistent feature engineering."""
         try:
-            features, targets = self.feature_engineer.prepare_features(df)
-            n_samples = len(features)
-            split_size = n_samples // (n_splits + 1)
-            results = []
-            for i in range(n_splits):
-                train_end = split_size * (i + 1)
-                test_start = train_end
-                test_end = test_start + split_size
-                if test_end > n_samples:
-                    break
-                X_train, y_train = features[:train_end], targets[:train_end]
-                X_test, y_test = features[test_start:test_end], targets[test_start:test_end]
-                model = self.train_model(X_train, y_train, X_train[-split_size:], y_train[-split_size:], X_test, y_test, window)
-                y_pred = model.predict(X_test).flatten()
-                mse = mean_squared_error(y_test, y_pred)
-                mae = mean_absolute_error(y_test, y_pred)
-                r2 = r2_score(y_test, y_pred)
-                logger.info(f"Walk-forward split {i+1}/{n_splits}: MSE={mse}, MAE={mae}, R2={r2}")
-                results.append({'mse': mse, 'mae': mae, 'r2': r2})
-            # Aggregate results
-            avg_mse = np.mean([r['mse'] for r in results])
-            avg_mae = np.mean([r['mae'] for r in results])
-            avg_r2 = np.mean([r['r2'] for r in results])
-            logger.info(f"Walk-forward validation (avg over {n_splits} splits): MSE={avg_mse}, MAE={avg_mae}, R2={avg_r2}")
-            return {'mse': avg_mse, 'mae': avg_mae, 'r2': avg_r2}
-        except Exception as e:
-            logger.error(f"Error in walk-forward validation: {str(e)}")
-            return {}
+            logger.info(f"Making predictions for {ticker} across all windows")
+            
+            predictions = {}
+            
+            for window in self.prediction_windows:
+                try:
+                    # Load models for this window
+                    if ticker not in self.models or window not in self.models[ticker]:
+                        # Try to load from disk
+                        self.load_models_for_ticker_window(ticker, window)
+                    
+                    if ticker not in self.models or window not in self.models[ticker]:
+                        logger.warning(f"No models found for {ticker}-{window}")
+                        continue
+                    
+                    models = self.models[ticker][window]
+                    
+                    # Create prediction features using consistent pipeline
+                    prediction_features = self.feature_engineer.create_prediction_features(
+                        df=df.copy(),
+                        ticker=ticker,
+                        window=window,
+                        mongo_client=self.mongo_client
+                    )
+                    
+                    if prediction_features is None:
+                        logger.warning(f"Could not create features for {ticker}-{window}")
+                        continue
+                    
+                    # Make ensemble predictions
+                    model_predictions = {}
+                    
+                    # LSTM prediction
+                    if 'lstm' in models:
+                        try:
+                            lstm_features = prediction_features
+                            if len(lstm_features.shape) == 2:
+                                lstm_features = lstm_features.reshape(1, lstm_features.shape[0], lstm_features.shape[1])
+                            elif len(lstm_features.shape) == 1:
+                                lstm_features = lstm_features.reshape(1, 1, -1)
+                            
+                            lstm_pred = models['lstm'].predict(lstm_features, verbose=0)
+                            model_predictions['lstm'] = float(lstm_pred[0][0])
+                            
+                        except Exception as e:
+                            logger.warning(f"LSTM prediction failed for {ticker}-{window}: {e}")
+                    
+                    # Flatten features for sklearn models
+                    if len(prediction_features.shape) == 3:
+                        flat_features = prediction_features.reshape(prediction_features.shape[0], -1)
+                    else:
+                        flat_features = prediction_features
+                    
+                    # XGBoost prediction
+                    if 'xgboost' in models:
+                        try:
+                            xgb_pred = models['xgboost'].predict(flat_features)
+                            model_predictions['xgboost'] = float(xgb_pred[0])
+                        except Exception as e:
+                            logger.warning(f"XGBoost prediction failed for {ticker}-{window}: {e}")
+                    
+                    # LightGBM prediction
+                    if 'lightgbm' in models:
+                        try:
+                            lgb_pred = models['lightgbm'].predict(flat_features)
+                            model_predictions['lightgbm'] = float(lgb_pred[0])
+                        except Exception as e:
+                            logger.warning(f"LightGBM prediction failed for {ticker}-{window}: {e}")
+                    
 
-    def explain_prediction(self, X: np.ndarray, window: str, model_type: str = 'lstm') -> dict:
-        """Return SHAP values for a given input and model type (lstm or xgboost)."""
+                    
+                    if not model_predictions:
+                        logger.warning(f"No successful predictions for {ticker}-{window}")
+                        continue
+                    
+                    # Ensemble prediction with dynamic weights based on recent performance
+                    # Default weights for new models or when no performance data available
+                    default_weights = {
+                        'lstm': 0.35,
+                        'xgboost': 0.35,
+                        'lightgbm': 0.30,
+                        # Removed random_forest for better focus
+                    }
+                    
+                    # Try to get performance-based weights from MongoDB
+                    try:
+                        performance_weights = self._get_performance_weights(ticker, window)
+                        weights = performance_weights if performance_weights else default_weights
+                    except:
+                        weights = default_weights
+                    
+                    # Normalize weights for available models
+                    available_models = list(model_predictions.keys())
+                    total_weight = sum(weights.get(model, 0.2) for model in available_models)
+                    normalized_weights = {model: weights.get(model, 0.2) / total_weight for model in available_models}
+                    
+                    # Calculate ensemble prediction
+                    ensemble_pred = sum(pred * normalized_weights[model] for model, pred in model_predictions.items())
+                    
+                    # Calculate confidence based on prediction variance
+                    pred_values = list(model_predictions.values())
+                    if len(pred_values) > 1:
+                        pred_std = np.std(pred_values)
+                        pred_mean = np.mean(pred_values)
+                        confidence = max(0.1, min(0.95, 1.0 - (pred_std / max(abs(pred_mean), 1))))
+                    else:
+                        confidence = 0.6  # Medium confidence for single model
+                    
+                    # Get current price
+                    current_price = float(df['Close'].iloc[-1])
+                    
+                    # Calculate predicted price
+                    predicted_price = current_price + ensemble_pred
+                    
+                    # Calculate prediction range based on window
+                    window_ranges = {'next_day': 0.05, '7_day': 0.08, '30_day': 0.12}
+                    range_factor = window_ranges.get(window, 0.1)
+                    price_range = abs(ensemble_pred) * range_factor
+                    
+                    predictions[window] = {
+                        'predicted_price': round(predicted_price, 2),
+                        'price_change': round(ensemble_pred, 2),
+                        'confidence': round(confidence, 3),
+                        'current_price': round(current_price, 2),
+                        'model_predictions': model_predictions,
+                        'ensemble_weight': normalized_weights,
+                        'price_range': {
+                            'low': round(predicted_price - price_range, 2),
+                            'high': round(predicted_price + price_range, 2)
+                        }
+                    }
+                    
+                    logger.info(f"{ticker}-{window}: ${predicted_price:.2f} (change: ${ensemble_pred:+.2f}, confidence: {confidence:.3f})")
+                    
+                except Exception as e:
+                    logger.error(f"Error predicting {ticker}-{window}: {e}")
+                    continue
+            
+            return predictions
+            
+        except Exception as e:
+            logger.error(f"Error in predict_all_windows for {ticker}: {e}")
+            return {}
+    
+    def load_models_for_ticker_window(self, ticker: str, window: str):
+        """Load models from disk for specific ticker and window."""
         try:
-            if model_type == 'lstm':
-                # Use DeepExplainer for LSTM
-                explainer = shap.DeepExplainer(self.models[window], X)
-                shap_values = explainer.shap_values(X)
-                logger.info(f"Computed SHAP values for LSTM model, window={window}")
-                return {'shap_values': shap_values}
-            elif model_type == 'xgboost':
-                # Use TreeExplainer for XGBoost
-                from .ensemble import XGBoostPredictor
-                xgb_model = XGBoostPredictor().model
-                explainer = shap.TreeExplainer(xgb_model)
-                shap_values = explainer.shap_values(X)
-                logger.info(f"Computed SHAP values for XGBoost model, window={window}")
-                return {'shap_values': shap_values}
-            else:
-                logger.warning(f"Unknown model_type for SHAP: {model_type}")
-                return {}
-        except Exception as e:
-            logger.error(f"Error computing SHAP values: {str(e)}")
-            return {}
+            ticker_dir = os.path.join("models", ticker)
+            
+            if not os.path.exists(ticker_dir):
+                return False
+            
+            models = {}
+            
+            # Load LSTM model
+            lstm_path = os.path.join(ticker_dir, f'model_{ticker}_{window}_lstm.h5')
+            if os.path.exists(lstm_path):
+                models['lstm'] = load_model(lstm_path)
+                logger.info(f"Loaded LSTM model for {ticker}-{window}")
+            
+            # Load XGBoost model
+            xgb_path = os.path.join(ticker_dir, f'model_{ticker}_{window}_xgb.joblib')
+            if os.path.exists(xgb_path):
+                models['xgboost'] = joblib.load(xgb_path)
+                logger.info(f"Loaded XGBoost model for {ticker}-{window}")
+            
+            # Load LightGBM model
+            lgb_path = os.path.join(ticker_dir, f'model_{ticker}_{window}_lightgbm_lgbm.joblib')
+            if os.path.exists(lgb_path):
+                models['lightgbm'] = joblib.load(lgb_path)
+                logger.info(f"Loaded LightGBM model for {ticker}-{window}")
+            
 
-    def train_stacking_ensemble(self, X_train, y_train):
-        """Train stacking ensemble with XGBoost, LightGBM, Ridge, and MLP as base models, Ridge as meta-learner."""
-        base_models = [
-            ("xgb", xgb.XGBRegressor(n_estimators=100, max_depth=3, random_state=42)),
-            ("lgb", lgb.LGBMRegressor(n_estimators=100, max_depth=3, random_state=42)),
-            ("ridge", Ridge()),
-            ("mlp", MLPRegressor(hidden_layer_sizes=(64, 64), max_iter=200, random_state=42))
-        ]
-        meta_learner = Ridge()
-        stack = StackingRegressor(estimators=base_models, final_estimator=meta_learner, passthrough=True, n_jobs=-1)
-        stack.fit(X_train, y_train)
-        logger.info("Trained stacking ensemble with base models: XGBoost, LightGBM, Ridge, MLP; meta-learner: Ridge.")
-        return stack
+            
+            if models:
+                if ticker not in self.models:
+                    self.models[ticker] = {}
+                self.models[ticker][window] = models
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error loading models for {ticker}-{window}: {e}")
+            return False
+
+    def _get_performance_weights(self, ticker: str, window: str) -> dict:
+        """Get ensemble weights based on recent model performance."""
+        try:
+            # Query recent predictions and their accuracy
+            collection = self.mongo_client.db.stock_predictions
+            recent_predictions = list(collection.find({
+                'ticker': ticker,
+                'window': window,
+                'timestamp': {'$gte': datetime.now() - timedelta(days=30)},
+                'model_predictions': {'$exists': True},
+                'actual_price': {'$exists': True}
+            }).sort('timestamp', -1).limit(20))
+            
+            if len(recent_predictions) < 5:
+                return None  # Not enough data for performance-based weighting
+            
+            # Calculate accuracy for each model
+            model_accuracies = {'lstm': [], 'xgboost': [], 'lightgbm': []}
+            
+            for pred in recent_predictions:
+                if 'model_predictions' in pred and 'actual_price' in pred:
+                    actual = pred['actual_price']
+                    for model_name, model_pred in pred['model_predictions'].items():
+                        if model_name in model_accuracies:
+                            error = abs(model_pred - actual) / actual if actual != 0 else 0
+                            accuracy = max(0, 1 - error)  # Convert error to accuracy
+                            model_accuracies[model_name].append(accuracy)
+            
+            # Calculate average accuracy and convert to weights
+            weights = {}
+            total_accuracy = 0
+            
+            for model_name, accuracies in model_accuracies.items():
+                if accuracies:
+                    avg_accuracy = sum(accuracies) / len(accuracies)
+                    weights[model_name] = avg_accuracy
+                    total_accuracy += avg_accuracy
+            
+            # Normalize weights
+            if total_accuracy > 0:
+                normalized_weights = {k: v/total_accuracy for k, v in weights.items()}
+                # Ensure weights are reasonable (no single model > 60%)
+                for model, weight in normalized_weights.items():
+                    normalized_weights[model] = min(weight, 0.6)
+                
+                # Re-normalize after capping
+                total_capped = sum(normalized_weights.values())
+                if total_capped > 0:
+                    return {k: v/total_capped for k, v in normalized_weights.items()}
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Error getting performance weights for {ticker}-{window}: {e}")
+            return None
 
 if __name__ == "__main__":
     import argparse
@@ -913,8 +1468,9 @@ if __name__ == "__main__":
     from ml_backend.data.features import FeatureEngineer
     mongo_uri = os.getenv("MONGODB_URI")
     mongo_client = MongoDBClient(mongo_uri)
-    feature_engineer = FeatureEngineer()
-    predictor = StockPredictor(feature_engineer=feature_engineer)
+    feature_engineer = FeatureEngineer(mongo_client=mongo_client)
+    predictor = StockPredictor(mongo_client=mongo_client)
+    predictor.set_feature_engineer(feature_engineer)
     if args.ticker:
         print(f"Training model for {args.ticker}...")
         # Fetch historical data

@@ -22,6 +22,7 @@ import pandas_market_calendars as mcal
 import argparse
 import os
 from dotenv import load_dotenv
+import random
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -258,7 +259,7 @@ class DataIngestion:
                 else:
                     logger.error(f"No data fetched for {ticker}, and no data in MongoDB. Stopping pipeline.")
                     raise RuntimeError(f"No data fetched for {ticker} from MongoDB or Yahoo Finance. Stopping pipeline.")
-                time.sleep(1)  # Rate limiting
+                time.sleep(random.uniform(1.5, 2.5))  # Improved rate limiting
             except Exception as e:
                 logger.error(f"Error fetching data for {ticker}: {str(e)}")
                 raise  # Stop the pipeline on any error

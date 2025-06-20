@@ -1,0 +1,18 @@
+services:
+  - type: cron
+    name: sentiment-pipeline-cron
+    env: python
+    schedule: "0 */4 * * *"  # Every 4 hours
+    buildCommand: pip install -r requirements.txt
+    startCommand: cd ml_backend && python sentiment_cron.py
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: ALPHAVANTAGE_API_KEY
+        sync: false
+      - key: REDDIT_CLIENT_ID
+        sync: false
+      - key: REDDIT_CLIENT_SECRET
+        sync: false
+      - key: FINVIZ_API_KEY
+        sync: false 

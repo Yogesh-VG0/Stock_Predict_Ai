@@ -16,8 +16,26 @@ from transformers import pipeline
 import aiohttp
 import statistics
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from various possible locations
+import os.path
+possible_env_paths = [
+    '.env',
+    '../.env', 
+    '../../.env',
+    'ml_backend/.env',
+    os.path.join(os.path.dirname(__file__), '../.env'),
+    os.path.join(os.path.dirname(__file__), '../../.env')
+]
+
+env_loaded = False
+for env_path in possible_env_paths:
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        env_loaded = True
+        break
+
+if not env_loaded:
+    load_dotenv()  # Try default location anyway
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +430,14 @@ class SECFilingsAnalyzer:
         self.vader = SentimentIntensityAnalyzer()
         self.max_filings = 30  # Maximum number of filings to fetch per stock
         
+        # Log API key status
+        logger.info(f"SEC Filings Analyzer initialized:")
+        logger.info(f"  - Kaleidoscope API Key: {'✓ Available' if self.kaleidoscope_api_key else '✗ Missing'}")
+        logger.info(f"  - FMP API Key: {'✓ Available' if self.fmp_api_key else '✗ Missing'}")
+        
+        if not self.kaleidoscope_api_key and not self.fmp_api_key:
+            logger.warning("⚠️  No API keys available for SEC filings analysis!")
+        
         # Initialize FinBERT for sentiment analysis
         try:
             self.finbert = pipeline(
@@ -757,13 +783,26 @@ class SECFilingsAnalyzer:
                     "error": "No filings found"
                 }
                 
+            # Filter out insider transactions and non-relevant forms
+            excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP']
+            filings = [f for f in filings if f.get('type', '') not in excluded_forms]
+            logger.info(f"FMP returned {len(filings)} total filings, processing {len(filings)} after filtering")
+            total_filings = len(filings)
+            
+            if total_filings == 0:
+                return {
+                    "status": "error",
+                    "source": "fmp",
+                    "error": "No relevant filings found"
+                }
+            
             # Process and categorize filings
             categorized_filings = self._categorize_filings(filings)
             
             result = {
                 "status": "success",
                 "source": "fmp",
-                "total_filings": len(filings),
+                "total_filings": total_filings,
                 "categorized_filings": categorized_filings
             }
             
@@ -827,6 +866,11 @@ class SECFilingsAnalyzer:
         Excludes insider transactions (Form 4 and Form 144) as they are handled by Finnhub.
         """
         try:
+            # Check if Kaleidoscope API key is available
+            if not self.kaleidoscope_api_key:
+                logger.warning("Kaleidoscope API key not found, attempting FMP fallback for SEC filings")
+                return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
+            
             # Calculate date range
             end_date = datetime.utcnow()
             start_date = end_date - timedelta(days=lookback_days)
@@ -838,48 +882,67 @@ class SECFilingsAnalyzer:
             # Construct API URL with new format
             url = f"https://api.kscope.io/v2/sec/search/{ticker}?key={self.kaleidoscope_api_key}&content=sec&sd={start_timestamp}&ed={end_timestamp}&limit=30"
             
+            logger.info(f"Fetching SEC filings for {ticker} from Kaleidoscope API...")
+            
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 404:
-                        logger.warning(f"No SEC filings found for {ticker}")
+                        logger.warning(f"No SEC filings found for {ticker} via Kaleidoscope")
                         return {
                             "sec_filings_sentiment": 0.0,
                             "sec_filings_volume": 0,
                             "sec_filings_confidence": 0.0,
-                            "sec_filings_analyzed": 0
+                            "sec_filings_analyzed": 0,
+                            "sec_filings_error": "No filings found via Kaleidoscope"
                         }
+                    
+                    if response.status != 200:
+                        logger.error(f"Kaleidoscope API returned status {response.status} for {ticker}")
+                        return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
                     
                     response.raise_for_status()
                     data = await response.json()
+                    logger.info(f"Kaleidoscope API response received for {ticker}")
                     
                     if not data.get('data'):
-                        logger.warning(f"No SEC filings data found for {ticker}")
-                        return {
-                            "sec_filings_sentiment": 0.0,
-                            "sec_filings_volume": 0,
-                            "sec_filings_confidence": 0.0,
-                            "sec_filings_analyzed": 0
-                        }
+                        logger.warning(f"No SEC filings data found for {ticker} via Kaleidoscope, trying FMP fallback")
+                        return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
                     
                     filings = data['data']
-                    # Filter out insider transactions (Form 4 and Form 144)
-                    filings = [f for f in filings if f['Form'] not in ['4', '144', 'UPLOAD', 'CORRESP']]
+                    # Filter out only insider transactions and administrative forms
+                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP']
+                    filings = [f for f in filings if f['Form'] not in excluded_forms]
                     total_filings = len(filings)
                     
+                    logger.info(f"Kaleidoscope returned {len(data['data'])} total filings, processing {total_filings} after filtering")
+                    
+                    # Log what forms we're processing
+                    form_counts = {}
+                    for f in filings:
+                        form_type = f['Form']
+                        form_counts[form_type] = form_counts.get(form_type, 0) + 1
+                    logger.info(f"Processing SEC forms: {form_counts}")
+                    
                     if total_filings == 0:
-                        return {
-                            "sec_filings_sentiment": 0.0,
-                            "sec_filings_volume": 0,
-                            "sec_filings_confidence": 0.0,
-                            "sec_filings_analyzed": 0
-                        }
+                        logger.warning(f"No relevant SEC filings found for {ticker} via Kaleidoscope, trying FMP fallback")
+                        return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
                     
                     # Process each filing
                     sentiments = []
-                    for filing in filings:
+                    processed_filings = []
+                    logger.info(f"Processing {total_filings} SEC filings for {ticker}...")
+                    
+                    for i, filing in enumerate(filings):
                         # Get filing content from HTML URL
                         html_url = filing['html']
+                        form_type = filing.get('Form', 'Unknown')
+                        filing_date = filing.get('Date', 'Unknown')
+                        company_name = filing.get('Company Name', 'Unknown')
+                        
+                        logger.info(f"Filing {i+1}/{total_filings}: {form_type} by {company_name} on {filing_date}")
+                        
                         if not html_url:
+                            logger.warning(f"No HTML URL for filing {i+1}/{total_filings}: {form_type}")
                             continue
                             
                         try:
@@ -892,8 +955,33 @@ class SECFilingsAnalyzer:
                                         # Analyze sentiment
                                         sentiment = self._analyze_sentiment(text_content)
                                         sentiments.append(sentiment)
+                                        
+                                        # Store processed filing for MongoDB
+                                        processed_filing = {
+                                            'form_type': form_type,
+                                            'filing_date': filing_date,
+                                            'company_name': company_name,
+                                            'html_url': html_url,
+                                            'html_content': html_content,
+                                            'text_content': text_content,
+                                            'sentiment_score': sentiment,
+                                            'acc': filing.get('acc', ''),
+                                            'cik': filing.get('CIK', ''),
+                                            'filer': filing.get('Filer', ''),
+                                            'form_desc': filing.get('Form_Desc', ''),
+                                            'pdf_url': filing.get('pdf', ''),
+                                            'word_url': filing.get('word', ''),
+                                            'processed_at': datetime.utcnow().isoformat()
+                                        }
+                                        processed_filings.append(processed_filing)
+                                        
+                                        logger.info(f"Filing {i+1}/{total_filings}: {form_type} ({filing_date}) → sentiment: {sentiment:.3f}")
+                                    else:
+                                        logger.warning(f"No text content extracted from filing {i+1}/{total_filings}: {form_type}")
+                                else:
+                                    logger.warning(f"Failed to fetch HTML for filing {i+1}/{total_filings}: {form_type}, status: {html_response.status}")
                         except Exception as e:
-                            logger.warning(f"Error processing filing {filing['acc']}: {str(e)}")
+                            logger.warning(f"Error processing filing {i+1}/{total_filings} ({form_type}): {str(e)}")
                             continue
                     
                     if not sentiments:
@@ -913,23 +1001,55 @@ class SECFilingsAnalyzer:
                     consistency_factor = 1 - min(sentiment_std, 1.0)
                     confidence = (volume_factor + consistency_factor) / 2
                     
+                    logger.info(f"✓ Kaleidoscope SEC sentiment analysis complete for {ticker}: {avg_sentiment:.3f} (volume: {total_filings}, analyzed: {len(sentiments)}, confidence: {confidence:.2f})")
+                    
+                    # Store raw data in MongoDB if client is available
+                    if self.mongo_client and processed_filings:
+                        try:
+                            collection = self.mongo_client.db['sec_filings_raw']
+                            for filing in processed_filings:
+                                collection.replace_one(
+                                    {
+                                        'ticker': ticker,
+                                        'acc': filing['acc'],
+                                        'form_type': filing['form_type'],
+                                        'filing_date': filing['filing_date']
+                                    },
+                                    {**filing, 'ticker': ticker},
+                                    upsert=True
+                                )
+                            logger.info(f"Stored {len(processed_filings)} SEC filings raw data for {ticker} in MongoDB")
+                        except Exception as e:
+                            logger.error(f"Error storing SEC raw data in MongoDB: {str(e)}")
+                    
                     return {
                         "sec_filings_sentiment": round(avg_sentiment, 4),
                         "sec_filings_volume": total_filings,
                         "sec_filings_confidence": round(confidence, 4),
                         "sec_filings_analyzed": len(sentiments),
-                        "sec_filings_sentiment_std": round(sentiment_std, 4)
+                        "sec_filings_sentiment_std": round(sentiment_std, 4),
+                        "sec_filings_source": "kaleidoscope",
+                        "sec_raw_data": {
+                            "categorized_filings": {
+                                "10-K": [f for f in filings if f['Form'] == '10-K'],
+                                "10-Q": [f for f in filings if f['Form'] == '10-Q'],
+                                "8-K": [f for f in filings if f['Form'] == '8-K'],
+                                "25-NSE": [f for f in filings if f['Form'] == '25-NSE'],
+                                "424B2": [f for f in filings if f['Form'] == '424B2'],
+                                "FWP": [f for f in filings if f['Form'] == 'FWP'],
+                                "DEF 14A": [f for f in filings if f['Form'] == 'DEF 14A'],
+                                "SD": [f for f in filings if f['Form'] == 'SD'],
+                                "11-K": [f for f in filings if f['Form'] == '11-K']
+                            },
+                            "total_processed": len(processed_filings),
+                            "processed_at": datetime.utcnow().isoformat()
+                        },
+                        "sec_processed_filings": processed_filings
                     }
             
         except Exception as e:
-            logger.error(f"Error analyzing SEC filings for {ticker}: {str(e)}")
-            return {
-                "sec_filings_sentiment": 0.0,
-                "sec_filings_volume": 0,
-                "sec_filings_confidence": 0.0,
-                "sec_filings_analyzed": 0,
-                "sec_filings_error": str(e)
-            }
+            logger.error(f"Error analyzing SEC filings for {ticker} via Kaleidoscope: {str(e)}, trying FMP fallback")
+            return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
             
     def _is_recent(self, date_str: str) -> bool:
         """Check if a filing date is within the last 30 days."""
@@ -941,35 +1061,374 @@ class SECFilingsAnalyzer:
 
     def _extract_text_from_html(self, html_content: str) -> str:
         """
-        Extract clean text from HTML content using BeautifulSoup.
+        Extract narrative business content from SEC filing HTML for sentiment analysis.
+        Focuses on MD&A, Risk Factors, Business Overview, and other narrative sections.
         
         Args:
             html_content (str): Raw HTML content from SEC filing
             
         Returns:
-            str: Clean text content
+            str: Clean narrative content for sentiment analysis
         """
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             
-            # Remove script and style elements
-            for script in soup(["script", "style"]):
+            # Remove script, style, and navigation elements
+            for script in soup(["script", "style", "nav", "header", "footer"]):
                 script.decompose()
+            
+            extracted_content = []
+            
+            # 1. Extract narrative sections by heading (PRIMARY for sentiment)
+            narrative_sections = self._extract_narrative_sections_by_heading(soup)
+            if narrative_sections:
+                extracted_content.extend(narrative_sections)
+                logger.info(f"Extracted {len(narrative_sections)} narrative sections: {sum(len(s) for s in narrative_sections)} characters")
+            
+            # 2. Extract general business narrative content (fallback)
+            general_narrative = self._extract_general_narrative_content(soup)
+            if general_narrative and not narrative_sections:  # Only use if no specific sections found
+                extracted_content.append(general_narrative)
+                logger.info(f"Extracted general narrative content: {len(general_narrative)} characters")
+            
+            # 3. Extract XBRL metadata for context (minimal)
+            metadata_content = self._extract_minimal_metadata(soup)
+            if metadata_content:
+                extracted_content.append(metadata_content)
+                logger.info(f"Extracted metadata context: {len(metadata_content)} characters")
+            
+            # Combine all content
+            if extracted_content:
+                combined_text = ' '.join(extracted_content)
                 
-            # Get text
-            text = soup.get_text()
-            
-            # Break into lines and remove leading and trailing space on each
-            lines = (line.strip() for line in text.splitlines())
-            
-            # Break multi-headlines into a line each
-            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            
-            # Drop blank lines
-            text = '\n'.join(chunk for chunk in chunks if chunk)
-            
-            return text
+                # Limit total content for sentiment analysis
+                if len(combined_text) > 10000:
+                    combined_text = combined_text[:10000] + "..."
+                
+                logger.info(f"Total extracted narrative content: {len(combined_text)} characters from SEC filing")
+                return combined_text
+            else:
+                logger.warning("No meaningful narrative content found in SEC filing")
+                return ""
             
         except Exception as e:
-            logger.warning(f"Error extracting text from HTML: {e}")
-            return "" 
+            logger.warning(f"Error extracting narrative text from SEC HTML: {e}")
+            return ""
+    
+    def _extract_narrative_sections_by_heading(self, soup: BeautifulSoup) -> list:
+        """
+        Extract narrative sections by finding section headings and extracting content.
+        Primary method for sentiment analysis content.
+        """
+        narrative_sections = []
+        
+        # Target section headings for sentiment analysis
+        target_sections = [
+            "Management's Discussion and Analysis",
+            "MD&A",
+            "Risk Factors", 
+            "Business Overview",
+            "Business Description",
+            "Legal Proceedings",
+            "Forward-Looking Statements",
+            "Results of Operations",
+            "Financial Condition",
+            "Liquidity and Capital Resources",
+            "Critical Accounting Policies",
+            "Market Risk",
+            "Competition",
+            "Item 1A",  # Risk Factors section number
+            "Item 7",   # MD&A section number  
+            "Item 1"    # Business section number
+        ]
+        
+        # Find headings and extract following content
+        for heading_tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'div', 'p', 'span', 'font', 'b', 'strong']):
+            heading_text = heading_tag.get_text(strip=True)
+            
+            # Check if this heading matches our target sections
+            for target in target_sections:
+                if (target.lower() in heading_text.lower() and 
+                    len(heading_text) < 300 and  # Reasonable heading length
+                    len(heading_text) > 5):      # Not too short
+                    
+                    # Extract content following this heading
+                    section_content = self._extract_content_after_heading(heading_tag)
+                    if section_content and len(section_content) > 500:  # Substantial content only
+                        narrative_sections.append(section_content)
+                        logger.info(f"Found section: {target} ({len(section_content)} chars)")
+                    break
+        
+        return narrative_sections
+    
+    def _extract_content_after_heading(self, heading_element) -> str:
+        """Extract text content following a section heading until next heading of same level."""
+        content_parts = []
+        current = heading_element.next_sibling
+        heading_level = self._get_heading_level(heading_element)
+        
+        while current and len(' '.join(content_parts)) < 3000:  # Limit per section
+            if hasattr(current, 'name'):
+                # Stop if we hit another heading of same or higher level
+                if current.name in ['h1', 'h2', 'h3', 'h4']:
+                    current_level = self._get_heading_level(current)
+                    if current_level <= heading_level:
+                        break
+                
+                # Extract text from paragraphs and divs
+                if current.name in ['p', 'div', 'span', 'font']:
+                    text = current.get_text(strip=True)
+                    if (len(text) > 100 and 
+                        not self._is_boilerplate_text(text) and
+                        self._contains_business_keywords(text)):
+                        content_parts.append(text)
+            
+            current = current.next_sibling
+        
+        return ' '.join(content_parts)
+    
+    def _get_heading_level(self, element) -> int:
+        """Get numeric level of heading element."""
+        if element.name == 'h1': return 1
+        elif element.name == 'h2': return 2  
+        elif element.name == 'h3': return 3
+        elif element.name == 'h4': return 4
+        else: return 5  # div, p, span treated as lower level
+    
+    def _extract_general_narrative_content(self, soup: BeautifulSoup) -> str:
+        """Extract general narrative content as fallback when specific sections not found."""
+        narrative_content = []
+        
+        # Look for substantial text blocks (paragraphs, divs with significant content)
+        for element in soup.find_all(['p', 'div']):
+            text = element.get_text(strip=True)
+            
+            # Filter for substantial business-relevant content
+            if (len(text) > 300 and 
+                not self._is_boilerplate_text(text) and
+                self._contains_business_keywords(text)):
+                narrative_content.append(text)
+                
+                # Limit total fallback content
+                if len(' '.join(narrative_content)) > 5000:
+                    break
+        
+        return ' '.join(narrative_content)
+    
+    def _extract_minimal_metadata(self, soup: BeautifulSoup) -> str:
+        """Extract minimal company metadata for context."""
+        metadata_parts = []
+        
+        # Extract company name from XBRL
+        for element in soup.find_all(['ix:nonnumeric']):
+            name = element.get('name', '')
+            if 'EntityRegistrantName' in name or 'EntityName' in name:
+                text = element.get_text(strip=True)
+                if text and len(text) > 5:
+                    metadata_parts.append(f"Company: {text}")
+                    break  # Only need one company name
+        
+        return ' '.join(metadata_parts)
+    
+    def _is_boilerplate_text(self, text: str) -> bool:
+        """Check if text is SEC boilerplate that should be filtered out."""
+        boilerplate_phrases = [
+            'securities and exchange commission',
+            'washington, d.c.', 'united states',
+            'commission file number', 'exact name of registrant',
+            'pursuant to section', 'table of contents',
+            'securities act of 1933', 'exchange act of 1934',
+            'incorporated by reference', 'form 10-k',
+            'form 10-q', 'form 8-k', 'proxy statement',
+            'annual report', 'quarterly report'
+        ]
+        
+        text_lower = text.lower()
+        return any(phrase in text_lower for phrase in boilerplate_phrases)
+    
+    def _contains_business_keywords(self, text: str) -> bool:
+        """Check if text contains relevant business/sentiment keywords."""
+        business_keywords = [
+            'revenue', 'income', 'profit', 'loss', 'earnings',
+            'growth', 'decline', 'increase', 'decrease',
+            'performance', 'results', 'operations', 'business',
+            'market', 'competition', 'strategy', 'outlook',
+            'risk', 'opportunity', 'challenge', 'financial',
+            'customers', 'sales', 'products', 'services',
+            'management', 'believe', 'expect', 'anticipate',
+            'future', 'prospects', 'trends', 'industry'
+        ]
+        
+        text_lower = text.lower()
+        return any(keyword in text_lower for keyword in business_keywords)
+
+    async def _analyze_fmp_filings_sentiment(self, ticker: str, lookback_days: int = 30) -> Dict:
+        """
+        Fallback method to analyze SEC filings sentiment using FMP API.
+        
+        Args:
+            ticker: Stock ticker symbol
+            lookback_days: Number of days to look back
+            
+        Returns:
+            Dictionary containing sentiment analysis results
+        """
+        try:
+            if not self.fmp_api_key:
+                logger.warning("FMP API key not found, SEC filings analysis unavailable")
+                return {
+                    "sec_filings_sentiment": 0.0,
+                    "sec_filings_volume": 0,
+                    "sec_filings_confidence": 0.0,
+                    "sec_filings_analyzed": 0,
+                    "sec_filings_error": "No API keys available for SEC filings"
+                }
+            
+            # Calculate date range
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=lookback_days)
+            
+            # FMP SEC filings endpoint
+            url = f"https://financialmodelingprep.com/api/v3/sec_filings/{ticker}?from={start_date.strftime('%Y-%m-%d')}&to={end_date.strftime('%Y-%m-%d')}&limit=30&apikey={self.fmp_api_key}"
+            
+            logger.info(f"Fetching SEC filings for {ticker} from FMP API...")
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        logger.error(f"FMP API returned status {response.status} for {ticker} SEC filings")
+                        return {
+                            "sec_filings_sentiment": 0.0,
+                            "sec_filings_volume": 0,
+                            "sec_filings_confidence": 0.0,
+                            "sec_filings_analyzed": 0,
+                            "sec_filings_error": f"FMP API error: {response.status}"
+                        }
+                    
+                    data = await response.json()
+                    logger.info(f"FMP API response received for {ticker}: {len(data) if data else 0} filings")
+                    
+                    if not data:
+                        return {
+                            "sec_filings_sentiment": 0.0,
+                            "sec_filings_volume": 0,
+                            "sec_filings_confidence": 0.0,
+                            "sec_filings_analyzed": 0,
+                            "sec_filings_error": "No filings found via FMP"
+                        }
+                    
+                    # Filter out insider transactions and non-relevant forms
+                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP']
+                    filings = [f for f in data if f.get('type', '') not in excluded_forms]
+                    logger.info(f"FMP returned {len(data)} total filings, processing {len(filings)} after filtering")
+                    total_filings = len(filings)
+                    
+                    if total_filings == 0:
+                        return {
+                            "sec_filings_sentiment": 0.0,
+                            "sec_filings_volume": 0,
+                            "sec_filings_confidence": 0.0,
+                            "sec_filings_analyzed": 0,
+                            "sec_filings_error": "No relevant filings found"
+                        }
+                    
+                    # For FMP, we might not get HTML URLs, so we'll do basic sentiment based on form types
+                    # More positive sentiment for positive form types, neutral for others
+                    sentiments = []
+                    for filing in filings[:10]:  # Limit to recent 10 filings
+                        form_type = filing.get('type', '')
+                        filing_date = filing.get('fillingDate', '')
+                        
+                        # Basic sentiment based on form type (this is a simplified approach)
+                        if form_type in ['10-K', '10-Q']:
+                            # Regular reports - neutral to slightly positive
+                            sentiment = 0.1
+                        elif form_type == '8-K':
+                            # Current reports - could be positive or negative, default neutral
+                            sentiment = 0.0
+                        elif form_type == 'DEF 14A':
+                            # Proxy statements - slightly positive (good governance)
+                            sentiment = 0.05
+                        else:
+                            sentiment = 0.0
+                        
+                        sentiments.append(sentiment)
+                        logger.info(f"FMP SEC filing: {form_type} dated {filing_date}, sentiment: {sentiment}")
+                    
+                    if not sentiments:
+                        return {
+                            "sec_filings_sentiment": 0.0,
+                            "sec_filings_volume": total_filings,
+                            "sec_filings_confidence": 0.0,
+                            "sec_filings_analyzed": 0,
+                            "sec_filings_error": "No sentiments calculated"
+                        }
+                    
+                    # Calculate aggregate sentiment
+                    avg_sentiment = sum(sentiments) / len(sentiments)
+                    
+                    # Lower confidence for FMP since we're not doing full text analysis
+                    confidence = min(len(sentiments) / 10, 0.5)  # Max 0.5 confidence for FMP
+                    
+                    logger.info(f"FMP SEC sentiment analysis complete for {ticker}: {avg_sentiment:.3f} (confidence: {confidence:.2f})")
+                    
+                    # Store raw data in MongoDB if client is available
+                    if self.mongo_client and filings:
+                        try:
+                            collection = self.mongo_client.db['sec_filings_raw']
+                            for filing in filings[:10]:  # Store the processed filings
+                                processed_filing = {
+                                    'form_type': filing.get('type', ''),
+                                    'filing_date': filing.get('fillingDate', ''),
+                                    'company_name': filing.get('companyName', ''),
+                                    'link': filing.get('link', ''),
+                                    'final_link': filing.get('finalLink', ''),
+                                    'cik': filing.get('cik', ''),
+                                    'accepted_date': filing.get('acceptedDate', ''),
+                                    'period_of_report': filing.get('periodOfReport', ''),
+                                    'effective_date': filing.get('effectiveDate', ''),
+                                    'processed_at': datetime.utcnow().isoformat(),
+                                    'source': 'fmp'
+                                }
+                                collection.replace_one(
+                                    {
+                                        'ticker': ticker,
+                                        'cik': filing.get('cik', ''),
+                                        'form_type': filing.get('type', ''),
+                                        'filing_date': filing.get('fillingDate', '')
+                                    },
+                                    {**processed_filing, 'ticker': ticker},
+                                    upsert=True
+                                )
+                            logger.info(f"Stored {len(filings[:10])} FMP SEC filings raw data for {ticker} in MongoDB")
+                        except Exception as e:
+                            logger.error(f"Error storing FMP SEC raw data in MongoDB: {str(e)}")
+                    
+                    return {
+                        "sec_filings_sentiment": round(avg_sentiment, 4),
+                        "sec_filings_volume": total_filings,
+                        "sec_filings_confidence": round(confidence, 4),
+                        "sec_filings_analyzed": len(sentiments),
+                        "sec_filings_source": "fmp",
+                        "sec_raw_data": {
+                            "categorized_filings": {
+                                "10-K": [f for f in filings if f.get('type') == '10-K'],
+                                "10-Q": [f for f in filings if f.get('type') == '10-Q'],
+                                "8-K": [f for f in filings if f.get('type') == '8-K'],
+                                "DEF 14A": [f for f in filings if f.get('type') == 'DEF 14A'],
+                                "other": [f for f in filings if f.get('type') not in ['10-K', '10-Q', '8-K', 'DEF 14A']]
+                            },
+                            "total_processed": len(sentiments),
+                            "processed_at": datetime.utcnow().isoformat()
+                        }
+                    }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing FMP SEC filings for {ticker}: {str(e)}")
+            return {
+                "sec_filings_sentiment": 0.0,
+                "sec_filings_volume": 0,
+                "sec_filings_confidence": 0.0,
+                "sec_filings_analyzed": 0,
+                "sec_filings_error": str(e)
+            } 

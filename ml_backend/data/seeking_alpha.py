@@ -80,9 +80,12 @@ class SeekingAlphaAnalyzer:
         self.last_proxy_rotation = time.time()
         
         # Initialize MongoDB collection
-        if self.mongo_client:
+        if self.mongo_client and hasattr(self.mongo_client, 'db') and self.mongo_client.db is not None:
             self.collection = self.mongo_client.db['seeking_alpha_sentiment']
             logger.info("Initialized MongoDB collection for Seeking Alpha data")
+        else:
+            self.collection = None
+            logger.warning("MongoDB client not available or not connected")
 
     def _load_proxies(self) -> List[Dict[str, str]]:
         """
@@ -151,6 +154,7 @@ class SeekingAlphaAnalyzer:
         if proxy:
             logger.info(f"Using proxy: {proxy['host']}:{proxy['port']}")
             self.browser = await self.playwright.chromium.launch(
+                headless=False,
                 proxy={
                     "server": f"{proxy['protocol']}://{proxy['host']}:{proxy['port']}",
                     "username": proxy.get('username'),
@@ -158,7 +162,7 @@ class SeekingAlphaAnalyzer:
                 }
             )
         else:
-            self.browser = await self.playwright.chromium.launch()
+            self.browser = await self.playwright.chromium.launch(headless=False)
             
         self.context = await self.browser.new_context(
             user_agent=user_agent,
@@ -261,8 +265,8 @@ class SeekingAlphaAnalyzer:
         
     async def _store_comments_in_mongodb(self, ticker: str, comments: List[Dict]):
         """Store comments in MongoDB with timestamp."""
-        if not self.mongo_client:
-            logger.warning("MongoDB client not initialized, skipping comment storage")
+        if not self.mongo_client or not hasattr(self.mongo_client, 'db') or self.mongo_client.db is None:
+            logger.warning("MongoDB client not initialized or not connected, skipping comment storage")
             return
             
         try:
@@ -284,8 +288,8 @@ class SeekingAlphaAnalyzer:
             
     def _store_sentiment_in_mongodb(self, ticker: str, sentiment_data: Dict):
         """Store sentiment analysis results in MongoDB."""
-        if not self.mongo_client:
-            logger.warning("MongoDB client not initialized, skipping sentiment storage")
+        if not self.mongo_client or not hasattr(self.mongo_client, 'db') or self.mongo_client.db is None:
+            logger.warning("MongoDB client not initialized or not connected, skipping sentiment storage")
             return
             
         try:
@@ -311,7 +315,7 @@ class SeekingAlphaAnalyzer:
     async def _init_browser(self):
         """Initialize Playwright browser."""
         playwright = await async_playwright().start()
-        browser = await playwright.firefox.launch(headless=True)
+        browser = await playwright.firefox.launch(headless=False)
         context = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
@@ -374,7 +378,7 @@ class SeekingAlphaAnalyzer:
             return None
             
     async def get_comments(self, ticker: str, max_comments: int = 30) -> List[Dict]:
-        """Scrape comments from Seeking Alpha."""
+        """Scrape comments from Seeking Alpha with enhanced anti-detection."""
         comments = []
         playwright = None
         browser = None
@@ -384,20 +388,58 @@ class SeekingAlphaAnalyzer:
             playwright, browser, context = await self._init_browser()
             page = await context.new_page()
             
-            # Navigate to comments page
+            # Add extra anti-detection measures
+            await page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+                Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+                window.chrome = {runtime: {}};
+            """)
+            
+            # Navigate to comments page with retries
             navigation_success = await self._navigate_to_comments(page, ticker)
             if not navigation_success:
                 return comments
             
-            # Get all comment elements
-            comment_elements = await page.query_selector_all('div[data-test-id="comment-content"]')
-            logger.info(f"Found {len(comment_elements)} comment elements")
+            # Wait for page to fully load and add random delay
+            await asyncio.sleep(2 + random.uniform(1, 3))
             
-            # Parse each comment
-            for element in comment_elements[:max_comments]:
+            # Check for anti-bot challenges
+            try:
+                challenge_element = await page.query_selector('text="Press & Hold to confirm you are a human"')
+                if challenge_element:
+                    logger.warning(f"Bot detection challenge detected for {ticker}, skipping")
+                    return comments
+            except:
+                pass
+            
+            # Get all comment elements with retry logic
+            comment_elements = []
+            for attempt in range(3):
+                try:
+                    await page.wait_for_selector('div[data-test-id="comment-content"]', timeout=10000)
+                    comment_elements = await page.query_selector_all('div[data-test-id="comment-content"]')
+                    if comment_elements:
+                        break
+                except:
+                    if attempt < 2:
+                        await asyncio.sleep(3)
+                        continue
+                    else:
+                        logger.warning(f"No comments found for {ticker}")
+                        return comments
+            
+            logger.info(f"Found {len(comment_elements)} comment elements for {ticker}")
+            
+            # Parse each comment with delays between parsing
+            for i, element in enumerate(comment_elements[:max_comments]):
                 comment = await self._parse_comment(element)
                 if comment:
                     comments.append(comment)
+                
+                # Add small delay between parsing comments
+                if i < len(comment_elements[:max_comments]) - 1:
+                    await asyncio.sleep(0.5)
                     
             return comments
             
@@ -407,7 +449,10 @@ class SeekingAlphaAnalyzer:
             
         finally:
             if playwright:
-                await playwright.stop()
+                try:
+                    await playwright.stop()
+                except:
+                    pass
                 
     async def analyze_comments_sentiment(self, ticker: str, lookback_days: int = 7) -> Dict:
         """
