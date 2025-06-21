@@ -533,14 +533,12 @@ class SentimentAnalyzer:
 
     async def fetch_alpha_vantage_earnings_call(self, ticker: str, quarter: str = None) -> dict:
         """
-        DISABLED: Alpha Vantage Earnings Call - removed to prioritize options data.
-        Earnings transcripts are less critical than options sentiment.
+        REMOVED: Alpha Vantage Earnings Call - prioritizing options data.
+        This method has been completely removed to clean up redundant code.
+        Only options data remains for Alpha Vantage to maximize the 25 API calls/day limit.
         """
-        logger.info(f"Alpha Vantage Earnings Call DISABLED for {ticker} - prioritizing options data")
-        return {
-            'message': 'Earnings call transcripts disabled to prioritize options data',
-            'disabled': True
-        }
+        logger.warning(f"fetch_alpha_vantage_earnings_call REMOVED for {ticker} - use options data only")
+        return {}
 
     async def fetch_finnhub_insider_transactions(self, ticker: str) -> dict:
         """Fetch insider transactions from Finnhub."""
@@ -729,115 +727,28 @@ class SentimentAnalyzer:
         return {"finviz_sentiment": sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0, "finviz_volume": total_volume, "finviz_confidence": min(total_volume / 20, 1.0), "finviz_raw_data": headlines, "finviz_nlp_results": sentiment_results, "finviz_api_status": "ok", "finviz_error": None}
 
     async def analyze_seekingalpha_sentiment(self, ticker: str) -> Dict[str, Any]:
-        """Analyze sentiment from SeekingAlpha."""
-        try:
-            # Run in threadpool since this is a blocking operation
-            return await run_in_threadpool(self._analyze_seekingalpha_sentiment_sync, ticker)
-        except Exception as e:
-            logger.warning(f"SeekingAlpha sentiment analysis failed for {ticker}: {e}")
-            return {"seekingalpha_sentiment": 0.0, "seekingalpha_volume": 0, "seekingalpha_confidence": 0.0}
+        """
+        REMOVED: SeekingAlpha sentiment analysis.
+        This functionality is now handled by RSS news sentiment to eliminate duplication.
+        """
+        logger.warning(f"analyze_seekingalpha_sentiment REMOVED for {ticker} - use RSS news instead")
+        return {'sentiment_score': 0.0, 'volume': 0, 'confidence': 0.0}
 
     def _analyze_seekingalpha_sentiment_sync(self, ticker: str) -> Dict[str, Any]:
-        """Synchronous implementation of SeekingAlpha sentiment analysis."""
-        import feedparser
-        sentiment_scores = []
-        headlines = []
-        sentiment_results = []
-        total_volume = 0
-        try:
-            rss_url = f"https://seekingalpha.com/feed.xml?symbol={ticker}"
-            feed = feedparser.parse(rss_url)
-            entries = feed.entries[:10]  # Limit to latest 10
-            for entry in entries:
-                title = entry.title
-                summary = getattr(entry, 'summary', '')
-                date_obj = None
-                for date_field in ['published', 'updated', 'published_parsed', 'updated_parsed']:
-                    if hasattr(entry, date_field):
-                        try:
-                            date_obj = pd.to_datetime(getattr(entry, date_field), errors='coerce')
-                            if date_obj is not None:
-                                date_obj = date_obj.tz_localize(None)
-                        except Exception:
-                            date_obj = None
-                        break
-                if not _is_recent(date_obj):
-                    continue
-                text = f"{title} {summary}".strip()
-                headlines.append({"title": title, "summary": summary})
-                text_trunc = text[:512]
-                if self.finbert is not None:
-                    sentiment = self.finbert(text_trunc)[0]
-                    if 'label' in sentiment:
-                        sentiment_score = _map_sentiment_label(sentiment['label'])
-                        logger.debug(f"SeekingAlpha label '{sentiment['label']}' mapped to score {sentiment_score}")
-                    else:
-                        sentiment_score = sentiment['score']
-                else:
-                    sentiment = self.vader.polarity_scores(text_trunc)
-                    sentiment_score = sentiment["compound"]
-                sentiment_scores.append(sentiment_score)
-                sentiment_results.append({"headline": title, "summary": summary, "sentiment": sentiment_score, "model": "finbert" if self.finbert is not None else "vader"})
-                total_volume += 1
-        except Exception as e:
-            logger.error(f"Error analyzing SeekingAlpha sentiment for {ticker}: {str(e)}")
-            return {"seekingalpha_sentiment": 0.0, "seekingalpha_volume": 0, "seekingalpha_confidence": 0.0, "seekingalpha_raw_data": headlines, "seekingalpha_nlp_results": sentiment_results, "seekingalpha_api_status": "exception", "seekingalpha_error": str(e)}
-        if total_volume < 1:
-            logger.info(f"SeekingAlpha volume {total_volume} below threshold 1, setting sentiment to 0.")
-            return {"seekingalpha_sentiment": 0.0, "seekingalpha_volume": total_volume, "seekingalpha_confidence": 0.0, "seekingalpha_raw_data": headlines, "seekingalpha_nlp_results": sentiment_results, "seekingalpha_api_status": "no_data", "seekingalpha_error": "Insufficient volume (<1)"}
-        logger.info(f"SeekingAlpha sentiment: {total_volume} headlines, avg score: {sum(sentiment_scores)/len(sentiment_scores) if sentiment_scores else 0.0:.3f}")
-        return {"seekingalpha_sentiment": sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0, "seekingalpha_volume": total_volume, "seekingalpha_confidence": min(total_volume / 20, 1.0), "seekingalpha_raw_data": headlines, "seekingalpha_nlp_results": sentiment_results, "seekingalpha_api_status": "ok", "seekingalpha_error": None}
+        """
+        REMOVED: SeekingAlpha sentiment analysis is now handled by RSS news sentiment.
+        This method has been removed to eliminate duplication.
+        """
+        logger.warning(f"_analyze_seekingalpha_sentiment_sync REMOVED for {ticker} - use RSS news instead")
+        return {"seekingalpha_sentiment": 0.0, "seekingalpha_volume": 0, "seekingalpha_confidence": 0.0}
 
     def _analyze_yahoo_news_sentiment_sync(self, ticker: str) -> Dict[str, Any]:
-        """Synchronous implementation of Yahoo Finance news sentiment analysis."""
-        import feedparser
-        sentiment_scores = []
-        headlines = []
-        sentiment_results = []
-        total_volume = 0
-        try:
-            rss_url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US"
-            feed = feedparser.parse(rss_url)
-            entries = feed.entries[:15]  # Limit to latest 15
-            for entry in entries:
-                title = entry.title
-                summary = getattr(entry, 'summary', '')
-                date_obj = None
-                for date_field in ['published', 'updated', 'published_parsed', 'updated_parsed']:
-                    if hasattr(entry, date_field):
-                        try:
-                            date_obj = pd.to_datetime(getattr(entry, date_field), errors='coerce')
-                            if date_obj is not None:
-                                date_obj = date_obj.tz_localize(None)
-                        except Exception:
-                            date_obj = None
-                        break
-                if not _is_recent(date_obj):
-                    continue
-                text = f"{title} {summary}".strip()
-                headlines.append({"title": title, "summary": summary})
-                text_trunc = text[:512]
-                if self.finbert is not None:
-                    sentiment = self.finbert(text_trunc)[0]
-                    if 'label' in sentiment:
-                        sentiment_score = _map_sentiment_label(sentiment['label'])
-                        logger.debug(f"Yahoo News label '{sentiment['label']}' mapped to score {sentiment_score}")
-                    else:
-                        sentiment_score = sentiment['score']
-                else:
-                    sentiment = self.vader.polarity_scores(text_trunc)
-                    sentiment_score = sentiment["compound"]
-                sentiment_scores.append(sentiment_score)
-                sentiment_results.append({"headline": title, "summary": summary, "sentiment": sentiment_score, "model": "finbert" if self.finbert is not None else "vader"})
-                total_volume += 1
-        except Exception as e:
-            logger.error(f"Error analyzing Yahoo Finance news sentiment for {ticker}: {str(e)}")
-            return {"yahoo_news_sentiment": 0.0, "yahoo_news_volume": 0, "yahoo_news_confidence": 0.0, "yahoo_news_raw_data": headlines, "yahoo_news_nlp_results": sentiment_results, "yahoo_news_api_status": "exception", "yahoo_news_error": str(e)}
-        if total_volume < 1:
-            logger.info(f"Yahoo News volume {total_volume} below threshold 1, setting sentiment to 0.")
-            return {"yahoo_news_sentiment": 0.0, "yahoo_news_volume": total_volume, "yahoo_news_confidence": 0.0, "yahoo_news_raw_data": headlines, "yahoo_news_nlp_results": sentiment_results, "yahoo_news_api_status": "no_data", "yahoo_news_error": "Insufficient volume (<1)"}
-        logger.info(f"Yahoo News sentiment: {total_volume} headlines, avg score: {sum(sentiment_scores)/len(sentiment_scores) if sentiment_scores else 0.0:.3f}")
-        return {"yahoo_news_sentiment": sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0, "yahoo_news_volume": total_volume, "yahoo_news_confidence": min(total_volume / 20, 1.0), "yahoo_news_raw_data": headlines, "yahoo_news_nlp_results": sentiment_results, "yahoo_news_api_status": "ok", "yahoo_news_error": None}
+        """
+        REMOVED: Yahoo News sentiment analysis is now handled by RSS news sentiment.
+        This method has been removed to eliminate duplication.
+        """
+        logger.warning(f"_analyze_yahoo_news_sentiment_sync REMOVED for {ticker} - use RSS news instead")
+        return {"yahoo_news_sentiment": 0.0, "yahoo_news_volume": 0, "yahoo_news_confidence": 0.0}
 
     async def analyze_marketaux_sentiment(self, ticker: str) -> dict:
         """Analyze sentiment from Marketaux."""
@@ -1612,27 +1523,12 @@ class SentimentAnalyzer:
             return []
 
     def fetch_alpha_vantage_earnings_call_and_store(self, ticker: str, quarter: str = None) -> dict:
-        """Fetch earnings call transcript for a ticker from Alpha Vantage and store in MongoDB."""
-        api_key = os.getenv("ALPHAVANTAGE_API_KEY")
-        if not api_key:
-            logger.warning("ALPHAVANTAGE_API_KEY not set. Skipping earnings call transcript fetch.")
-            return {"status": "no_api_key", "transcript": None}
-        url = f"https://www.alphavantage.co/query?function=EARNINGS_CALL_TRANSCRIPT&symbol={ticker}"
-        if quarter:
-            url += f"&quarter={quarter}"
-        url += f"&apikey={api_key}"
-        try:
-            resp = requests.get(url, timeout=15)
-            if resp.status_code != 200:
-                logger.warning(f"Alpha Vantage earnings call transcript endpoint returned status {resp.status_code} for {ticker}")
-                return {"status": "api_error", "transcript": None}
-            data = resp.json()
-            self.mongo_client.store_alpha_vantage_data(ticker, 'earnings_call_transcript', data)
-            logger.info(f"Stored Alpha Vantage earnings call transcript for {ticker} in MongoDB.")
-            return {"status": "ok", "transcript": data}
-        except Exception as e:
-            logger.error(f"Error fetching earnings call transcript for {ticker} from Alpha Vantage: {e}")
-            return {"status": "exception", "transcript": None}
+        """
+        REMOVED: Alpha Vantage earnings call storage method.
+        This method has been completely removed to clean up redundant code.
+        """
+        logger.warning(f"fetch_alpha_vantage_earnings_call_and_store REMOVED for {ticker}")
+        return {}
 
     async def analyze_earnings_call_sentiment(self, ticker: str) -> Dict[str, float]:
         """Analyze sentiment from earnings call transcripts."""
@@ -1745,7 +1641,9 @@ class SentimentAnalyzer:
         return await self.analyze_sec_sentiment(ticker)
 
     async def get_yahoo_news_sentiment(self, ticker: str):
-        return await self.analyze_yahoo_news_sentiment(ticker)
+        """REMOVED: Duplicate of RSS news sentiment."""
+        logger.warning(f"get_yahoo_news_sentiment REMOVED for {ticker} - use RSS news instead")
+        return {"sentiment": 0.0, "volume": 0, "confidence": 0.0}
 
     async def get_marketaux_sentiment(self, ticker: str):
         return await self.analyze_marketaux_sentiment(ticker)
@@ -1763,7 +1661,9 @@ class SentimentAnalyzer:
         return await self.analyze_finnhub_sentiment(ticker)
 
     async def get_seekingalpha_sentiment(self, ticker: str):
-        return await self.analyze_seekingalpha_sentiment(ticker)
+        """REMOVED: Duplicate of RSS news sentiment."""
+        logger.warning(f"get_seekingalpha_sentiment REMOVED for {ticker} - use RSS news instead")
+        return {"sentiment": 0.0, "volume": 0, "confidence": 0.0}
 
     async def get_seekingalpha_comments_sentiment(self, ticker: str):
         return await self.analyze_seekingalpha_comments_sentiment(ticker)
@@ -1815,18 +1715,12 @@ class SentimentAnalyzer:
             }
 
     async def analyze_yahoo_news_sentiment(self, ticker: str) -> Dict[str, Any]:
-        """Analyze sentiment from Yahoo News."""
-        try:
-            # Run in threadpool since this is a blocking operation
-            return await run_in_threadpool(self._analyze_yahoo_news_sentiment_sync, ticker)
-        except Exception as e:
-            logger.warning(f"Yahoo News sentiment analysis failed for {ticker}: {e}")
-            return {
-                'sentiment_score': 0.0,
-                'volume': 0,
-                'confidence': 0.0,
-                'error': str(e)
-            }
+        """
+        REMOVED: Yahoo News sentiment analysis.
+        This functionality is now handled by RSS news sentiment to eliminate duplication.
+        """
+        logger.warning(f"analyze_yahoo_news_sentiment REMOVED for {ticker} - use RSS news instead")
+        return {'sentiment_score': 0.0, 'volume': 0, 'confidence': 0.0}
 
     async def analyze_fmp_sentiment(self, ticker: str) -> Dict[str, Any]:
         """Analyze sentiment from FMP data sources using consolidated manager."""
@@ -1967,16 +1861,11 @@ class SentimentAnalyzer:
 
     async def analyze_alpha_earnings_call_sentiment(self, ticker: str) -> Dict[str, Any]:
         """
-        DISABLED: Earnings call sentiment - removed to prioritize options data.
+        REMOVED: Earnings call sentiment analysis.
+        This method has been completely removed to clean up redundant code.
         """
-        logger.info(f"Alpha Vantage Earnings Call Sentiment DISABLED for {ticker} - prioritizing options data")
-        return {
-            'source': 'alpha_earnings_call_disabled',
-            'sentiment': 0.0,
-            'volume': 0,
-            'confidence': 0.0,
-            'message': 'Disabled to prioritize options data within 25 API calls/day limit'
-        }
+        logger.warning(f"analyze_alpha_earnings_call_sentiment REMOVED for {ticker}")
+        return {'sentiment': 0.0, 'volume': 0, 'confidence': 0.0}
 
     async def analyze_short_interest_sentiment(self, ticker: str) -> Dict[str, Any]:
         """Analyze sentiment from short interest data with sequential processing."""
@@ -2499,17 +2388,11 @@ class SentimentAnalyzer:
 
     async def analyze_alphavantage_news_sentiment(self, ticker: str) -> Dict[str, Any]:
         """
-        DISABLED: Alpha Vantage News Sentiment - removed to prioritize options data.
-        With only 25 API calls/day, options data is more valuable than news sentiment.
+        REMOVED: Alpha Vantage News Sentiment.
+        This method has been completely removed to clean up redundant code.
         """
-        logger.info(f"Alpha Vantage News Sentiment DISABLED for {ticker} - prioritizing options data")
-        return {
-            'source': 'alphavantage_news_disabled',
-            'sentiment': 0.0,
-            'volume': 0,
-            'confidence': 0.0,
-            'message': 'Disabled to prioritize options data within 25 API calls/day limit'
-        }
+        logger.warning(f"analyze_alphavantage_news_sentiment REMOVED for {ticker}")
+        return {'sentiment': 0.0, 'volume': 0, 'confidence': 0.0}
 
 
 def get_previous_trading_day(date_str):

@@ -110,21 +110,45 @@ class SectorDataFetcher:
                     if mongo_client:
                         cached_data = mongo_client.get_sector_data(etf, start_date, end_date)
                         if cached_data:
-                            data = pd.Series(cached_data)
-                        else:
-                            data = yf.download(etf, start=start_date, end=end_date, progress=False, auto_adjust=True)
-                            # Store in MongoDB
-                            data_dict = {d.strftime('%Y-%m-%d'): float(v) for d, v in data['Close'].items()}
+                            # Convert cached dict to DataFrame-like structure
+                            cached_series = pd.Series(cached_data)
+                            cached_series.index = pd.to_datetime(cached_series.index)
+                            cached_series = cached_series.reindex(dates, method='ffill')
+                            
+                            df[f"{etf}_close"] = cached_series.values
+                            df[f"{etf}_volume"] = cached_series.values  # Use same for volume (placeholder)
+                            
+                            # Calculate derived features
+                            if len(cached_series) > 1:
+                                df[f"{etf}_return"] = cached_series.pct_change().values
+                                df[f"{etf}_volatility"] = cached_series.rolling(20).std().values
+                                df[f"{etf}_ma5"] = cached_series.rolling(5).mean().values
+                                df[f"{etf}_ma20"] = cached_series.rolling(20).mean().values
+                            continue
+                    
+                    # Fetch from yfinance if not cached
+                    data = yf.download(etf, start=start_date, end=end_date, progress=False, auto_adjust=True)
+                    
+                    if data.empty:
+                        logger.warning(f"No data returned from yfinance for {etf}")
+                        df[f"{etf}_close"] = np.nan
+                        df[f"{etf}_volume"] = np.nan
+                        continue
+                    
+                    # Store in MongoDB if successful
+                    if mongo_client and not data.empty:
+                        try:
+                            data_dict = {d.strftime('%Y-%m-%d'): float(v) for d, v in data['Close'].items() if pd.notna(v)}
                             mongo_client.store_sector_data(etf, data_dict)
-                    else:
-                        data = yf.download(etf, start=start_date, end=end_date, progress=False, auto_adjust=True)
+                        except Exception as e:
+                            logger.warning(f"Failed to store {etf} data in MongoDB: {e}")
 
                     data = data.reindex(dates, method='ffill')
-                    df[f"{etf}_close"] = data['Close'].values
-                    df[f"{etf}_volume"] = data['Volume'].values
+                    df[f"{etf}_close"] = data['Close'].values if 'Close' in data.columns else np.nan
+                    df[f"{etf}_volume"] = data['Volume'].values if 'Volume' in data.columns else np.nan
 
                     # Calculate derived features
-                    if len(data) > 1:
+                    if not data.empty and 'Close' in data.columns and len(data) > 1:
                         df[f"{etf}_return"] = data['Close'].pct_change().values
                         df[f"{etf}_volatility"] = data['Close'].rolling(20).std().values
                         df[f"{etf}_ma5"] = data['Close'].rolling(5).mean().values
@@ -190,11 +214,71 @@ class FeatureEngineer:
             
     def add_short_interest_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
         """
-        Skip short interest features to avoid duplication with sentiment analysis.
-        Short interest is already included in the sentiment pipeline with proper sentiment scoring.
+        Add short interest features as predictive indicators for stock sentiment and potential price movements.
+        Short interest indicates bearish sentiment and potential short squeeze opportunities.
         """
-        logger.info(f"Skipping short interest features for {ticker} - handled in sentiment analysis to avoid duplication")
-        return df
+        try:
+            logger.info(f"Adding short interest features for {ticker}")
+            
+            # Initialize short interest analyzer if needed
+            self._init_short_interest_analyzer(mongo_client or self.mongo_client)
+            
+            # Default values for short interest features
+            df['short_interest_ratio'] = 0.0  # Short interest as % of float
+            df['days_to_cover'] = 0.0  # Days to cover short positions
+            df['short_volume_ratio'] = 0.0  # Short volume as % of total volume
+            df['short_interest_change'] = 0.0  # Change in short interest
+            df['short_squeeze_potential'] = 0.0  # Calculated squeeze potential score
+            
+            # Fetch latest short interest data
+            for idx, row in df.iterrows():
+                try:
+                    date = row.get('date', idx)
+                    if isinstance(date, str):
+                        date = pd.to_datetime(date)
+                    
+                    # Get short interest data from analyzer
+                    short_data = self.short_interest_analyzer.get_short_interest_data(ticker, date)
+                    
+                    if short_data:
+                        # Extract short interest metrics
+                        df.at[idx, 'short_interest_ratio'] = short_data.get('short_interest_ratio', 0.0)
+                        df.at[idx, 'days_to_cover'] = short_data.get('days_to_cover', 0.0)
+                        df.at[idx, 'short_volume_ratio'] = short_data.get('short_volume_ratio', 0.0)
+                        df.at[idx, 'short_interest_change'] = short_data.get('short_interest_change', 0.0)
+                        
+                        # Calculate short squeeze potential
+                        # High short interest + low days to cover + increasing price = potential squeeze
+                        short_ratio = short_data.get('short_interest_ratio', 0.0)
+                        days_cover = short_data.get('days_to_cover', 0.0)
+                        
+                        if short_ratio > 10 and days_cover > 3:  # High short interest and difficult to cover
+                            squeeze_score = min((short_ratio / 20.0) + (days_cover / 10.0), 1.0)
+                        else:
+                            squeeze_score = 0.0
+                            
+                        df.at[idx, 'short_squeeze_potential'] = squeeze_score
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing short interest for {ticker} on {date}: {e}")
+                    # Keep default values
+                    
+            # Calculate rolling features for short interest trends
+            df['short_interest_ma5'] = df['short_interest_ratio'].rolling(5).mean()
+            df['short_interest_ma20'] = df['short_interest_ratio'].rolling(20).mean()
+            df['short_interest_trend'] = df['short_interest_ratio'] - df['short_interest_ma20']
+            
+            # Forward fill missing values
+            short_cols = ['short_interest_ratio', 'days_to_cover', 'short_volume_ratio', 
+                         'short_interest_change', 'short_squeeze_potential']
+            df[short_cols] = df[short_cols].fillna(method='ffill').fillna(0)
+            
+            logger.info(f"Successfully added short interest features for {ticker}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding short interest features for {ticker}: {e}")
+            return df
 
     def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add technical indicators to the dataframe."""
@@ -577,6 +661,221 @@ class FeatureEngineer:
         except Exception as e:
             logger.error(f"Error adding economic event features for {ticker}: {e}")
         return df
+
+    def add_macro_economic_features(self, df: pd.DataFrame, mongo_client=None) -> pd.DataFrame:
+        """
+        Add macroeconomic features from FRED data that affect stock predictions.
+        These features provide economic context for individual stock movements.
+        """
+        try:
+            logger.info("Adding macro economic features from FRED data")
+            
+            # Get date range from dataframe
+            if 'date' in df.columns:
+                start_date = df['date'].min()
+                end_date = df['date'].max()
+            else:
+                start_date = df.index.min()
+                end_date = df.index.max()
+            
+            # Fetch macro data using the fetcher
+            macro_df = self.macro_fetcher.fetch_all(start_date, end_date, mongo_client)
+            
+            if macro_df is not None and not macro_df.empty and len(macro_df.columns) > 1:
+                logger.info(f"Successfully fetched macro data with {len(macro_df.columns)} indicators")
+                
+                # Ensure date alignment
+                if 'date' in df.columns:
+                    df_for_merge = df.set_index('date')
+                    macro_df_for_merge = macro_df.set_index('date')
+                else:
+                    df_for_merge = df.copy()
+                    macro_df_for_merge = macro_df.set_index('date')
+                
+                # Merge macro data with stock data
+                df_merged = pd.merge(
+                    df_for_merge, 
+                    macro_df_for_merge, 
+                    left_index=True, 
+                    right_index=True, 
+                    how='left'
+                )
+                
+                # Restore date column if it existed
+                if 'date' in df.columns:
+                    df_merged = df_merged.reset_index()
+                
+                # Forward fill macro data (it's lower frequency than daily stock data)
+                macro_columns = [col for col in macro_df.columns if col != 'date']
+                df_merged[macro_columns] = df_merged[macro_columns].fillna(method='ffill')
+                
+                # Add macro trend features
+                for col in macro_columns:
+                    if col.endswith('_change') or col.endswith('_ma5') or col.endswith('_ma20'):
+                        continue  # Skip derived features to avoid recalculation
+                    
+                    # Add trend indicators
+                    if col in df_merged.columns:
+                        try:
+                            # Current vs 1-month ago trend
+                            df_merged[f'{col}_trend_1m'] = df_merged[col] - df_merged[col].shift(21)
+                            # Current vs 3-month ago trend  
+                            df_merged[f'{col}_trend_3m'] = df_merged[col] - df_merged[col].shift(63)
+                            # Acceleration (change in trend)
+                            df_merged[f'{col}_acceleration'] = df_merged[f'{col}_trend_1m'] - df_merged[f'{col}_trend_1m'].shift(21)
+                        except Exception as e:
+                            logger.warning(f"Error calculating trends for {col}: {e}")
+                
+                logger.info(f"Successfully merged macro features. Final shape: {df_merged.shape}")
+                return df_merged
+                
+            else:
+                logger.warning("No macro data available, skipping macro features")
+                # Add placeholder columns for consistency
+                macro_placeholders = [
+                    'GDP_trend_1m', 'GDP_trend_3m', 'GDP_acceleration',
+                    'UNEMPLOYMENT_trend_1m', 'UNEMPLOYMENT_trend_3m', 'UNEMPLOYMENT_acceleration', 
+                    'INFLATION_trend_1m', 'INFLATION_trend_3m', 'INFLATION_acceleration',
+                    'INTEREST_RATES_trend_1m', 'INTEREST_RATES_trend_3m', 'INTEREST_RATES_acceleration'
+                ]
+                for col in macro_placeholders:
+                    df[col] = 0.0
+                return df
+                
+        except Exception as e:
+            logger.error(f"Error adding macro economic features: {e}")
+            return df
+    
+    def add_sector_performance_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
+        """
+        Add sector performance features to understand relative stock performance.
+        Sector rotation and relative performance are key predictive factors.
+        """
+        try:
+            logger.info(f"Adding sector performance features for {ticker}")
+            
+            # Get date range from dataframe
+            if 'date' in df.columns:
+                start_date = df['date'].min()
+                end_date = df['date'].max()
+            else:
+                start_date = df.index.min()
+                end_date = df.index.max()
+            
+            # Fetch sector data using the fetcher
+            sector_df = self.sector_fetcher.fetch_all(start_date, end_date, mongo_client)
+            
+            if sector_df is not None and not sector_df.empty and len(sector_df.columns) > 1:
+                logger.info(f"Successfully fetched sector data with {len(sector_df.columns)} ETFs")
+                
+                # Determine which sector this stock belongs to (simplified mapping)
+                sector_mapping = {
+                    # Technology
+                    'AAPL': 'XLK', 'MSFT': 'XLK', 'NVDA': 'XLK', 'GOOGL': 'XLK', 'META': 'XLK',
+                    'ORCL': 'XLK', 'CRM': 'XLK', 'INTC': 'XLK', 'AMD': 'XLK', 'QCOM': 'XLK',
+                    # Healthcare  
+                    'JNJ': 'XLV', 'UNH': 'XLV', 'ABBV': 'XLV', 'PFE': 'XLV', 'MRK': 'XLV',
+                    'ABT': 'XLV', 'TMO': 'XLV', 'LLY': 'XLV', 'MDT': 'XLV', 'BMY': 'XLV',
+                    # Financials
+                    'JPM': 'XLF', 'BAC': 'XLF', 'WFC': 'XLF', 'GS': 'XLF', 'MS': 'XLF',
+                    'BLK': 'XLF', 'SCHW': 'XLF', 'AXP': 'XLF', 'USB': 'XLF', 'COF': 'XLF',
+                    # Consumer Discretionary
+                    'AMZN': 'XLY', 'HD': 'XLY', 'MCD': 'XLY', 'SBUX': 'XLY', 'NKE': 'XLY',
+                    'LOW': 'XLY', 'TGT': 'XLY', 'DIS': 'XLY',
+                    # Consumer Staples
+                    'WMT': 'XLP', 'PG': 'XLP', 'KO': 'XLP', 'PEP': 'XLP', 'COST': 'XLP',
+                    # Energy
+                    'XOM': 'XLE', 'CVX': 'XLE', 'COP': 'XLE',
+                    # Industrials  
+                    'BA': 'XLI', 'CAT': 'XLI', 'GE': 'XLI', 'HON': 'XLI', 'MMM': 'XLI',
+                    'UPS': 'XLI', 'FDX': 'XLI', 'DE': 'XLI', 'RTX': 'XLI', 'LMT': 'XLI'
+                }
+                
+                primary_sector = sector_mapping.get(ticker, 'XLK')  # Default to tech
+                
+                # Ensure date alignment
+                if 'date' in df.columns:
+                    df_for_merge = df.set_index('date')
+                    sector_df_for_merge = sector_df.set_index('date')
+                else:
+                    df_for_merge = df.copy()
+                    sector_df_for_merge = sector_df.set_index('date')
+                
+                # Merge sector data
+                df_merged = pd.merge(
+                    df_for_merge,
+                    sector_df_for_merge,
+                    left_index=True,
+                    right_index=True, 
+                    how='left'
+                )
+                
+                # Restore date column if it existed
+                if 'date' in df.columns:
+                    df_merged = df_merged.reset_index()
+                
+                # Forward fill sector data
+                sector_columns = [col for col in sector_df.columns if col != 'date']
+                df_merged[sector_columns] = df_merged[sector_columns].fillna(method='ffill')
+                
+                # Calculate relative performance features
+                if 'Close' in df_merged.columns:
+                    # Stock vs primary sector performance
+                    primary_sector_close = f'{primary_sector}_close'
+                    if primary_sector_close in df_merged.columns:
+                        # Relative strength vs sector
+                        df_merged['sector_relative_strength'] = (
+                            df_merged['Close'].pct_change(20) - 
+                            df_merged[primary_sector_close].pct_change(20)
+                        )
+                        
+                        # Current relative position
+                        df_merged['sector_relative_position'] = (
+                            df_merged['Close'] / df_merged['Close'].rolling(252).mean() -
+                            df_merged[primary_sector_close] / df_merged[primary_sector_close].rolling(252).mean()
+                        )
+                    
+                    # Calculate sector rotation signals
+                    sector_etfs = ['XLK', 'XLF', 'XLE', 'XLV', 'XLY', 'XLP', 'XLI', 'XLB', 'XLU']
+                    sector_returns = []
+                    
+                    for etf in sector_etfs:
+                        etf_close = f'{etf}_close'
+                        if etf_close in df_merged.columns:
+                            df_merged[f'{etf}_return_5d'] = df_merged[etf_close].pct_change(5)
+                            df_merged[f'{etf}_return_20d'] = df_merged[etf_close].pct_change(20)
+                            sector_returns.append(f'{etf}_return_5d')
+                    
+                    # Sector momentum rank (where does primary sector rank?)
+                    if sector_returns:
+                        df_merged['sector_momentum_rank'] = 0.0
+                        primary_return_col = f'{primary_sector}_return_5d'
+                        if primary_return_col in df_merged.columns:
+                            for idx, row in df_merged.iterrows():
+                                try:
+                                    sector_perf = [row[col] for col in sector_returns if pd.notna(row[col])]
+                                    if len(sector_perf) > 0 and pd.notna(row[primary_return_col]):
+                                        rank = sum(1 for x in sector_perf if x < row[primary_return_col])
+                                        df_merged.at[idx, 'sector_momentum_rank'] = rank / len(sector_perf)
+                                except:
+                                    df_merged.at[idx, 'sector_momentum_rank'] = 0.5  # Neutral rank
+                
+                logger.info(f"Successfully merged sector features. Final shape: {df_merged.shape}")
+                return df_merged
+                
+            else:
+                logger.warning("No sector data available, skipping sector features")
+                # Add placeholder columns for consistency
+                sector_placeholders = [
+                    'sector_relative_strength', 'sector_relative_position', 'sector_momentum_rank'
+                ]
+                for col in sector_placeholders:
+                    df[col] = 0.0
+                return df
+                
+        except Exception as e:
+            logger.error(f"Error adding sector performance features: {e}")
+            return df
 
     def add_rolling_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -1482,6 +1781,20 @@ class FeatureEngineer:
                 logger.info("Adding historical options features...")
                 df = self.add_historical_options_features(df, ticker, mongo_client)
             
+            # Add short interest features (FIXED: Now properly integrated)
+            if ticker and mongo_client:
+                logger.info("Adding short interest features...")
+                df = self.add_short_interest_features(df, ticker, mongo_client)
+            
+            # Add macro economic features (FIXED: FRED data integration)
+            logger.info("Adding macro economic features...")
+            df = self.add_macro_economic_features(df, mongo_client or self.mongo_client)
+            
+            # Add sector performance features (FIXED: Sector ETF integration) 
+            if ticker:
+                logger.info("Adding sector performance features...")
+                df = self.add_sector_performance_features(df, ticker, mongo_client or self.mongo_client)
+            
             # NOTE: Economic calendar features are already included in sentiment_dict from sentiment pipeline
             # Skipping redundant economic calendar processing to avoid duplicate web scraping
             logger.info("Economic calendar features already included in sentiment data - skipping redundant processing")
@@ -1529,11 +1842,14 @@ class FeatureEngineer:
             feature_columns = feature_df.columns.tolist()
             organized_features = self._organize_features_by_type(feature_columns)
             
-            # Reorder DataFrame columns by feature type
+            # Reorder DataFrame columns by feature type (prioritize based on predictive importance)
             ordered_columns = (
                 organized_features['price_volume'] +
                 organized_features['financial_ratios'] +
                 organized_features['sentiment'] +
+                organized_features['short_interest'] +
+                organized_features['macro_economic'] +
+                organized_features['sector_performance'] +
                 organized_features['technical']
             )
             
@@ -1614,20 +1930,47 @@ class FeatureEngineer:
                         if len(available_features) > 0:
                             windowed_features[i, len(available_features):] = available_features[-1]
                 
-                # For LightGBM/XGBoost: We'll flatten in the predictor, keep 3D here for LSTM
+                # FIXED: Ensure proper alignment for different model types
                 features = windowed_features
                 
                 # Ensure targets align with features
                 if targets is not None and len(targets) > n_samples:
                     targets = targets[:n_samples]
+                    
+                logger.info(f"Windowed features shape: {features.shape}, targets shape: {targets.shape if targets is not None else 'None'}")
+            else:
+                # For next_day predictions, keep 2D but ensure alignment
+                if targets is not None and len(targets) != len(features):
+                    min_len = min(len(features), len(targets))
+                    features = features[:min_len]
+                    targets = targets[:min_len]
+                    
+                logger.info(f"2D features shape: {features.shape}, targets shape: {targets.shape if targets is not None else 'None'}")
             
+            # FIXED: Store feature columns for model consistency
+            if hasattr(self, 'feature_columns'):
+                self.feature_columns = feature_df.columns.tolist()
+            else:
+                self.feature_columns = feature_df.columns.tolist()
+            
+            # Validate final shapes
+            if features.shape[0] == 0:
+                raise ValueError("No valid features generated")
+            
+            if targets is not None and targets.shape[0] == 0:
+                raise ValueError("No valid targets generated")
+            
+            if targets is not None and features.shape[0] != targets.shape[0]:
+                raise ValueError(f"Feature-target shape mismatch: features {features.shape[0]}, targets {targets.shape[0]}")
+
             # Save feature pipeline for consistency if requested
             if save_pipeline and ticker and window:
                 self.save_feature_pipeline(
                     ticker=ticker,
                     window=window
                 )
-                    
+                
+            logger.info(f"Feature preparation completed successfully: features {features.shape}, targets {targets.shape if targets is not None else 'None'}")
             return features, targets
             
         except Exception as e:
@@ -1637,13 +1980,16 @@ class FeatureEngineer:
     def _organize_features_by_type(self, feature_columns: List[str]) -> Dict[str, List[str]]:
         """
         Organize features by type for the finance-aware model architecture.
-        Returns features grouped by: price_volume, financial_ratios, sentiment, technical
+        Returns features grouped by: price_volume, financial_ratios, sentiment, technical, macro_economic, sector_performance, short_interest
         """
         organized = {
             'price_volume': [],
             'financial_ratios': [],
             'sentiment': [],
-            'technical': []
+            'technical': [],
+            'macro_economic': [],
+            'sector_performance': [],
+            'short_interest': []
         }
         
         for col in feature_columns:
@@ -1673,6 +2019,31 @@ class FeatureEngineer:
                 'options_iv_skew', 'options_strike_price_bias'
             ]):
                 organized['sentiment'].append(col)
+            
+            # Macro Economic Features (FRED indicators, interest rates, GDP, etc.)
+            elif any(keyword in col_lower for keyword in [
+                'gdp', 'unemployment', 'inflation', 'interest_rates', 'consumer_confidence',
+                'industrial_production', 'retail_sales', 'fed', 'fomc', 'cpi', 'ppi',
+                'unemployment_rate', 'federal_funds', 'treasury', 'yield_curve',
+                'unrate', 'fedfunds', 'cpiaucsl', 'indpro', 'gs10', 'gs2',
+                '_trend_1m', '_trend_3m', '_acceleration', '_ma5', '_ma20'
+            ]):
+                organized['macro_economic'].append(col)
+                
+            # Sector Performance Features (ETF comparisons, sector rotation)
+            elif any(keyword in col_lower for keyword in [
+                'xlk', 'xlf', 'xle', 'xlv', 'xly', 'xlp', 'xli', 'xlb', 'xlu', 'xlre',
+                'sector_relative', 'sector_momentum', 'sector_rotation',
+                '_return_5d', '_return_20d', '_close', '_volume'
+            ]):
+                organized['sector_performance'].append(col)
+                
+            # Short Interest Features (bearish sentiment, squeeze potential)
+            elif any(keyword in col_lower for keyword in [
+                'short_interest', 'days_to_cover', 'short_volume', 'short_squeeze',
+                'squeeze_potential', 'short_ratio'
+            ]):
+                organized['short_interest'].append(col)
             
             # Technical indicators (INCLUDING OPTIONS TECHNICAL METRICS)
             elif any(keyword in col_lower for keyword in [
@@ -1733,7 +2104,14 @@ class FeatureEngineer:
                 # OPTIONS CRITICAL METRICS (Tier 2 - Very Important)
                 'options_put_call_volume_ratio', 'options_put_call_oi_ratio',
                 'options_avg_call_iv', 'options_avg_put_iv', 'options_iv_skew',
-                'options_fear_indicator', 'options_volatility_expectation'
+                'options_fear_indicator', 'options_volatility_expectation',
+                # SHORT INTEREST CRITICAL METRICS (Tier 2 - Very Important)
+                'short_interest_ratio', 'days_to_cover', 'short_squeeze_potential',
+                # MACRO ECONOMIC CRITICAL METRICS (Tier 2 - Very Important)
+                'gdp_trend_3m', 'unemployment_trend_1m', 'interest_rates_trend_1m',
+                'inflation_trend_1m', 'consumer_confidence', 'fed_policy_direction',
+                # SECTOR PERFORMANCE CRITICAL METRICS (Tier 2 - Very Important)
+                'sector_relative_strength', 'sector_momentum_rank', 'sector_rotation_signal'
             ]
             
             tier_3_supporting = [
@@ -1749,7 +2127,17 @@ class FeatureEngineer:
                 'options_total_volume', 'options_total_open_interest',
                 'options_weighted_delta', 'options_weighted_gamma', 'options_weighted_theta',
                 'options_itm_call_volume_pct', 'options_otm_put_volume_pct',
-                'options_strike_price_bias', 'options_volume_surge'
+                'options_strike_price_bias', 'options_volume_surge',
+                # SHORT INTEREST SUPPORTING METRICS (Tier 3 - Supporting)
+                'short_volume_ratio', 'short_interest_change', 'short_interest_ma5',
+                'short_interest_ma20', 'short_interest_trend',
+                # MACRO ECONOMIC SUPPORTING METRICS (Tier 3 - Supporting)
+                'gdp_trend_1m', 'unemployment_trend_3m', 'inflation_acceleration',
+                'industrial_production_trend', 'retail_sales_trend', 'cpi_trend',
+                'federal_funds_rate_change', 'yield_curve_slope',
+                # SECTOR PERFORMANCE SUPPORTING METRICS (Tier 3 - Supporting)
+                'sector_relative_position', 'xlk_return_5d', 'xlf_return_5d',
+                'xle_return_5d', 'xlv_return_5d', 'sector_etf_momentum'
             ]
             
             # Score each available feature
@@ -2448,3 +2836,106 @@ class FeatureEngineer:
             logger.error(f"Error selecting features: {str(e)}")
             self.feature_selector = None
             self.selected_features = None
+
+    def get_feature_documentation(self) -> Dict[str, Dict[str, str]]:
+        """
+        Comprehensive feature documentation for ML models to understand feature meanings and predictive significance.
+        This helps with model interpretability and AI explainability.
+        """
+        return {
+            'price_volume': {
+                'description': 'Core stock price and trading volume metrics',
+                'predictive_significance': 'Direct indicators of market demand and supply. High volume confirms price movements.',
+                'examples': ['Close', 'Open', 'High', 'Low', 'Volume', 'VWAP'],
+                'interpretation': 'Higher values generally indicate stronger market interest and price momentum'
+            },
+            
+            'financial_ratios': {
+                'description': 'Company valuation and financial health metrics',
+                'predictive_significance': 'Fundamental indicators of company value and growth potential. Critical for long-term predictions.',
+                'examples': ['PE_ratio', 'PB_ratio', 'ROE', 'debt_to_equity', 'current_ratio', 'profit_margin'],
+                'interpretation': 'Lower P/E ratios may indicate undervaluation, higher ROE indicates profitability efficiency'
+            },
+            
+            'sentiment': {
+                'description': 'Market sentiment and analyst recommendations',
+                'predictive_significance': 'Reflects market psychology and professional opinions. Leading indicator for price movements.',
+                'examples': ['analyst_recommendation_mean', 'news_sentiment_score', 'insider_sentiment', 'social_media_sentiment'],
+                'interpretation': 'Positive sentiment generally precedes price increases, negative sentiment precedes declines'
+            },
+            
+            'short_interest': {
+                'description': 'Bearish sentiment and short squeeze potential indicators',
+                'predictive_significance': 'High short interest can indicate bearish sentiment OR potential for short squeeze rally',
+                'examples': ['short_interest_ratio', 'days_to_cover', 'short_squeeze_potential', 'short_volume_ratio'],
+                'interpretation': 'High short interest (>20%) + low days to cover (<3) + rising price = potential short squeeze'
+            },
+            
+            'macro_economic': {
+                'description': 'Economic indicators affecting overall market conditions',
+                'predictive_significance': 'Macro trends drive sector rotation and overall market direction. Critical for timing.',
+                'examples': ['GDP_trend_3m', 'unemployment_rate', 'inflation_rate', 'interest_rates', 'fed_policy'],
+                'interpretation': 'Rising interest rates typically negative for growth stocks, positive for financial stocks'
+            },
+            
+            'sector_performance': {
+                'description': 'Relative performance vs sector ETFs and sector rotation signals',
+                'predictive_significance': 'Sector rotation drives individual stock performance. Relative strength is key predictor.',
+                'examples': ['sector_relative_strength', 'sector_momentum_rank', 'XLK_performance', 'sector_rotation_signal'],
+                'interpretation': 'Stocks outperforming their sector tend to continue outperforming in the short term'
+            },
+            
+            'technical': {
+                'description': 'Technical analysis indicators and price patterns',
+                'predictive_significance': 'Captures market momentum, trend strength, and reversal signals. Critical for timing entry/exit.',
+                'examples': ['RSI', 'MACD', 'SMA_20', 'Bollinger_Bands', 'ATR', 'support_resistance'],
+                'interpretation': 'RSI > 70 indicates overbought, RSI < 30 indicates oversold. MACD crossovers signal trend changes'
+            },
+            
+            'options_activity': {
+                'description': 'Options market activity indicating institutional sentiment and volatility expectations',
+                'predictive_significance': 'Options activity often precedes stock movements. High IV indicates expected volatility.',
+                'examples': ['put_call_ratio', 'implied_volatility', 'options_volume_surge', 'gamma_exposure'],
+                'interpretation': 'High put/call ratio indicates bearish sentiment. Rising IV indicates expected price movement'
+            }
+        }
+    
+    def get_feature_predictive_relationships(self) -> Dict[str, str]:
+        """
+        Explains how different feature combinations affect predictions for AI explainability.
+        """
+        return {
+            'bullish_signals': [
+                'Low PE ratio + High ROE + Positive analyst sentiment = Undervalued growth stock',
+                'High short interest + Rising price + High volume = Potential short squeeze',
+                'Strong sector performance + Relative outperformance = Sector momentum play',
+                'Low interest rates + High GDP growth = Growth stock favorable environment',
+                'RSI < 30 + Positive news sentiment = Oversold bounce opportunity',
+                'High call volume + Low put/call ratio = Institutional bullish positioning'
+            ],
+            
+            'bearish_signals': [
+                'High PE ratio + Declining earnings + Negative sentiment = Overvalued decline risk',
+                'Rising interest rates + High debt ratio = Interest rate sensitive stock risk',
+                'Sector underperformance + Weak relative strength = Sector rotation victim',
+                'High unemployment + Consumer discretionary stock = Economic weakness impact',
+                'RSI > 70 + High volume + Negative news = Overbought correction risk',
+                'High put volume + Rising implied volatility = Institutional bearish hedging'
+            ],
+            
+            'timing_signals': [
+                'MACD bullish crossover + Volume confirmation = Entry signal',
+                'Bollinger Band squeeze + Low volatility = Breakout setup',
+                'Support level hold + Positive sentiment = Bounce opportunity',
+                'Resistance break + High volume = Momentum continuation',
+                'Economic calendar event + High IV = Volatility opportunity'
+            ],
+            
+            'risk_signals': [
+                'High correlation with market + High beta = Systematic risk exposure',
+                'Low volume + Price divergence = Weak trend sustainability',
+                'High insider selling + Negative guidance = Fundamental deterioration',
+                'Yield curve inversion + Financial stock = Credit risk exposure',
+                'High options gamma + Low liquidity = Volatility amplification risk'
+            ]
+        }

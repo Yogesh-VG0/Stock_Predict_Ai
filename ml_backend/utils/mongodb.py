@@ -900,6 +900,65 @@ class MongoDBClient:
         except Exception as e:
             logger.error(f"Error getting prediction history for {ticker}: {e}")
             return []
+    
+    def store_sector_data(self, etf: str, data_dict: Dict) -> bool:
+        """Store sector ETF data in MongoDB."""
+        try:
+            collection = self.db['sector_data']
+            
+            doc = {
+                'etf': etf,
+                'data': data_dict,
+                'timestamp': datetime.utcnow(),
+                'last_updated': datetime.utcnow()
+            }
+            
+            # Use upsert to update if exists
+            result = collection.replace_one(
+                {'etf': etf},
+                doc,
+                upsert=True
+            )
+            
+            logger.info(f"Stored sector data for {etf} with {len(data_dict)} data points")
+            return result.acknowledged
+            
+        except Exception as e:
+            logger.error(f"Error storing sector data for {etf}: {e}")
+            return False
+    
+    def get_sector_data(self, etf: str, start_date=None, end_date=None) -> Dict:
+        """Get sector ETF data from MongoDB."""
+        try:
+            collection = self.db['sector_data']
+            query = {'etf': etf}
+            
+            doc = collection.find_one(query, sort=[('timestamp', -1)])
+            
+            if doc and 'data' in doc:
+                data = doc['data']
+                
+                # Filter by date range if specified
+                if start_date and end_date:
+                    start_str = start_date.strftime('%Y-%m-%d') if hasattr(start_date, 'strftime') else str(start_date)
+                    end_str = end_date.strftime('%Y-%m-%d') if hasattr(end_date, 'strftime') else str(end_date)
+                    
+                    filtered_data = {
+                        date: value for date, value in data.items()
+                        if start_str <= date <= end_str
+                    }
+                    logger.info(f"Retrieved filtered sector data for {etf}: {len(filtered_data)} points")
+                    return filtered_data
+                    
+                logger.info(f"Retrieved sector data for {etf}: {len(data)} points")
+                return data
+                
+            logger.warning(f"No sector data found for {etf}")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Error getting sector data for {etf}: {e}")
+            return {}
 
 if __name__ == "__main__":
     # Test MongoDB connection
