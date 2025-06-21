@@ -85,6 +85,33 @@ JWT_SECRET=your_jwt_secret
 REDIS_URL=redis://localhost:6379
 ```
 
+# Environment Configuration
+
+Create a `.env` file with the following API keys:
+
+```bash
+# MongoDB Configuration
+MONGODB_URI=mongodb://localhost:27017/stockpredict
+
+# Financial Data APIs
+ALPHA_VANTAGE_API_KEY=your_alpha_vantage_key_here
+FINNHUB_API_KEY=your_finnhub_key_here
+FMP_API_KEY=your_fmp_key_here
+
+# Real-Time Price APIs (Primary)
+STOCKDATA_API_KEY=your_stockdata_api_key_here    # Primary real-time prices (IEX data)
+MARKETSTACK_API_KEY=your_marketstack_api_key_here # Backup EOD data
+
+# Reddit API (for sentiment analysis)
+REDDIT_CLIENT_ID=your_reddit_client_id
+REDDIT_CLIENT_SECRET=your_reddit_client_secret
+REDDIT_USER_AGENT=stockpredict-ai/1.0
+
+# Other configurations
+DEBUG=false
+LOG_LEVEL=INFO
+```
+
 ### **Running the Application**
 
 **1. Start MongoDB and Redis**

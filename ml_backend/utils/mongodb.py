@@ -107,7 +107,7 @@ class MongoDBClient:
             ])
             
             # Sentiment data collection indexes
-            self.collections[MONGO_COLLECTIONS["sentiment_data"]].create_index([
+            self.db['sentiment'].create_index([
                 ("ticker", ASCENDING),
                 ("last_updated", DESCENDING)
             ])
@@ -149,7 +149,7 @@ class MongoDBClient:
             logger.warning(f"Could not set up schema validation: {e}")
 
     def store_predictions(self, ticker: str, predictions: Dict[str, Dict[str, float]]) -> bool:
-        """Store predictions in bulk."""
+        """Store complete predictions data in MongoDB with all details."""
         try:
             collection = self.collections[MONGO_COLLECTIONS["predictions"]]
             
@@ -158,21 +158,63 @@ class MongoDBClient:
             timestamp = datetime.utcnow()
             
             for window, data in predictions.items():
+                # Store COMPLETE prediction data instead of simplified version
                 document = {
                     "ticker": ticker,
                     "window": window,
-                    "prediction": float(data["prediction"]),
-                    "confidence": float(data["confidence"]),
-                    "timestamp": timestamp
+                    "timestamp": timestamp,
+                    
+                    # Core prediction data
+                    "predicted_price": data.get("predicted_price"),
+                    "price_change": data.get("price_change"),
+                    "current_price": data.get("current_price"),
+                    "confidence": float(data.get("confidence", 0.0)),
+                    
+                    # Price range data
+                    "price_range": data.get("price_range", {}),
+                    
+                    # Individual model predictions
+                    "model_predictions": data.get("model_predictions", {}),
+                    
+                    # Ensemble weights
+                    "ensemble_weights": data.get("ensemble_weight", data.get("ensemble_weights", {})),
+                    
+                    # Backward compatibility - keep old prediction field
+                    "prediction": float(data.get("price_change", 0.0))
                 }
-                # Add range if present
-                if "range" in data:
-                    document["range"] = data["range"]
+                
+                # Add any additional fields that might be present, excluding duplicates
+                excluded_fields = ['prediction', 'predicted_price', 'price_change', 'current_price', 
+                                 'confidence', 'price_range', 'model_predictions', 'ensemble_weight', 'ensemble_weights']
+                
+                for key, value in data.items():
+                    if key not in document and key not in excluded_fields:
+                        try:
+                            # Ensure all numeric values are properly converted
+                            if isinstance(value, (int, float)):
+                                document[key] = float(value)
+                            elif isinstance(value, dict):
+                                document[key] = value
+                            elif isinstance(value, list):
+                                document[key] = value
+                            else:
+                                document[key] = str(value)
+                        except Exception as e:
+                            logger.warning(f"Could not store field {key} for {ticker}-{window}: {e}")
+                
                 documents.append(document)
             
             # Bulk insert
             result = collection.insert_many(documents)
-            logger.info(f"Stored {len(result.inserted_ids)} predictions for {ticker}")
+            logger.info(f"Stored {len(result.inserted_ids)} complete predictions for {ticker}")
+            
+            # Log what was stored for verification
+            for doc in documents:
+                logger.info(f"Stored prediction for {ticker}-{doc['window']}: "
+                          f"Price ${doc.get('predicted_price', 'N/A')}, "
+                          f"Change ${doc.get('price_change', 'N/A')}, "
+                          f"Confidence {doc.get('confidence', 'N/A'):.3f}")
+            
             return True
             
         except BulkWriteError as e:
@@ -180,6 +222,8 @@ class MongoDBClient:
             return False
         except Exception as e:
             logger.error(f"Error storing predictions for {ticker}: {str(e)}")
+            import traceback
+            logger.error(f"Full traceback: {traceback.format_exc()}")
             return False
 
     def store_historical_data(self, ticker: str, data: pd.DataFrame) -> bool:
@@ -222,24 +266,58 @@ class MongoDBClient:
         collection.insert_one(sentiment)
 
     def get_latest_predictions(self, ticker: str) -> Dict[str, Dict[str, float]]:
-        """Get latest predictions for a ticker."""
+        """Get latest complete predictions for a ticker."""
         try:
             collection = self.collections[MONGO_COLLECTIONS["predictions"]]
             
-            # Find latest predictions
-            cursor = collection.find(
+            # Find latest predictions for each window
+            predictions = {}
+            
+            # Get the most recent timestamp
+            latest_doc = collection.find_one(
                 {"ticker": ticker},
-                sort=[("timestamp", DESCENDING)],
-                limit=len(PREDICTION_WINDOWS)
+                sort=[("timestamp", DESCENDING)]
             )
             
-            predictions = {}
-            for doc in cursor:
-                predictions[doc["window"]] = {
-                    "prediction": doc["prediction"],
-                    "confidence": doc["confidence"]
-                }
+            if not latest_doc:
+                return {}
             
+            latest_timestamp = latest_doc["timestamp"]
+            
+            # Get all predictions from the latest timestamp
+            cursor = collection.find(
+                {
+                    "ticker": ticker,
+                    "timestamp": latest_timestamp
+                }
+            )
+            
+            for doc in cursor:
+                window = doc["window"]
+                
+                # Return COMPLETE prediction data
+                prediction_data = {
+                    "predicted_price": doc.get("predicted_price"),
+                    "price_change": doc.get("price_change"),
+                    "current_price": doc.get("current_price"),
+                    "confidence": doc.get("confidence", 0.0),
+                    "price_range": doc.get("price_range", {}),
+                    "model_predictions": doc.get("model_predictions", {}),
+                    "ensemble_weights": doc.get("ensemble_weights", {}),
+                    "timestamp": doc.get("timestamp"),
+                    
+                    # Backward compatibility
+                    "prediction": doc.get("prediction", doc.get("price_change", 0.0))
+                }
+                
+                # Add any additional fields that were stored
+                for key, value in doc.items():
+                    if key not in prediction_data and key not in ['_id', 'ticker', 'window']:
+                        prediction_data[key] = value
+                
+                predictions[window] = prediction_data
+            
+            logger.info(f"Retrieved {len(predictions)} complete predictions for {ticker}")
             return predictions
             
         except Exception as e:
@@ -599,7 +677,7 @@ class MongoDBClient:
     def optimize_sentiment_storage(self, ticker: str, sentiment: dict):
         """Optimized sentiment storage with deduplication and compression."""
         try:
-            collection = self.collections[MONGO_COLLECTIONS["sentiment_data"]]
+            collection = self.db['sentiment']
             
             # Check for recent duplicate data
             recent_sentiment = collection.find_one(
@@ -717,7 +795,7 @@ class MongoDBClient:
         """Create advanced indexes for optimal performance."""
         try:
             # Sentiment data indexes
-            sentiment_collection = self.collections[MONGO_COLLECTIONS["sentiment_data"]]
+            sentiment_collection = self.db['sentiment']
             sentiment_collection.create_index([
                 ("ticker", 1), 
                 ("timestamp", -1)
@@ -743,6 +821,85 @@ class MongoDBClient:
             
         except Exception as e:
             logger.error(f"Error creating advanced indexes: {e}")
+
+    def store_prediction_explanation(self, ticker: str, window: str, explanation_data: Dict) -> bool:
+        """Store prediction explanation data including feature importance and LLM explanations."""
+        try:
+            collection = self.db['prediction_explanations']
+            
+            document = {
+                "ticker": ticker,
+                "window": window,
+                "timestamp": datetime.utcnow(),
+                "explanation_data": explanation_data
+            }
+            
+            result = collection.insert_one(document)
+            logger.info(f"Stored prediction explanation for {ticker}-{window}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error storing prediction explanation for {ticker}-{window}: {e}")
+            return False
+
+    def get_prediction_explanation(self, ticker: str, window: str) -> Dict:
+        """Get latest prediction explanation for a ticker and window."""
+        try:
+            collection = self.db['prediction_explanations']
+            
+            explanation = collection.find_one(
+                {"ticker": ticker, "window": window},
+                sort=[("timestamp", DESCENDING)]
+            )
+            
+            if explanation:
+                return explanation.get("explanation_data", {})
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Error getting prediction explanation for {ticker}-{window}: {e}")
+            return {}
+
+    def store_complete_prediction_session(self, ticker: str, session_data: Dict) -> bool:
+        """Store complete prediction session with all models, features, and explanations."""
+        try:
+            collection = self.db['prediction_sessions']
+            
+            document = {
+                "ticker": ticker,
+                "timestamp": datetime.utcnow(),
+                "session_id": f"{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                **session_data
+            }
+            
+            result = collection.insert_one(document)
+            logger.info(f"Stored complete prediction session for {ticker}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error storing prediction session for {ticker}: {e}")
+            return False
+
+    def get_prediction_history(self, ticker: str, days: int = 30) -> List[Dict]:
+        """Get prediction history for a ticker over specified days."""
+        try:
+            collection = self.collections[MONGO_COLLECTIONS["predictions"]]
+            
+            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            
+            cursor = collection.find(
+                {
+                    "ticker": ticker,
+                    "timestamp": {"$gte": cutoff_date}
+                },
+                sort=[("timestamp", DESCENDING)]
+            )
+            
+            return list(cursor)
+            
+        except Exception as e:
+            logger.error(f"Error getting prediction history for {ticker}: {e}")
+            return []
 
 if __name__ == "__main__":
     # Test MongoDB connection

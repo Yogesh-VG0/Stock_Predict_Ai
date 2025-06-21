@@ -328,24 +328,48 @@ async def train_all_models():
                                 close_idx = app.state.feature_engineer.feature_columns.index('Close') if hasattr(app.state.feature_engineer, 'feature_columns') and 'Close' in app.state.feature_engineer.feature_columns else -1
                                 raw_current_price = float(latest_features[close_idx]) if close_idx != -1 else None
                                 logger.info(f"Using features array for Close price for {ticker}: {raw_current_price}")
-                        predictions = app.state.stock_predictor.predict_all_windows(latest_features, ticker, raw_current_price=raw_current_price)
-                        # Ensure predictions dict contains only floats
-                        for window, vals in predictions.items():
-                            try:
-                                predictions[window]["prediction"] = float(predictions[window]["prediction"])
-                            except Exception:
-                                predictions[window]["prediction"] = 0.0
-                            try:
-                                predictions[window]["confidence"] = float(predictions[window]["confidence"])
-                            except Exception:
-                                predictions[window]["confidence"] = 0.0
-                        logger.info(f"Storing predictions for {ticker}: {predictions}")
-                        if predictions and all("prediction" in v and "confidence" in v for v in predictions.values()):
+                        predictions = app.state.stock_predictor.predict_all_windows(ticker, df)
+                        # Ensure predictions dict contains valid values before storing
+                        if predictions:
+                            for window, vals in predictions.items():
+                                # Validate prediction structure
+                                if not isinstance(vals, dict):
+                                    logger.error(f"Invalid prediction structure for {ticker}-{window}: {vals}")
+                                    continue
+                                    
+                                # Ensure prediction value exists and is valid
+                                if "price_change" in vals:
+                                    try:
+                                        predictions[window]["prediction"] = float(vals["price_change"])
+                                    except (ValueError, TypeError) as e:
+                                        logger.error(f"Invalid price_change for {ticker}-{window}: {vals['price_change']}, error: {e}")
+                                        predictions[window]["prediction"] = 0.0
+                                elif "prediction" in vals:
+                                    try:
+                                        predictions[window]["prediction"] = float(vals["prediction"])
+                                    except (ValueError, TypeError) as e:
+                                        logger.error(f"Invalid prediction for {ticker}-{window}: {vals['prediction']}, error: {e}")
+                                        predictions[window]["prediction"] = 0.0
+                                else:
+                                    logger.error(f"No prediction or price_change found for {ticker}-{window}: {vals}")
+                                    predictions[window]["prediction"] = 0.0
+                                
+                                # Ensure confidence value exists and is valid
+                                try:
+                                    predictions[window]["confidence"] = float(vals.get("confidence", 0.0))
+                                except (ValueError, TypeError) as e:
+                                    logger.error(f"Invalid confidence for {ticker}-{window}: {vals.get('confidence')}, error: {e}")
+                                    predictions[window]["confidence"] = 0.0
+                        logger.info(f"Storing complete predictions for {ticker}: {predictions}")
+                        if predictions:
+                            # Store complete prediction data (the new store_predictions method handles all fields)
                             result = app.state.mongo_client.store_predictions(ticker, predictions)
-                            if not result:
+                            if result:
+                                logger.info(f"Successfully stored complete predictions for {ticker}")
+                            else:
                                 logger.error(f"Failed to store predictions for {ticker}")
                         else:
-                            logger.warning(f"Predictions for {ticker} are empty or malformed: {predictions}")
+                            logger.warning(f"No predictions generated for {ticker}")
                     except Exception as e:
                         logger.error(f"Error predicting/storing for {ticker}: {str(e)}")
                 else:
@@ -1029,6 +1053,84 @@ async def debug_sec_filing_extraction(ticker: str):
     except Exception as e:
         logger.error(f"Error in SEC filing debug for {ticker}: {e}")
         return {"error": str(e), "ticker": ticker}
+
+@app.get("/api/v1/predictions/{ticker}/complete")
+async def get_complete_predictions(ticker: str):
+    """Get complete prediction data for a ticker including all fields."""
+    try:
+        ticker = ticker.upper()
+        predictions = app.state.mongo_client.get_latest_predictions(ticker)
+        
+        if not predictions:
+            raise HTTPException(status_code=404, detail=f"No predictions found for {ticker}")
+        
+        return {
+            "ticker": ticker,
+            "predictions": predictions,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting complete predictions for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/predictions/{ticker}/explanation")
+async def get_prediction_explanation(ticker: str, window: str = "next_day"):
+    """Get prediction explanation for a ticker and window."""
+    try:
+        ticker = ticker.upper()
+        explanation = app.state.mongo_client.get_prediction_explanation(ticker, window)
+        
+        if not explanation:
+            raise HTTPException(status_code=404, detail=f"No explanation found for {ticker}-{window}")
+        
+        return {
+            "ticker": ticker,
+            "window": window,
+            "explanation": explanation,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting prediction explanation for {ticker}-{window}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/predictions/{ticker}/history")
+async def get_prediction_history(ticker: str, days: int = 30):
+    """Get prediction history for a ticker over specified days."""
+    try:
+        ticker = ticker.upper()
+        history = app.state.mongo_client.get_prediction_history(ticker, days)
+        
+        return {
+            "ticker": ticker,
+            "days": days,
+            "history": history,
+            "count": len(history),
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting prediction history for {ticker}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/predictions/bulk/complete")
+async def get_bulk_complete_predictions(tickers: str):
+    """Get complete predictions for multiple tickers."""
+    try:
+        ticker_list = [t.strip().upper() for t in tickers.split(',')]
+        
+        all_predictions = {}
+        for ticker in ticker_list:
+            predictions = app.state.mongo_client.get_latest_predictions(ticker)
+            if predictions:
+                all_predictions[ticker] = predictions
+        
+        return {
+            "tickers": ticker_list,
+            "predictions": all_predictions,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error getting bulk complete predictions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

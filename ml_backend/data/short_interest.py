@@ -1,16 +1,18 @@
 """
-Module for analyzing short interest data by scraping from Nasdaq.
+Module for analyzing short interest data from Nasdaq API.
 """
 
 import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Optional, List, Any
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from ..utils.mongodb import MongoDBClient
-from playwright.async_api import async_playwright
 import aiohttp
+import json
+
+# Standard imports (playwright and bs4 methods are deprecated)
+from bs4 import BeautifulSoup
 import re
 
 # Load environment variables
@@ -70,25 +72,37 @@ class ShortInterestAnalyzer:
                             short_data = []
                             
                             if isinstance(data, dict):
-                                # Look for data in various possible locations
-                                possible_data_keys = ['data', 'shortInterestData', 'rows', 'table', 'results']
+                                # Look for data in the new Nasdaq API structure
                                 table_data = None
                                 
-                                for key in possible_data_keys:
-                                    if key in data and data[key]:
-                                        table_data = data[key]
-                                        logger.info(f"📈 Found data under key '{key}': {type(table_data)}")
-                                        break
-                                
-                                if not table_data and 'data' in data:
-                                    # Check if data has nested structure
+                                # First try the new structure: data.shortInterestTable.rows
+                                if 'data' in data and isinstance(data['data'], dict):
                                     data_section = data['data']
-                                    if isinstance(data_section, dict):
-                                        for key in possible_data_keys:
-                                            if key in data_section and data_section[key]:
-                                                table_data = data_section[key]
-                                                logger.info(f"📈 Found nested data under 'data.{key}': {type(table_data)}")
-                                                break
+                                    if 'shortInterestTable' in data_section and isinstance(data_section['shortInterestTable'], dict):
+                                        short_table = data_section['shortInterestTable']
+                                        if 'rows' in short_table and isinstance(short_table['rows'], list):
+                                            table_data = short_table['rows']
+                                            logger.info(f"📈 Found data under 'data.shortInterestTable.rows': {len(table_data)} records")
+                                
+                                # Fallback to old structure checks
+                                if not table_data:
+                                    possible_data_keys = ['data', 'shortInterestData', 'rows', 'table', 'results']
+                                    
+                                    for key in possible_data_keys:
+                                        if key in data and data[key]:
+                                            table_data = data[key]
+                                            logger.info(f"📈 Found data under key '{key}': {type(table_data)}")
+                                            break
+                                    
+                                    if not table_data and 'data' in data:
+                                        # Check if data has nested structure
+                                        data_section = data['data']
+                                        if isinstance(data_section, dict):
+                                            for key in possible_data_keys:
+                                                if key in data_section and data_section[key]:
+                                                    table_data = data_section[key]
+                                                    logger.info(f"📈 Found nested data under 'data.{key}': {type(table_data)}")
+                                                    break
                                 
                                 if table_data:
                                     if isinstance(table_data, list):
@@ -96,19 +110,28 @@ class ShortInterestAnalyzer:
                                         for i, record in enumerate(table_data):
                                             try:
                                                 if isinstance(record, dict):
-                                                    # Extract fields from dict record
+                                                    # Extract fields from dict record (handle both old and new field names)
                                                     settlement_date = record.get('settlementDate', record.get('date', ''))
-                                                    short_interest = record.get('shortInterest', record.get('short_interest', 0))
-                                                    avg_volume = record.get('avgDailyShareVolumeInThousands', record.get('avg_volume', 0))
-                                                    days_to_cover = record.get('daysToCoVerShortInterest', record.get('days_to_cover', 0))
+                                                    
+                                                    # Handle both 'interest' (new) and 'shortInterest' (old) field names
+                                                    short_interest = record.get('interest', record.get('shortInterest', record.get('short_interest', 0)))
+                                                    
+                                                    # Handle both 'avgDailyShareVolume' (new) and 'avgDailyShareVolumeInThousands' (old)
+                                                    avg_volume = record.get('avgDailyShareVolume', record.get('avgDailyShareVolumeInThousands', record.get('avg_volume', 0)))
+                                                    
+                                                    # Handle both 'daysToCover' (new) and 'daysToCoVerShortInterest' (old)
+                                                    days_to_cover = record.get('daysToCover', record.get('daysToCoVerShortInterest', record.get('days_to_cover', 0)))
                                                     
                                                     # Clean and convert data
                                                     if isinstance(short_interest, str):
                                                         short_interest = int(short_interest.replace(',', '').replace('$', ''))
                                                     if isinstance(avg_volume, str):
                                                         avg_volume = int(avg_volume.replace(',', '').replace('$', ''))
-                                                    if isinstance(days_to_cover, str):
-                                                        days_to_cover = float(days_to_cover.replace(',', '').replace('$', ''))
+                                                    if isinstance(days_to_cover, (str, int, float)):
+                                                        if isinstance(days_to_cover, str):
+                                                            days_to_cover = float(days_to_cover.replace(',', '').replace('$', ''))
+                                                        else:
+                                                            days_to_cover = float(days_to_cover)
                                                     
                                                     data_point = {
                                                         'settlementDate': settlement_date,
@@ -190,382 +213,16 @@ class ShortInterestAnalyzer:
 
     async def fetch_short_interest(self, ticker: str) -> List[Dict]:
         """
-        Fetch short interest data using multiple strategies:
-        1. Direct API call (fastest, most reliable)
-        2. Enhanced Playwright scraping (fallback)
-        3. Finviz fallback (final fallback)
+        Fetch short interest data using the new Nasdaq API approach.
+        This is the main method that should be used.
         """
-        
-        # Strategy 1: Try direct API first
-        logger.info(f"🎯 Strategy 1: Attempting direct Nasdaq API for {ticker}")
-        short_data = await self.fetch_short_interest_direct_api(ticker)
-        
-        if short_data:
-            logger.info(f"✅ Direct API successful - returning {len(short_data)} records")
-            return short_data
-        
-        # Strategy 2: Enhanced Playwright scraping fallback
-        logger.info(f"🎯 Strategy 2: Falling back to enhanced Playwright scraping for {ticker}")
-        short_data = await self.fetch_short_interest_enhanced_playwright(ticker)
-        
-        if short_data:
-            logger.info(f"✅ Playwright scraping successful - returning {len(short_data)} records")
-            return short_data
-        
-        # Strategy 3: Finviz fallback (final fallback)
-        logger.info(f"🎯 Strategy 3: Final fallback to Finviz for {ticker}")
-        short_data = await self.fetch_finviz_short_interest(ticker)
-        
-        if short_data:
-            logger.info(f"✅ Finviz fallback successful - returning {len(short_data)} records")
-            return short_data
-        
-        logger.warning(f"❌ All strategies failed for {ticker}")
-        return []
-
-    async def fetch_short_interest_enhanced_playwright(self, ticker: str) -> List[Dict]:
-        """
-        Enhanced Playwright scraping method (moved from main fetch_short_interest method).
-        """
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)  # Non-headless for debugging
-            
-            try:
-                page = await browser.new_page()
-                
-                # Set up network monitoring to catch API calls
-                api_responses = []
-                
-                async def handle_response(response):
-                    url = response.url
-                    if any(keyword in url.lower() for keyword in ['short', 'interest', 'api', 'data']):
-                        try:
-                            # Try to get response text
-                            if response.status == 200:
-                                content = await response.text()
-                                api_responses.append({
-                                    'url': url,
-                                    'status': response.status,
-                                    'content': content[:1000],  # First 1000 chars for debugging
-                                    'headers': dict(response.headers)
-                                })
-                                logger.info(f"📡 Captured API response: {url}")
-                        except Exception as e:
-                            logger.debug(f"Could not capture response from {url}: {e}")
-                
-                page.on("response", handle_response)
-                
-                url = f"https://www.nasdaq.com/market-activity/stocks/{ticker.lower()}/short-interest"
-                logger.info(f"🔗 Navigating to: {url}")
-                logger.info("🖥️ Browser is visible - monitoring dynamic content loading...")
-                
-                try:
-                    await page.goto(url, wait_until="networkidle", timeout=60000)  # Wait for network to be idle
-                    logger.info(f"✅ Successfully loaded page for {ticker}")
-                    
-                    # Wait for initial page load and JavaScript execution
-                    await page.wait_for_timeout(5000)
-                    
-                    # Enhanced scrolling to trigger lazy loading
-                    logger.info("📜 Scrolling to trigger dynamic content loading...")
-                    
-                    # Progressive scrolling to trigger all dynamic content
-                    for i in range(10):  # Increased scroll iterations
-                        await page.evaluate("window.scrollBy(0, 500)")
-                        await page.wait_for_timeout(1500)  # Longer wait between scrolls
-                    
-                    # Scroll to bottom to ensure all content loads
-                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    await page.wait_for_timeout(5000)  # Longer wait after bottom scroll
-                    
-                    # Look for and scroll to short interest section specifically
-                    try:
-                        # Try multiple selector strategies for the short interest section
-                        section_selectors = [
-                            'text="Short Interest"',
-                            '[data-module="ShortInterest"]',
-                            '.short-interest',
-                            'div:has-text("Short Interest")',
-                            'nsdq-table',
-                            '[data-table-id="short-interest"]'
-                        ]
-                        
-                        for selector in section_selectors:
-                            try:
-                                section = await page.query_selector(selector)
-                                if section:
-                                    await section.scroll_into_view_if_needed()
-                                    logger.info(f"🎯 Found and scrolled to section using: {selector}")
-                                    await page.wait_for_timeout(3000)
-                                    break
-                            except:
-                                continue
-                    except:
-                        logger.info("⚠️ Could not find specific sections, continuing...")
-                    
-                    # Wait for dynamic content to stabilize with longer timeout
-                    await page.wait_for_timeout(8000)
-                    
-                    # ✅ Try to wait for specific network requests to complete
-                    logger.info("🌐 Waiting for potential data API calls...")
-                    await page.wait_for_timeout(5000)  # Additional wait for API calls
-                    
-                    # ✅ Enhanced JavaScript evaluation with more aggressive DOM traversal
-                    logger.info("🚀 Using enhanced JavaScript evaluation to extract table data...")
-                    
-                    # Extract data using multiple JavaScript strategies with longer timeouts
-                    row_data = await page.evaluate('''
-                        async () => {
-                            console.log("🔍 Starting enhanced JavaScript table extraction...");
-                            
-                            // Wait a bit more for any pending DOM updates
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-                            
-                            // Strategy 1: Look for standard table rows with part attributes
-                            let rows = Array.from(document.querySelectorAll('div[part="table-row"]'));
-                            console.log(`Strategy 1: Found ${rows.length} rows with part="table-row"`);
-                            
-                            if (rows.length === 0) {
-                                // Strategy 2: Look for any table-like structures
-                                rows = Array.from(document.querySelectorAll('div.table-row, tr, [role="row"]'));
-                                console.log(`Strategy 2: Found ${rows.length} table-like elements`);
-                            }
-                            
-                            if (rows.length === 0) {
-                                // Strategy 3: Look inside any nsdq components
-                                const nsdqElements = document.querySelectorAll('nsdq-table, nsdq-my-quotes, [data-module]');
-                                console.log(`Strategy 3: Found ${nsdqElements.length} nsdq elements`);
-                                
-                                for (const elem of nsdqElements) {
-                                    const innerRows = elem.querySelectorAll('div, tr, [role="row"]');
-                                    rows = rows.concat(Array.from(innerRows));
-                                }
-                                console.log(`Strategy 3: Total rows after nsdq search: ${rows.length}`);
-                            }
-                            
-                            if (rows.length === 0) {
-                                // Strategy 4: Look for any div containing date patterns using more flexible regex
-                                const allElements = Array.from(document.querySelectorAll('*'));
-                                rows = allElements.filter(elem => {
-                                    const text = elem.textContent || '';
-                                    return /\\d{1,2}[\/\\-]\\d{1,2}[\/\\-]\\d{4}/.test(text) && 
-                                           text.length < 500 && // Avoid large containers
-                                           /\\d{1,3}(?:,\\d{3})*/.test(text); // Must also contain formatted numbers
-                                });
-                                console.log(`Strategy 4: Found ${rows.length} elements with date+number patterns`);
-                            }
-                            
-                            if (rows.length === 0) {
-                                // Strategy 5: Last resort - check if there's any structured data in the page
-                                const scripts = Array.from(document.querySelectorAll('script'));
-                                for (const script of scripts) {
-                                    if (script.textContent) {
-                                        const text = script.textContent;
-                                        if (text.includes('short') && text.includes('interest') && text.includes('{')) {
-                                            console.log("Found potential JSON data in script tag");
-                                            // Try to extract JSON data
-                                            const jsonMatches = text.match(/\\{[^{}]*"[^"]*short[^"]*"[^{}]*\\}/gi);
-                                            if (jsonMatches) {
-                                                console.log(`Found ${jsonMatches.length} potential JSON objects`);
-                                                return jsonMatches.map((match, i) => ({
-                                                    cells: [match],
-                                                    rowIndex: i,
-                                                    strategy: 'json_script',
-                                                    rawData: match
-                                                }));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            
-                            const extractedData = [];
-                            
-                            for (let i = 0; i < Math.min(rows.length, 50); i++) {  // Limit to 50 to avoid processing too much
-                                const row = rows[i];
-                                
-                                // Try to find cells within this row
-                                let cells = row.querySelectorAll('div[part="table-cell"], td, th, .cell, [data-cell]');
-                                
-                                if (cells.length === 0) {
-                                    // Fallback: look for any child elements that might be cells
-                                    cells = row.querySelectorAll('div, span, td, th');
-                                    // Filter out elements that are likely not data cells
-                                    cells = Array.from(cells).filter(cell => {
-                                        const text = cell.textContent.trim();
-                                        return text.length > 0 && text.length < 100 && !/\\n/.test(text);
-                                    });
-                                }
-                                
-                                if (cells.length === 0) {
-                                    // Last resort: split text content
-                                    const text = row.textContent.trim();
-                                    if (text && text.length < 200) {
-                                        // More sophisticated text splitting
-                                        const parts = text.split(/\\s{2,}|\\t|\\|/).filter(p => p.trim());
-                                        if (parts.length >= 3) {
-                                            cells = parts.map(p => ({ textContent: p.trim() }));
-                                        }
-                                    }
-                                }
-                                
-                                if (cells.length >= 3) {  // Lowered requirement from 4 to 3
-                                    const cellTexts = Array.from(cells).map(cell => 
-                                        (cell.textContent || cell.innerText || '').trim()
-                                    ).filter(text => text.length > 0);
-                                    
-                                    // More flexible validation for short interest data
-                                    const hasDate = cellTexts.some(text => /\\d{1,2}[\/\\-]\\d{1,2}[\/\\-]\\d{4}/.test(text));
-                                    const hasNumbers = cellTexts.filter(text => /\\d{1,3}(?:,\\d{3})*/.test(text)).length >= 2;
-                                    
-                                    if (hasDate || (hasNumbers && cellTexts.length >= 3)) {
-                                        extractedData.push({
-                                            cells: cellTexts,
-                                            rowIndex: i,
-                                            strategy: cells.length > 0 ? 'enhanced_cells' : 'enhanced_text_split',
-                                            hasDate: hasDate,
-                                            hasNumbers: hasNumbers,
-                                            elementTag: row.tagName || 'unknown'
-                                        });
-                                        console.log(`✅ Enhanced extracted row ${i}: ${cellTexts.slice(0, 4).join(' | ')}`);
-                                    }
-                                }
-                            }
-                            
-                            console.log(`🎯 Enhanced extraction found: ${extractedData.length} potential rows`);
-                            return extractedData;
-                        }
-                    ''')
-                    
-                    # ✅ Process extracted data with enhanced validation
-                    short_data = []
-                    
-                    if row_data:
-                        logger.info(f"🎯 Enhanced JavaScript extracted {len(row_data)} potential rows")
-                        
-                        for row_info in row_data:
-                            try:
-                                cells = row_info['cells']
-                                row_index = row_info['rowIndex']
-                                strategy = row_info['strategy']
-                                
-                                # Enhanced data processing
-                                if strategy == 'json_script':
-                                    # Handle JSON data from script tags
-                                    try:
-                                        import json
-                                        json_data = json.loads(cells[0])
-                                        logger.info(f"📊 Found JSON data: {json_data}")
-                                        # Process JSON data if it contains relevant information
-                                    except:
-                                        continue
-                                
-                                elif len(cells) >= 3:
-                                    # Look for date and numeric patterns more flexibly
-                                    date_cell = None
-                                    numeric_cells = []
-                                    
-                                    for cell in cells:
-                                        if re.search(r'\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}', cell):
-                                            date_cell = cell
-                                        elif re.search(r'\d{1,3}(?:,\d{3})*(?:\.\d+)?', cell):
-                                            numeric_cells.append(cell)
-                                    
-                                    if date_cell and len(numeric_cells) >= 2:
-                                        try:
-                                            # Clean and convert the data
-                                            settlement_date = date_cell
-                                            
-                                            # Extract numbers from numeric cells
-                                            numbers = []
-                                            for cell in numeric_cells[:3]:  # Take first 3 numeric values
-                                                clean_num = re.sub(r'[^\d.]', '', cell)
-                                                if clean_num:
-                                                    numbers.append(float(clean_num))
-                                            
-                                            if len(numbers) >= 2:
-                                                short_interest = int(numbers[0])
-                                                avg_volume = int(numbers[1]) if len(numbers) > 1 else 0
-                                                days_to_cover = numbers[2] if len(numbers) > 2 else 0.0
-                                                
-                                                data_point = {
-                                                    'settlementDate': settlement_date,
-                                                    'shortInterest': short_interest,
-                                                    'avgDailyShareVolumeInThousands': avg_volume,
-                                                    'daysToCoVerShortInterest': days_to_cover,
-                                                    'source': f'enhanced_{strategy}',
-                                                    'ticker': ticker,
-                                                    'rowIndex': row_index,
-                                                    'extractionStrategy': strategy,
-                                                    'originalCells': cells[:5]  # Store original for debugging
-                                                }
-                                                
-                                                short_data.append(data_point)
-                                                logger.info(f"✅ Enhanced parsed row {row_index}: {settlement_date} - {short_interest:,} shares, {days_to_cover:.2f} days to cover")
-                                                
-                                        except (ValueError, TypeError) as e:
-                                            logger.debug(f"⚠️ Error converting enhanced data in row {row_index}: {e}")
-                                            continue
-                                        
-                            except Exception as e:
-                                logger.debug(f"❌ Error processing enhanced row: {e}")
-                                continue
-                    
-                    # ✅ Process captured API responses
-                    if not short_data and api_responses:
-                        logger.info(f"🌐 Processing {len(api_responses)} captured API responses...")
-                        for api_resp in api_responses:
-                            try:
-                                content = api_resp['content']
-                                if any(keyword in content.lower() for keyword in ['short', 'interest', 'settlement', 'volume']):
-                                    logger.info(f"📊 Found potential short interest data in API: {api_resp['url']}")
-                                    # Try to parse JSON or structured data
-                                    try:
-                                        import json
-                                        json_data = json.loads(content)
-                                        logger.info(f"📈 API JSON data structure: {list(json_data.keys()) if isinstance(json_data, dict) else type(json_data)}")
-                                        # Process this data based on its structure
-                                    except:
-                                        # Look for patterns in text content
-                                        date_matches = re.findall(r'\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}', content)
-                                        if date_matches:
-                                            logger.info(f"📅 Found dates in API response: {date_matches[:3]}")
-                            except Exception as e:
-                                logger.debug(f"Error processing API response: {e}")
-                    
-                    # ✅ Fallback to BeautifulSoup if all else fails
-                    if not short_data:
-                        logger.warning("🔄 Enhanced JavaScript extraction failed, falling back to BeautifulSoup parsing...")
-                        
-                        # Get page content for BeautifulSoup fallback
-                        content = await page.content()
-                        
-                        # Save the page content for debugging
-                        with open(f'debug_nasdaq_{ticker}_enhanced_failed.html', 'w', encoding='utf-8') as f:
-                            f.write(content)
-                        logger.info(f"💾 Saved page content to debug_nasdaq_{ticker}_enhanced_failed.html")
-                        
-                        # Use the enhanced BeautifulSoup parser as fallback
-                        short_data = self._parse_nasdaq_short_interest_enhanced(content, ticker)
-                    
-                    # Final validation and sorting
-                    if short_data:
-                        logger.info(f"🎉 Successfully extracted {len(short_data)} short interest records for {ticker}")
-                        # Sort by date (newest first)
-                        short_data.sort(key=lambda x: x['settlementDate'], reverse=True)
-                    else:
-                        logger.warning(f"❌ No short interest data found for {ticker} with any method")
-                        logger.info(f"📊 Captured {len(api_responses)} API responses for debugging")
-                    
-                    return short_data
-                    
-                except Exception as e:
-                    logger.warning(f"❌ Error parsing short interest data for {ticker}: {e}")
-                    return []
-                    
-            finally:
-                await browser.close()
-                logger.info("🔒 Browser closed")
+        try:
+            # Use the direct API method as primary approach
+            logger.info(f"Fetching short interest for {ticker} using Nasdaq API")
+            return await self.fetch_short_interest_direct_api(ticker)
+        except Exception as e:
+            logger.error(f"Error fetching short interest for {ticker}: {e}")
+            return []
 
     def _parse_nasdaq_short_interest(self, html_content: str, ticker: str) -> List[Dict]:
         """
@@ -960,7 +617,8 @@ class ShortInterestAnalyzer:
             logger.error(f"Error in fallback parser: {e}")
             return []
 
-    async def fetch_finviz_short_interest(self, ticker: str) -> List[Dict]:
+    # DEPRECATED METHOD REMOVED
+    async def fetch_finviz_short_interest_DEPRECATED(self, ticker: str) -> List[Dict]:
         """
         Enhanced alternative short interest data fetching using Finviz (more reliable).
         """
@@ -1114,51 +772,54 @@ class ShortInterestAnalyzer:
             logger.error(f"Error fetching short interest from Finviz for {ticker}: {e}")
             return []
 
+    def get_short_interest_data(self, ticker: str, date) -> Optional[Dict]:
+        """
+        Get short interest data for a specific date (synchronous method for feature engineering).
+        Returns None to indicate short interest is handled in sentiment analysis, not features.
+        """
+        logger.warning(f"Short interest data requested for features - this is handled in sentiment analysis to avoid duplication")
+        return None
+
     async def analyze_short_interest_sentiment(self, ticker: str) -> Dict[str, Any]:
         """
-        Analyze short interest sentiment with improved fallback strategy.
+        Analyze short interest sentiment using Nasdaq API data.
         """
         try:
-            logger.info(f"Starting short interest sentiment analysis for {ticker}")
+            logger.info(f"📊 Starting short interest sentiment analysis for {ticker}")
             
-            # Try Finviz first since it's more reliable for current data
-            logger.info(f"Trying Finviz (primary source) for {ticker} short interest")
-            short_data = await self.fetch_finviz_short_interest(ticker)
+            # Use the direct Nasdaq API method
+            short_data = await self.fetch_short_interest(ticker)
             
-            # If Finviz works, use it
             if short_data:
-                logger.info(f"Successfully got data from Finviz for {ticker}")
-                latest_data = short_data[-1]
+                logger.info(f"✅ Successfully got {len(short_data)} records from Nasdaq API for {ticker}")
+                latest_data = short_data[0]  # Data is sorted newest first
                 short_float = latest_data.get('shortFloatPercentage', 0)
-                data_source = 'finviz'
-                confidence = 0.8  # High confidence in Finviz data
-            else:
-                # Try Nasdaq as fallback
-                logger.info(f"Finviz failed, trying Nasdaq for {ticker} short interest")
-                short_data = await self.fetch_short_interest(ticker)
                 
-                if short_data:
-                    logger.info(f"Successfully got data from Nasdaq for {ticker}")
-                    latest_data = short_data[-1]
-                    short_float = latest_data.get('shortFloatPercentage', 0)
-                    
-                    # If we don't have short float percentage from Nasdaq, calculate it
-                    if short_float == 0 and latest_data.get('shortInterest', 0) > 0:
-                        # Rough estimation for AAPL: assume shares outstanding is ~15.8B
-                        estimated_shares_outstanding = 15800000000  # 15.8B shares for AAPL
-                        short_float = (latest_data['shortInterest'] / estimated_shares_outstanding) * 100
-                        logger.info(f"Calculated short float from Nasdaq data: {short_float:.2f}%")
-                    
-                    data_source = latest_data.get('source', 'nasdaq')
-                    confidence = 0.9  # High confidence in Nasdaq data when available
-                else:
-                    logger.warning(f"No short interest data found for {ticker} from any source")
-                    return {
-                        'short_interest_sentiment': 0.0,
-                        'short_interest_volume': 0,
-                        'short_interest_confidence': 0.0,
-                        'short_interest_error': 'No data available from any source (Finviz or Nasdaq)'
+                # If we don't have short float percentage from Nasdaq, calculate it
+                if short_float == 0 and latest_data.get('shortInterest', 0) > 0:
+                    # Estimation using typical shares outstanding for major stocks
+                    # For AAPL: ~15.8B shares, for TSLA: ~3.2B, etc.
+                    typical_shares = {
+                        'AAPL': 15800000000,
+                        'TSLA': 3200000000, 
+                        'MSFT': 7400000000,
+                        'GOOGL': 12600000000,
+                        'AMZN': 10800000000
                     }
+                    estimated_shares = typical_shares.get(ticker.upper(), 5000000000)  # Default 5B
+                    short_float = (latest_data['shortInterest'] / estimated_shares) * 100
+                    logger.info(f"📈 Calculated short float from Nasdaq data: {short_float:.2f}%")
+                
+                data_source = latest_data.get('source', 'nasdaq_api')
+                confidence = 0.9  # High confidence in Nasdaq API data
+            else:
+                logger.warning(f"❌ No short interest data found for {ticker} from Nasdaq API")
+                return {
+                    'short_interest_sentiment': 0.0,
+                    'short_interest_volume': 0,
+                    'short_interest_confidence': 0.0,
+                    'short_interest_error': 'No data available from Nasdaq API'
+                }
             
             # Calculate sentiment from short float percentage
             # Short interest sentiment logic (same as before):

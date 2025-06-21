@@ -10,8 +10,7 @@ MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
 
 # S&P 100 Tickers (Top 25 from your list, with company names)
 TOP_100_TICKERS = [
-    "AAPL",   # Apple Inc.
-    "MSFT"   # Microsoft Corporation
+    "AAPL"
 ]
 
 # API Configuration
@@ -150,29 +149,36 @@ RSS_FEEDS = {}
 
 # Model Configuration
 MODEL_CONFIG = {
-    "lstm_units": 64,
-    "dense_units": 32,
-    "dropout_rate": 0.3,
-    "batch_size": 64,
-    "epochs": 15,
-    "early_stopping_patience": 5,
-    "learning_rate": 0.001,
-    "n_trials": 15,
+    "lstm_units": 128,  # Increased from 64 for better capacity
+    "dense_units": 64,  # Increased from 32
+    "dropout_rate": 0.2,  # Reduced from 0.3 for better learning
+    "batch_size": 32,  # Reduced from 64 for better gradient updates
+    "epochs": 25,  # Increased from 15 for better convergence
+    "early_stopping_patience": 7,  # Increased from 5
+    "learning_rate": 0.0005,  # Reduced from 0.001 for more stable training
+    "n_trials": 25,  # Increased from 15 for better hyperparameter search
+    "attention_dim": 64,  # New parameter for attention mechanism
     "default_hyperparameters": {
-        "lstm_units": 64,
-        "dense_units": 32,
-        "dropout_rate": 0.3,
-        "learning_rate": 0.001,
-        "l2_reg": 1e-3,
-        "batch_size": 64
+        "lstm_units": 128,
+        "dense_units": 64,
+        "dropout_rate": 0.2,
+        "learning_rate": 0.0005,
+        "l2_reg": 5e-4,  # Reduced regularization
+        "batch_size": 32,
+        "attention_dim": 64,
+        # New parameters for enhanced model
+        "recurrent_dropout": 0.1,
+        "gradient_clip_norm": 1.0,
+        "use_attention": True,
+        "use_bidirectional": True
     }
 }
 
 # Prediction Windows
 PREDICTION_WINDOWS = {
     "next_day": 1,
-    "30_day": 30,
-    "90_day": 90
+    "7_day": 7,
+    "30_day": 30
 }
 
 # Technical Indicators
@@ -229,11 +235,19 @@ TICKER_YFINANCE_MAP = {
 # Canary tickers for data freshness checks
 CANARY_TICKERS = ["AAPL", "MSFT", "SPY"]
 
-# If you have hyperparameter search space defined here, update as follows:
+# Hyperparameter Search Space - Optimized for Financial Time Series
 HYPERPARAM_SEARCH_SPACE = {
-    "lstm_units": (32, 64),
-    "dense_units": (16, 32),
-    "dropout_rate": (0.1, 0.3),
-    "batch_size": [64, 128],
-    # ... other params ...
+    "lstm_units": (64, 256),  # Wider range, higher max
+    "dense_units": (32, 128),  # Wider range
+    "dropout_rate": (0.1, 0.3),  # Lower minimum
+    "learning_rate": (0.0001, 0.002),  # Better range for financial data
+    "l2_reg": (1e-5, 1e-3),  # Wider regularization range
+    "batch_size": [16, 32, 64],  # More options
+    "attention_dim": (32, 128),  # New parameter
+    "recurrent_dropout": (0.0, 0.2),  # New parameter
+    # Model architecture choices
+    "use_attention": [True, False],
+    "use_bidirectional": [True, False],
+    "activation": ['relu', 'swish', 'gelu'],  # Modern activation functions
+    "optimizer": ['adam', 'adamw', 'rmsprop']  # Optimizer choices
 } 
