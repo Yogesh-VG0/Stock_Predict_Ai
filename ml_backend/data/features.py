@@ -7,7 +7,7 @@ import numpy as np
 import ta
 from typing import Dict, List, Optional, Tuple
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.preprocessing import StandardScaler
 from ..config.constants import (
@@ -27,6 +27,9 @@ from ml_backend.utils.mongodb import MongoDBClient
 from ml_backend.data.economic_calendar import EconomicCalendar
 from ml_backend.data.fred_macro import fetch_and_store_all_fred_indicators, FRED_INDICATORS
 import json
+import asyncio
+import concurrent.futures
+import joblib
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -186,45 +189,12 @@ class FeatureEngineer:
             self.short_interest_analyzer = ShortInterestAnalyzer(mongo_client)
             
     def add_short_interest_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
-        """Add short interest features to the DataFrame."""
-        try:
-            self._init_short_interest_analyzer(mongo_client)
-            df = df.copy()
-            
-            # Get short interest data for each date
-            short_interest_data = []
-            for date in df['date']:
-                data = self.short_interest_analyzer.get_short_interest_data(ticker, date)
-                if data:
-                    short_interest_data.append({
-                        'short_interest': data.get('short_interest', 0),
-                        'days_to_cover': data.get('days_to_cover', 0),
-                        'avg_daily_volume': data.get('avg_daily_volume', 0)
-                    })
-                else:
-                    short_interest_data.append({
-                        'short_interest': 0,
-                        'days_to_cover': 0,
-                        'avg_daily_volume': 0
-                    })
-            
-            # Add features to DataFrame
-            short_interest_df = pd.DataFrame(short_interest_data)
-            short_interest_df.index = df.index
-            
-            # Calculate derived features
-            short_interest_df['short_interest_change'] = short_interest_df['short_interest'].pct_change()
-            short_interest_df['days_to_cover_change'] = short_interest_df['days_to_cover'].pct_change()
-            short_interest_df['volume_ratio'] = short_interest_df['short_interest'] / short_interest_df['avg_daily_volume']
-            
-            df = pd.concat([df, short_interest_df], axis=1)
-            
-            logger.info(f"Added short interest features for {ticker}")
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error adding short interest features for {ticker}: {e}")
-            return df
+        """
+        Skip short interest features to avoid duplication with sentiment analysis.
+        Short interest is already included in the sentiment pipeline with proper sentiment scoring.
+        """
+        logger.info(f"Skipping short interest features for {ticker} - handled in sentiment analysis to avoid duplication")
+        return df
 
     def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Add technical indicators to the dataframe."""
@@ -282,6 +252,54 @@ class FeatureEngineer:
             df['Log_Return'] = np.log1p(df['Daily_Return'])
             df['Volatility'] = df['Daily_Return'].rolling(window=20).std()
             
+            # NEW: Advanced Technical Indicators for Better Accuracy
+            
+            # 1. Momentum Oscillators
+            df['Stochastic_K'] = ta.momentum.stoch(df['High'], df['Low'], df['Close'], window=14)
+            df['Stochastic_D'] = ta.momentum.stoch_signal(df['High'], df['Low'], df['Close'], window=14)
+            df['Williams_R'] = ta.momentum.williams_r(df['High'], df['Low'], df['Close'], lbp=14)
+            
+            # 2. Trend Strength Indicators
+            df['ADX'] = ta.trend.adx(df['High'], df['Low'], df['Close'], window=14)
+            df['CCI'] = ta.trend.cci(df['High'], df['Low'], df['Close'], window=20)
+            
+            # 3. Volume-Price Indicators (Critical for accuracy)
+            df['OBV'] = ta.volume.on_balance_volume(df['Close'], df['Volume'])
+            df['Volume_Price_Trend'] = ta.volume.volume_price_trend(df['Close'], df['Volume'])
+            df['Money_Flow_Index'] = ta.volume.money_flow_index(df['High'], df['Low'], df['Close'], df['Volume'], window=14)
+            
+            # 4. Market Regime Detection Features
+            # Volatility Regime
+            df['VIX_Proxy'] = df['Daily_Return'].rolling(20).std() * np.sqrt(252)  # Annualized volatility
+            df['Volatility_Regime'] = (df['VIX_Proxy'] > df['VIX_Proxy'].rolling(60).quantile(0.7)).astype(int)
+            
+            # Trend Regime
+            df['Trend_Strength'] = (df['Close'] > df['SMA_50']).astype(int)
+            df['Long_Term_Trend'] = (df['SMA_50'] > df['SMA_200']).astype(int)
+            
+            # 5. Price Action Features
+            # Gap detection
+            df['Gap_Up'] = ((df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1) > 0.02).astype(int)
+            df['Gap_Down'] = ((df['Open'] - df['Close'].shift(1)) / df['Close'].shift(1) < -0.02).astype(int)
+            
+            # Breakout detection
+            df['Breakout_High'] = (df['Close'] > df['High'].rolling(20).max().shift(1)).astype(int)
+            df['Breakout_Low'] = (df['Close'] < df['Low'].rolling(20).min().shift(1)).astype(int)
+            
+            # 6. Multi-timeframe Features
+            # Weekly indicators (using 5-day aggregation)
+            df['Weekly_Return'] = df['Close'].pct_change(5)
+            df['Weekly_High'] = df['High'].rolling(5).max()
+            df['Weekly_Low'] = df['Low'].rolling(5).min()
+            df['Weekly_Volume'] = df['Volume'].rolling(5).mean()
+            
+            # 7. Divergence Detection (Advanced)
+            # Price vs RSI divergence
+            df['Price_RSI_Divergence'] = self._detect_divergence(df['Close'], df['RSI'])
+            
+            # Price vs Volume divergence
+            df['Price_Volume_Divergence'] = self._detect_divergence(df['Close'], df['OBV'])
+            
             # Support/Resistance Levels
             df = self._add_support_resistance(df)
             
@@ -304,6 +322,19 @@ class FeatureEngineer:
         except Exception as e:
             logger.error(f"Error adding technical indicators: {e}")
             return df
+
+    def _detect_divergence(self, price_series: pd.Series, indicator_series: pd.Series, window: int = 20) -> pd.Series:
+        """Detect bullish/bearish divergence between price and indicator."""
+        try:
+            # Calculate rolling correlations
+            correlation = price_series.rolling(window).corr(indicator_series)
+            
+            # Detect divergence: negative correlation indicates divergence
+            divergence = (correlation < -0.3).astype(int)  # -1 = bearish divergence, 1 = bullish divergence
+            
+            return divergence.fillna(0)
+        except:
+            return pd.Series(0, index=price_series.index)
 
     def _handle_nan_values(self, df: pd.DataFrame) -> pd.DataFrame:
         """Handle NaN values in the dataframe."""
@@ -599,74 +630,7 @@ class FeatureEngineer:
             df[f'downside_vol_{window}'] = df['Close'].pct_change().rolling(window=window).apply(lambda x: np.std(x[x < 0]) if np.any(x < 0) else 0, raw=True)
         return df
 
-    def fetch_options_news_features_from_db(self, mongo_client, ticker, date):
-        """Fetch options and news sentiment features from MongoDB, aggregating news over the rolling window."""
-        try:
-            # Aggregate over the rolling window
-            date_obj = pd.to_datetime(date)
-            start_window = date_obj - pd.Timedelta(days=self.sentiment_window_days - 1)
-            # Query for all docs in the window
-            docs = list(mongo_client.db['options_sentiment'].find({
-                'ticker': ticker,
-                'date': {'$gte': start_window, '$lte': date_obj}
-            }))
-            # Aggregate options features (use most recent available in window)
-            doc = docs[-1] if docs else None
-            options_data = doc.get('options_data', {}) if doc else {}
-            # Aggregate news sentiment features over the window
-            all_articles = []
-            for d in docs:
-                news_data = d.get('news_data', {})
-                articles = news_data.get('feed', [])
-                all_articles.extend(articles)
-            greeks = ['implied_volatility', 'delta', 'gamma', 'theta', 'vega', 'rho']
-            features = {}
-            contracts = options_data.get('option_chain', [])
-            for g in greeks:
-                values = [float(c.get(g, 0)) for c in contracts if c.get(g) is not None]
-                if values:
-                    features[f'options_{g}_mean'] = np.mean(values)
-                    features[f'options_{g}_std'] = np.std(values)
-                    features[f'options_{g}_min'] = np.min(values)
-                    features[f'options_{g}_max'] = np.max(values)
-                else:
-                    features[f'options_{g}_mean'] = np.nan
-                    features[f'options_{g}_std'] = np.nan
-                    features[f'options_{g}_min'] = np.nan
-                    features[f'options_{g}_max'] = np.nan
-            puts = [c for c in contracts if c.get('type') == 'put']
-            calls = [c for c in contracts if c.get('type') == 'call']
-            put_oi = sum(float(c.get('open_interest', 0)) for c in puts)
-            call_oi = sum(float(c.get('open_interest', 0)) for c in calls)
-            features['put_call_oi_ratio'] = put_oi / call_oi if call_oi > 0 else np.nan
-            # Aggregate news sentiment features
-            sentiments = [float(a.get('overall_sentiment_score', 0)) for a in all_articles if a.get('overall_sentiment_score') is not None]
-            features['news_sentiment_mean'] = np.mean(sentiments) if sentiments else np.nan
-            features['news_sentiment_std'] = np.std(sentiments) if sentiments else np.nan
-            features['news_article_count'] = len(all_articles)
-            topics = ['earnings', 'economy_macro', 'mergers_and_acquisitions']
-            for topic in topics:
-                topic_scores = [float(a.get('overall_sentiment_score', 0)) for a in all_articles if topic in a.get('topics', [])]
-                features[f'news_sentiment_{topic}'] = np.mean(topic_scores) if topic_scores else np.nan
-            return features
-        except Exception as e:
-            logger.warning(f"MongoDB options/news sentiment fetch error for {ticker} {date}: {e}")
-            return {}
 
-    def add_external_features(self, df, ticker, mongo_client=None):
-        """Add options and news sentiment features from MongoDB to the DataFrame by date, using rolling window aggregation."""
-        df = df.copy()
-        if 'date' not in df.columns:
-            logger.warning("No 'date' column in DataFrame for external features.")
-            return df
-        ext_features = []
-        for d in df['date'].dt.strftime('%Y-%m-%d'):
-            features = self.fetch_options_news_features_from_db(mongo_client, ticker, d)
-            ext_features.append(features)
-        ext_df = pd.DataFrame(ext_features)
-        ext_df.index = df.index
-        df = pd.concat([df, ext_df], axis=1)
-        return df
 
     def shap_feature_selection(self, features_array, targets_array, feature_names, top_n=30):
         """Select top N features by mean absolute SHAP value using XGBoost."""
@@ -723,6 +687,15 @@ class FeatureEngineer:
             'economic_event_volatility': sentiment_dict.get('economic_event_volatility', 0.0),
             'economic_event_volume': sentiment_dict.get('economic_event_volume', 0),
             
+            # SEC sentiment features (already processed in sentiment pipeline)
+            'sec_sentiment': sentiment_dict.get('sec_sentiment', 0.0),
+            'sec_volume': sentiment_dict.get('sec_volume', 0),
+            'sec_confidence': sentiment_dict.get('sec_confidence', 0.0),
+            
+            # Short interest sentiment (processed sentiment, not raw data)
+            'short_interest_sentiment': sentiment_dict.get('short_interest_sentiment', 0.0),
+            'short_interest_confidence': sentiment_dict.get('short_interest_confidence', 0.0),
+            
             # Insider trading sentiment (separate from news)
             'insider_sentiment': sentiment_dict.get('finnhub_insider_sentiment', 0.0),
             'recommendation_sentiment': sentiment_dict.get('finnhub_recommendation_sentiment', 0.0),
@@ -742,382 +715,718 @@ class FeatureEngineer:
         logger.info(f"Added {len(sentiment_features)} sentiment features (avoiding source duplication)")
         return df
 
-    def add_alpha_vantage_features(self, df: pd.DataFrame, alpha_vantage_dict: Dict = None) -> pd.DataFrame:
-        """Add features from Alpha Vantage data."""
-        if not alpha_vantage_dict:
+    def add_finnhub_financial_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
+        """
+        Add comprehensive Finnhub financial features with proper MongoDB storage.
+        All fetched data is stored to avoid API waste.
+        """
+        if not mongo_client:
+            logger.warning("No MongoDB client provided for Finnhub data")
+            return df
+        
+        try:
+            from ml_backend.data.sentiment import get_stored_data_from_mongodb
+            
+            logger.info(f"Adding Finnhub financial features for {ticker}")
+            
+            # Get all Finnhub data with caching
+            basic_financials = get_stored_data_from_mongodb(mongo_client, ticker, 'basic_financials', 'finnhub')
+            company_peers = get_stored_data_from_mongodb(mongo_client, ticker, 'company_peers', 'finnhub')
+            insider_sentiment = get_stored_data_from_mongodb(mongo_client, ticker, 'insider_sentiment', 'finnhub')
+            recommendation_trends = get_stored_data_from_mongodb(mongo_client, ticker, 'recommendation_trends', 'finnhub')
+            
+            # If no cached data, fetch fresh (but store it!)
+            if not basic_financials or not company_peers or not insider_sentiment or not recommendation_trends:
+                logger.info(f"Fetching fresh Finnhub data for {ticker}")
+                
+                # Import the sentiment analyzer to fetch data
+                from ml_backend.data.sentiment import SentimentAnalyzer
+                
+                # Create temporary analyzer for data fetching
+                temp_analyzer = SentimentAnalyzer(mongo_client)
+                
+                # Fetch data (this will automatically store in MongoDB)
+                async def fetch_all_finnhub_data():
+                    tasks = []
+                    if not basic_financials:
+                        tasks.append(temp_analyzer.get_finnhub_basic_financials(ticker))
+                    if not company_peers:
+                        tasks.append(temp_analyzer.get_finnhub_company_peers(ticker))
+                    if not insider_sentiment:
+                        tasks.append(temp_analyzer.get_finnhub_insider_sentiment_direct(ticker))
+                    if not recommendation_trends:
+                        tasks.append(temp_analyzer.analyze_finnhub_recommendation_trends(ticker))
+                    
+                    if tasks:
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        return results
+                    return []
+                
+                # Run the async fetch
+                import asyncio
+                try:
+                    # Check if we're in an event loop
+                    asyncio.get_running_loop()
+                    # If we are, create a new thread to run the async code
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(asyncio.run, fetch_all_finnhub_data())
+                        fetch_results = future.result()
+                except RuntimeError:
+                    # No event loop running, safe to use asyncio.run
+                    fetch_results = asyncio.run(fetch_all_finnhub_data())
+                
+                # Retrieve the stored data
+                basic_financials = get_stored_data_from_mongodb(mongo_client, ticker, 'basic_financials', 'finnhub') or {}
+                company_peers = get_stored_data_from_mongodb(mongo_client, ticker, 'company_peers', 'finnhub') or {}
+                insider_sentiment = get_stored_data_from_mongodb(mongo_client, ticker, 'insider_sentiment', 'finnhub') or {}
+                recommendation_trends = get_stored_data_from_mongodb(mongo_client, ticker, 'recommendation_trends', 'finnhub') or {}
+            
+            # Process basic financials
+            if basic_financials and 'metric' in basic_financials:
+                metrics = basic_financials.get('metric', {})
+                series = basic_financials.get('series', {})
+                
+                # Extract key financial metrics for feature engineering
+                financial_features = {
+                    # Valuation metrics
+                    'pe_ratio': metrics.get('peBasicExclExtraTTM'),
+                    'pe_forward': metrics.get('peInclExtraTTM'),
+                    'price_to_book': metrics.get('pbAnnual'),
+                    'price_to_sales': metrics.get('psAnnual'),
+                    'ev_to_ebitda': metrics.get('evToEbitdaTTM'),
+                    'market_cap': metrics.get('marketCapitalization'),
+                    
+                    # Profitability metrics
+                    'roe': metrics.get('roeTTM'),
+                    'roa': metrics.get('roaTTM'),
+                    'gross_margin': metrics.get('grossMarginTTM'),
+                    'operating_margin': metrics.get('operatingMarginTTM'),
+                    'net_margin': metrics.get('netProfitMarginTTM'),
+                    
+                    # Financial health
+                    'current_ratio': metrics.get('currentRatioAnnual'),
+                    'debt_to_equity': metrics.get('totalDebtToEquityAnnual'),
+                    'quick_ratio': metrics.get('quickRatioAnnual'),
+                    'cash_ratio': metrics.get('cashRatioAnnual'),
+                    
+                    # Growth metrics
+                    'revenue_growth_3m': metrics.get('revenueGrowthTTMYoy'),
+                    'eps_growth_3m': metrics.get('epsGrowthTTMYoy'),
+                    'revenue_per_share': metrics.get('revenuePerShareTTM'),
+                    'book_value_per_share': metrics.get('bookValuePerShareAnnual'),
+                    
+                    # Trading metrics
+                    'beta': metrics.get('beta'),
+                    '52w_high': metrics.get('52WeekHigh'),
+                    '52w_low': metrics.get('52WeekLow'),
+                    '52w_return': metrics.get('52WeekPriceReturnDaily'),
+                    'avg_volume_10d': metrics.get('10DayAverageTradingVolume'),
+                    'avg_volume_3m': metrics.get('3MonthAverageTradingVolume'),
+                    
+                    # Dividend metrics
+                    'dividend_yield': metrics.get('dividendYieldIndicatedAnnual'),
+                    'dividend_per_share': metrics.get('dividendPerShareAnnual'),
+                    'payout_ratio': metrics.get('payoutRatioAnnual'),
+                    
+                    # Additional metrics
+                    'shares_outstanding': metrics.get('sharesOutstanding'),
+                    'float_shares': metrics.get('freeCashFlowTTM'),  # Often correlated with float
+                    'insider_ownership': metrics.get('insiderOwnership'),
+                    'institutional_ownership': metrics.get('institutionOwnership')
+                }
+                
+                # Extract time series data for trend analysis
+                annual_series = series.get('annual', {})
+                quarterly_series = series.get('quarterly', {})
+                
+                # Calculate recent trends if data available
+                trends = {}
+                for metric_name, metric_data in annual_series.items():
+                    if metric_data and len(metric_data) >= 2:
+                        recent = metric_data[0]['v'] if metric_data[0]['v'] is not None else 0
+                        previous = metric_data[1]['v'] if metric_data[1]['v'] is not None else 0
+                        if previous != 0:
+                            trends[f"{metric_name}_yoy_change"] = (recent - previous) / previous
+                
+                financial_features['trends'] = trends
+                financial_features['data_timestamp'] = datetime.utcnow().isoformat()
+                financial_features['metrics_count'] = len([v for v in financial_features.values() if v is not None])
+                
+                # Add all financial features to dataframe
+                for feature_name, feature_value in financial_features.items():
+                    if feature_name not in ['trends', 'data_timestamp', 'metrics_count'] and feature_value is not None:
+                        df[feature_name] = float(feature_value)
+                    elif feature_name == 'trends':
+                        # Add trend features
+                        for trend_name, trend_value in feature_value.items():
+                            if trend_value is not None:
+                                df[trend_name] = float(trend_value)
+                
+                logger.info(f"Finnhub Basic Financials for {ticker}: {financial_features['metrics_count']} metrics retrieved")
+                
+                # Legacy column mapping for compatibility
+                df['pe_ratio'] = df.get('pe_ratio', 0)
+                df['pb_ratio'] = df.get('price_to_book', 0)
+                df['ps_ratio'] = df.get('price_to_sales', 0)
+                df['ev_ebitda'] = df.get('ev_to_ebitda', 0)
+                df['52_week_high'] = df.get('52w_high', 0)
+                df['52_week_low'] = df.get('52w_low', 0)
+                df['revenue_growth'] = df.get('revenue_growth_3m', 0)
+                df['eps_growth'] = df.get('eps_growth_3m', 0)
+                df['debt_equity'] = df.get('debt_to_equity', 0)
+            
+            # Process company peers
+            if company_peers and isinstance(company_peers, list):
+                # Remove self from peers list
+                peer_list = [p for p in company_peers if p.upper() != ticker.upper()]
+                
+                peer_features = {
+                    'peer_count': len(peer_list),
+                    'peer_list': peer_list[:10],  # Limit to top 10 peers
+                    'has_peers': len(peer_list) > 0,
+                    'peer_sector_size': len(peer_list)  # Indicator of sector competition
+                }
+                
+                # Add peer features to dataframe using concat for better performance
+                peer_feature_df = pd.DataFrame({
+                    'peer_count': [peer_features['peer_count']] * len(df),
+                    'sector_competition': [min(len(peer_list) / 10, 1.0)] * len(df),
+                    'has_peers': [1 if peer_features['has_peers'] else 0] * len(df),
+                    'peer_sector_size': [peer_features['peer_sector_size']] * len(df)
+                }, index=df.index)
+                df = pd.concat([df, peer_feature_df], axis=1)
+                
+                logger.info(f"Added company peers data: {len(peer_list)} peers")
+            
+            # Process insider sentiment
+            if insider_sentiment and 'data' in insider_sentiment:
+                # Fetch insider sentiment using Finnhub's pre-calculated MSPR (Monthly Share Purchase Ratio).
+                # This is more reliable than parsing individual transactions.
+                sentiment_data = insider_sentiment['data']
+                if sentiment_data:
+                    # Calculate weighted average MSPR (more recent months weighted higher)
+                    total_weighted_mspr = 0
+                    total_weights = 0
+                    total_volume = 0
+                    for i, item in enumerate(sentiment_data):
+                        mspr = item.get('mspr', 0)
+                        change = abs(item.get('change', 0))
+                        
+                        # Weight recent months higher (last 3 months = 3x weight, last 6 months = 2x weight)
+                        weight = 3 if i < 3 else (2 if i < 6 else 1)
+                        
+                        total_weighted_mspr += mspr * weight
+                        total_weights += weight
+                        total_volume += change
+                    
+                    if total_weights == 0:
+                        insider_values = {
+                            'insider_mspr': 0,
+                            'insider_sentiment_normalized': 0,
+                            'insider_mspr_trend': 0,
+                            'insider_confidence': 0,
+                            'insider_sentiment_months': 0,
+                            'insider_volume': 0
+                        }
+                    else:
+                        # Calculate final metrics
+                        weighted_avg_mspr = total_weighted_mspr / total_weights
+                        
+                        # Normalize MSPR to [-1, 1] range (MSPR typically ranges from -100 to 100)
+                        normalized_sentiment = max(-1.0, min(1.0, weighted_avg_mspr / 100))
+                        
+                        # Calculate trend (comparing recent vs older periods)
+                        recent_mspr = sum(item.get('mspr', 0) for item in sentiment_data[:3]) / min(3, len(sentiment_data))
+                        older_mspr = sum(item.get('mspr', 0) for item in sentiment_data[3:6]) / max(1, len(sentiment_data[3:6]))
+                        trend = recent_mspr - older_mspr if len(sentiment_data) > 3 else 0
+                        
+                        # Confidence based on data points and consistency
+                        data_confidence = min(len(sentiment_data) / 6, 1.0)  # 6+ months = full confidence
+                        mspr_consistency = 1 - (abs(trend) / 50)  # Penalize high volatility in MSPR
+                        final_confidence = (data_confidence + max(0, mspr_consistency)) / 2
+                        
+                        # Prepare insider values for batch addition
+                        insider_values = {
+                            'insider_mspr': weighted_avg_mspr,
+                            'insider_sentiment_normalized': normalized_sentiment,
+                            'insider_mspr_trend': trend,
+                            'insider_confidence': final_confidence,
+                            'insider_sentiment_months': len(sentiment_data),
+                            'insider_volume': int(total_volume)
+                        }
+                        
+                        logger.info(f"Enhanced Finnhub Insider Sentiment for {ticker}:")
+                        logger.info(f"  Weighted MSPR: {weighted_avg_mspr:.2f}, Normalized: {normalized_sentiment:.3f}")
+                        logger.info(f"  Trend: {trend:.2f}, Confidence: {final_confidence:.2f}")
+                    
+                    # Add insider features using concat for better performance
+                    insider_feature_df = pd.DataFrame({
+                        col: [val] * len(df) for col, val in insider_values.items()
+                    }, index=df.index)
+                    df = pd.concat([df, insider_feature_df], axis=1)
+            
+            # Process recommendation trends
+            if recommendation_trends and isinstance(recommendation_trends, dict):
+                analyst_features = {
+                    'analyst_sentiment': recommendation_trends.get('sentiment', 0),
+                    'analyst_count': recommendation_trends.get('total_analysts', 0),
+                    'analyst_confidence': recommendation_trends.get('confidence', 0),
+                    'analyst_consensus': 1 if recommendation_trends.get('consensus') == 'BUY' else (-1 if recommendation_trends.get('consensus') == 'SELL' else 0)
+                }
+                analyst_feature_df = pd.DataFrame({
+                    col: [val] * len(df) for col, val in analyst_features.items()
+                }, index=df.index)
+                df = pd.concat([df, analyst_feature_df], axis=1)
+                logger.info(f"Added analyst recommendations: {recommendation_trends.get('total_analysts', 0)} analysts, sentiment {recommendation_trends.get('sentiment', 0):.3f}")
+            
+            logger.info(f"✅ Successfully added Finnhub financial features for {ticker}")
             return df
             
-        df = df.copy()
-        
-        # Earnings call sentiment
-        if 'alpha_earnings_call' in alpha_vantage_dict:
-            transcript = alpha_vantage_dict['alpha_earnings_call'].get('transcript', '')
-            if transcript:
-                # Use existing sentiment analyzer
-                sentiment = self.sentiment_analyzer._analyze_sentiment(transcript)
-                df['earnings_call_sentiment'] = sentiment
-        
-        # Insider transactions
-        if 'alpha_insider_transactions' in alpha_vantage_dict:
-            insider_data = alpha_vantage_dict['alpha_insider_transactions']
-            if insider_data and 'insiderTransactions' in insider_data:
-                transactions = insider_data['insiderTransactions']
-                df['insider_buy_volume'] = df['date'].apply(
-                    lambda d: sum(t['transactionShares'] for t in transactions 
-                                if t['transactionType'] == 'Buy' and 
-                                pd.to_datetime(t['transactionDate']) <= d)
-                )
-                df['insider_sell_volume'] = df['date'].apply(
-                    lambda d: sum(t['transactionShares'] for t in transactions 
-                                if t['transactionType'] == 'Sell' and 
-                                pd.to_datetime(t['transactionDate']) <= d)
-                )
-        
-        # Options sentiment
-        if 'options_sentiment' in alpha_vantage_dict:
-            options_data = alpha_vantage_dict['options_sentiment']
-            if options_data and 'data' in options_data:
-                df['put_call_ratio'] = df['date'].apply(
-                    lambda d: self._calculate_put_call_ratio(options_data, d)
-                )
-        
+        except Exception as e:
+            logger.error(f"Error adding Finnhub financial features for {ticker}: {e}")
         return df
+
+    def add_alpha_vantage_features(self, df: pd.DataFrame, alpha_vantage_dict: Dict = None) -> pd.DataFrame:
+        """Add Alpha Vantage features to the dataframe."""
+        if alpha_vantage_dict is None:
+            return df
+            
+        try:
+            # Process earnings data
+            if 'alpha_earnings' in alpha_vantage_dict and alpha_vantage_dict['alpha_earnings']:
+                earnings_data = alpha_vantage_dict['alpha_earnings']
+                if 'quarterlyEarnings' in earnings_data:
+                    quarterly = earnings_data['quarterlyEarnings']
+                    if quarterly:
+                        # Get the most recent quarter
+                        recent_earnings = quarterly[0]
+                        earnings_features = {
+                            'eps_reported': float(recent_earnings.get('reportedEPS', 0)),
+                            'eps_estimate': float(recent_earnings.get('estimatedEPS', 0)),
+                            'eps_surprise': float(recent_earnings.get('surprise', 0)),
+                            'eps_surprise_pct': float(recent_earnings.get('surprisePercentage', 0))
+                        }
+                        earnings_df = pd.DataFrame({
+                            col: [val] * len(df) for col, val in earnings_features.items()
+                        }, index=df.index)
+                        df = pd.concat([df, earnings_df], axis=1)
+                        
+            # Process dividends data
+            if 'alpha_dividends' in alpha_vantage_dict and alpha_vantage_dict['alpha_dividends']:
+                dividends = alpha_vantage_dict['alpha_dividends']
+                if dividends:
+                    recent_dividend = list(dividends.values())[0] if dividends else {}
+                    dividend_features = {'dividend_amount': float(recent_dividend.get('amount', 0))}
+                    dividend_df = pd.DataFrame({
+                        col: [val] * len(df) for col, val in dividend_features.items()
+                    }, index=df.index)
+                    df = pd.concat([df, dividend_df], axis=1)
+                    
+            # Process insider transactions
+            if 'alpha_insider_transactions' in alpha_vantage_dict and alpha_vantage_dict['alpha_insider_transactions']:
+                pass  # Fixed indentation error
+                insider_data = alpha_vantage_dict['alpha_insider_transactions']
+                if 'data' in insider_data:
+                    transactions = insider_data['data']
+                    if transactions:
+                        # Analyze recent transactions (last 10)
+                        recent_transactions = transactions[:10]
+                        buy_volume = sum(float(t.get('transactionShares', 0)) for t in recent_transactions 
+                                       if t.get('transactionType', '').lower() in ['p-purchase', 'purchase'])
+                        sell_volume = sum(float(t.get('transactionShares', 0)) for t in recent_transactions 
+                                        if t.get('transactionType', '').lower() in ['s-sale', 'sale'])
+                        
+                        insider_transaction_features = {
+                            'insider_buy_volume': buy_volume,
+                            'insider_sell_volume': sell_volume,
+                            'insider_buy_sell_ratio': buy_volume / (sell_volume + 1)  # +1 to avoid division by zero
+                        }
+                        insider_transaction_df = pd.DataFrame({
+                            col: [val] * len(df) for col, val in insider_transaction_features.items()
+                        }, index=df.index)
+                        df = pd.concat([df, insider_transaction_df], axis=1)
+                        
+            # Process Alpha Vantage sentiment if available
+            if 'alphavantage_sentiment' in alpha_vantage_dict and alpha_vantage_dict['alphavantage_sentiment']:
+                sentiment_data = alpha_vantage_dict['alphavantage_sentiment']
+                if 'feed' in sentiment_data:
+                    feed = sentiment_data['feed']
+                    if feed:
+                        # Calculate aggregate sentiment
+                        total_sentiment = 0
+                        total_relevance = 0
+                        
+                        for article in feed:
+                            relevance = float(article.get('relevance_score', 0))
+                            sentiment = float(article.get('overall_sentiment_score', 0))
+                            total_sentiment += sentiment * relevance
+                            total_relevance += relevance
+                            
+                        sentiment_features = {
+                            'alphavantage_sentiment_score': total_sentiment / total_relevance if total_relevance > 0 else 0,
+                            'alphavantage_news_volume': len(feed) if total_relevance > 0 else 0
+                        }
+                        sentiment_df = pd.DataFrame({
+                            col: [val] * len(df) for col, val in sentiment_features.items()
+                        }, index=df.index)
+                        df = pd.concat([df, sentiment_df], axis=1)
+                            
+        except Exception as e:
+            logger.error(f"Error processing Alpha Vantage features: {e}")
+            
+        return df
+
+    def add_historical_options_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
+        """
+        Add comprehensive historical options features using Alpha Vantage HISTORICAL_OPTIONS API.
+        Extracts market sentiment, volatility expectations, and options flow insights.
+        """
+        try:
+            if not mongo_client:
+                logger.warning("No MongoDB client provided for options data")
+                return df
+            
+            logger.info(f"Adding historical options features for {ticker}")
+            
+            # Get options data from MongoDB cache or fetch from API
+            options_data = self._fetch_historical_options_data(ticker, mongo_client)
+            
+            if not options_data:
+                logger.warning(f"No options data available for {ticker}")
+                return df
+            
+            # Process options data into features
+            options_features = self._process_options_chain_features(options_data, ticker)
+            
+            # Add options features to dataframe using concat for better performance
+            if options_features:
+                options_feature_df = pd.DataFrame({
+                    col: [val] * len(df) for col, val in options_features.items()
+                }, index=df.index)
+                df = pd.concat([df, options_feature_df], axis=1)
+            
+            logger.info(f"Added {len(options_features)} options features for {ticker}")
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error adding historical options features for {ticker}: {e}")
+            return df
+    
+    def _fetch_historical_options_data(self, ticker: str, mongo_client) -> Dict:
+        """
+        Fetch Alpha Vantage options data from the correct MongoDB collection.
+        Based on your MongoDB structure: collection 'alpha_vantage_data' with endpoint 'Historical Options'
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            # Query the correct collection using the actual MongoDB structure you provided
+            # Collection: alpha_vantage_data
+            # Document structure: {ticker: "AAPL", endpoint: "Historical Options", data: [...]}
+            options_doc = mongo_client.db['alpha_vantage_data'].find_one({
+                'ticker': ticker,
+                'endpoint': 'Historical Options'
+            }, sort=[('timestamp', -1)])  # Get most recent
+            
+            if options_doc and options_doc.get('data'):
+                logger.info(f"Retrieved Alpha Vantage options data for {ticker}")
+                return {'data': options_doc['data']}
+            
+            logger.warning(f"No Alpha Vantage options data found for {ticker}")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Error fetching Alpha Vantage options data for {ticker}: {e}")
+            return {}
+    
+    def _process_options_chain_features(self, options_data: Dict, ticker: str) -> Dict[str, float]:
+        """
+        Process options chain data into meaningful features for ML model.
+        """
+        features = {}
         
-    def _calculate_put_call_ratio(self, options_data: Dict, date: datetime) -> float:
-        """Calculate put/call ratio from options data."""
         try:
-            date_str = date.strftime('%Y-%m-%d')
-            if date_str in options_data['data']:
-                day_data = options_data['data'][date_str]
-                put_volume = sum(opt['volume'] for opt in day_data if opt['type'] == 'put')
-                call_volume = sum(opt['volume'] for opt in day_data if opt['type'] == 'call')
-                return put_volume / call_volume if call_volume > 0 else 1.0
-        except Exception as e:
-            logger.warning(f"Error calculating put/call ratio: {e}")
-        return 1.0
-
-    def add_sec_filings_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
-        """Add comprehensive SEC filings features beyond basic sentiment."""
-        try:
-            from .sec_filings import SECFilingsAnalyzer
+            if 'data' not in options_data:
+                logger.warning(f"No 'data' field in options data for {ticker}")
+                return features
             
-            df = df.copy()
-            sec_analyzer = SECFilingsAnalyzer(mongo_client)
+            chain_data = options_data['data']
             
-            # Get SEC filings data for each date
-            sec_features_list = []
-            for date in df['date']:
+            # Initialize counters and accumulators
+            total_call_volume = 0
+            total_put_volume = 0
+            total_call_oi = 0  # Open Interest
+            total_put_oi = 0
+            
+            call_iv_sum = 0
+            put_iv_sum = 0
+            call_count = 0
+            put_count = 0
+            
+            # Greeks accumulation
+            total_delta = 0
+            total_gamma = 0
+            total_theta = 0
+            total_vega = 0
+            
+            # Strike price analysis
+            strikes = []
+            volumes = []
+            
+            # Moneyness analysis (ITM/OTM distribution)
+            itm_call_volume = 0
+            otm_call_volume = 0
+            itm_put_volume = 0
+            otm_put_volume = 0
+            
+            # Get current stock price for moneyness calculation
+            current_price = self._get_current_stock_price(ticker, options_data)
+            
+            # Process each contract in the options chain
+            for contract in chain_data:
                 try:
-                    # Get filings within 30 days of the date
-                    filings_data = sec_analyzer.analyze_filings_sentiment(ticker, lookback_days=30)
+                    contract_type = contract.get('type', '').lower()
+                    volume = float(contract.get('volume', 0))
+                    open_interest = float(contract.get('open_interest', 0))
+                    implied_vol = float(contract.get('implied_volatility', 0))
+                    strike = float(contract.get('strike', 0))
                     
-                    # Extract comprehensive features
-                    features = {
-                        # Basic sentiment
-                        'sec_sentiment': filings_data.get('sec_filings_sentiment', 0.0),
-                        'sec_volume': filings_data.get('sec_filings_volume', 0),
-                        'sec_confidence': filings_data.get('sec_filings_confidence', 0.0),
-                        
-                        # Form-specific features
-                        'sec_10k_count': len(filings_data.get('categorized_filings', {}).get('10-K', [])),
-                        'sec_10q_count': len(filings_data.get('categorized_filings', {}).get('10-Q', [])),
-                        'sec_8k_count': len(filings_data.get('categorized_filings', {}).get('8-K', [])),
-                        'sec_proxy_count': len(filings_data.get('categorized_filings', {}).get('DEF 14A', [])),
-                        
-                        # Derived features
-                        'sec_filing_frequency': filings_data.get('sec_filings_volume', 0) / 30,  # filings per day
-                        'sec_major_filings': len(filings_data.get('categorized_filings', {}).get('10-K', [])) + len(filings_data.get('categorized_filings', {}).get('10-Q', [])),
-                        'sec_current_events': len(filings_data.get('categorized_filings', {}).get('8-K', [])),
-                        
-                        # Risk indicators
-                        'sec_high_activity': 1 if filings_data.get('sec_filings_volume', 0) > 10 else 0,
-                        'sec_recent_10k': 1 if len(filings_data.get('categorized_filings', {}).get('10-K', [])) > 0 else 0,
-                        'sec_recent_8k_spike': 1 if len(filings_data.get('categorized_filings', {}).get('8-K', [])) > 3 else 0,
-                    }
+                    # Greeks
+                    delta = float(contract.get('delta', 0))
+                    gamma = float(contract.get('gamma', 0))
+                    theta = float(contract.get('theta', 0))
+                    vega = float(contract.get('vega', 0))
                     
-                    sec_features_list.append(features)
+                    strikes.append(strike)
+                    volumes.append(volume)
                     
-                except Exception as e:
-                    logger.warning(f"Error getting SEC features for {ticker} on {date}: {e}")
-                    # Add default values on error
-                    default_features = {
-                        'sec_sentiment': 0.0, 'sec_volume': 0, 'sec_confidence': 0.0,
-                        'sec_10k_count': 0, 'sec_10q_count': 0, 'sec_8k_count': 0, 'sec_proxy_count': 0,
-                        'sec_filing_frequency': 0.0, 'sec_major_filings': 0, 'sec_current_events': 0,
-                        'sec_high_activity': 0, 'sec_recent_10k': 0, 'sec_recent_8k_spike': 0
-                    }
-                    sec_features_list.append(default_features)
+                    # Accumulate Greeks
+                    total_delta += delta * volume  # Volume-weighted
+                    total_gamma += gamma * volume
+                    total_theta += theta * volume
+                    total_vega += vega * volume
+                    
+                    if contract_type == 'call':
+                        total_call_volume += volume
+                        total_call_oi += open_interest
+                        call_iv_sum += implied_vol
+                        call_count += 1
+                        
+                        # Moneyness for calls
+                        if current_price and strike < current_price:
+                            itm_call_volume += volume
+                        else:
+                            otm_call_volume += volume
+                            
+                    elif contract_type == 'put':
+                        total_put_volume += volume
+                        total_put_oi += open_interest
+                        put_iv_sum += implied_vol
+                        put_count += 1
+                        
+                        # Moneyness for puts
+                        if current_price and strike > current_price:
+                            itm_put_volume += volume
+                        else:
+                            otm_put_volume += volume
+                
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error processing contract data: {e}")
+                    continue
             
-            if sec_features_list:
-                sec_df = pd.DataFrame(sec_features_list)
-                sec_df.index = df.index
-                df = pd.concat([df, sec_df], axis=1)
-                logger.info(f"Added comprehensive SEC filings features for {ticker}")
+            # Calculate derived features
+            total_volume = total_call_volume + total_put_volume
+            total_oi = total_call_oi + total_put_oi
             
-            return df
+            # 1. Put/Call Ratios (Key sentiment indicators)
+            features['options_put_call_volume_ratio'] = (
+                total_put_volume / (total_call_volume + 1) if total_call_volume > 0 else 0
+            )
+            features['options_put_call_oi_ratio'] = (
+                total_put_oi / (total_call_oi + 1) if total_call_oi > 0 else 0
+            )
+            
+            # 2. Implied Volatility Analysis
+            features['options_avg_call_iv'] = call_iv_sum / call_count if call_count > 0 else 0
+            features['options_avg_put_iv'] = put_iv_sum / put_count if put_count > 0 else 0
+            features['options_iv_skew'] = features['options_avg_put_iv'] - features['options_avg_call_iv']
+            
+            # 3. Volume and Open Interest Metrics
+            features['options_total_volume'] = total_volume
+            features['options_total_open_interest'] = total_oi
+            features['options_volume_oi_ratio'] = total_volume / (total_oi + 1) if total_oi > 0 else 0
+            
+            # 4. Greeks Analysis (Risk metrics)
+            if total_volume > 0:
+                features['options_weighted_delta'] = total_delta / total_volume
+                features['options_weighted_gamma'] = total_gamma / total_volume
+                features['options_weighted_theta'] = total_theta / total_volume
+                features['options_weighted_vega'] = total_vega / total_volume
+            else:
+                features['options_weighted_delta'] = 0
+                features['options_weighted_gamma'] = 0
+                features['options_weighted_theta'] = 0
+                features['options_weighted_vega'] = 0
+            
+            # 5. Moneyness Distribution (Positioning analysis)
+            features['options_itm_call_volume_pct'] = (
+                itm_call_volume / (total_call_volume + 1) if total_call_volume > 0 else 0
+            )
+            features['options_otm_put_volume_pct'] = (
+                otm_put_volume / (total_put_volume + 1) if total_put_volume > 0 else 0
+            )
+            
+            # 6. Strike Price Analysis
+            if strikes and volumes and current_price:
+                # Volume-weighted average strike
+                total_volume_weighted_strike = sum(s * v for s, v in zip(strikes, volumes))
+                features['options_volume_weighted_strike'] = (
+                    total_volume_weighted_strike / total_volume if total_volume > 0 else current_price
+                )
+                
+                # Distance from current price (market expectation)
+                features['options_strike_price_bias'] = (
+                    (features['options_volume_weighted_strike'] - current_price) / current_price 
+                    if current_price > 0 else 0
+                )
+                
+                # Strike dispersion (uncertainty measure)
+                if len(strikes) > 1:
+                    features['options_strike_dispersion'] = np.std(strikes) / current_price
+                else:
+                    features['options_strike_dispersion'] = 0
+            
+            # 7. Market Regime Indicators
+            # High put/call ratio often indicates fear
+            features['options_fear_indicator'] = min(features['options_put_call_volume_ratio'] / 0.7, 2.0)
+            
+            # High IV often indicates uncertainty/volatility expectations
+            avg_iv = (features['options_avg_call_iv'] + features['options_avg_put_iv']) / 2
+            features['options_volatility_expectation'] = min(avg_iv / 0.3, 3.0)  # Normalized to reasonable range
+            
+            # Volume surge indicator
+            if total_volume > 0:
+                # Compare to typical volume (rough heuristic)
+                features['options_volume_surge'] = min(total_volume / 10000, 5.0)  # Normalized
+            else:
+                features['options_volume_surge'] = 0
+            
+            logger.info(f"Processed {len(chain_data)} options contracts into {len(features)} features")
+            
+            return features
             
         except Exception as e:
-            logger.error(f"Error adding SEC filings features for {ticker}: {e}")
-            return df
-
-    def add_seeking_alpha_advanced_features(self, df: pd.DataFrame, ticker: str, mongo_client=None) -> pd.DataFrame:
-        """Add advanced Seeking Alpha features beyond basic sentiment."""
+            logger.error(f"Error processing options chain features: {e}")
+            return features
+    
+    def _get_current_stock_price(self, ticker: str, options_data: Dict) -> float:
+        """
+        Extract current stock price from options data or use a fallback method.
+        """
         try:
-            from .seeking_alpha import SeekingAlphaAnalyzer
+            # Try to get from options data metadata
+            if 'meta' in options_data:
+                meta = options_data['meta']
+                if 'underlying_price' in meta:
+                    return float(meta['underlying_price'])
+                if 'last_price' in meta:
+                    return float(meta['last_price'])
             
-            df = df.copy()
-            sa_analyzer = SeekingAlphaAnalyzer(mongo_client)
+            # Try to get from individual contracts (use ATM strike as approximation)
+            if 'data' in options_data:
+                strikes = [float(contract.get('strike', 0)) for contract in options_data['data']]
+                if strikes:
+                    # Estimate current price as median strike (rough approximation)
+                    return np.median(strikes)
             
-            # Get Seeking Alpha data for each date
-            sa_features_list = []
-            for date in df['date']:
+            # Fallback: return 0 (will disable moneyness calculations)
+            logger.warning(f"Could not determine current price for {ticker} from options data")
+            return 0.0
+            
+        except Exception as e:
+            logger.error(f"Error extracting current price for {ticker}: {e}")
+            return 0.0
+
+
+
+    def create_prediction_features(self, df: pd.DataFrame, ticker: str, window: str, mongo_client=None) -> np.ndarray:
+        """Create features for prediction using stored pipeline from training to ensure consistency."""
+        try:
+            # Check if we have a stored feature pipeline for this ticker-window
+            pipeline_key = f"{ticker}-{window}"
+            
+            # Try to load stored pipeline (feature columns, normalizer, etc.)
+            pipeline_path = f"models/{ticker}/feature_pipeline_{window}.joblib"
+            if os.path.exists(pipeline_path):
                 try:
-                    # Get both article sentiment and comments
-                    comments_data = sa_analyzer.analyze_comments_sentiment(ticker, lookback_days=7)
+                    import joblib
+                    stored_pipeline = joblib.load(pipeline_path)
+                    logger.info(f"Loaded stored pipeline for {ticker}-{window}")
                     
-                    features = {
-                        # Basic sentiment from comments
-                        'sa_comments_sentiment': comments_data.get('sentiment_score', 0.0),
-                        'sa_comments_volume': comments_data.get('comment_count', 0),
-                        'sa_comments_confidence': comments_data.get('confidence', 0.0),
+                    # Use stored feature engineering parameters
+                    if 'feature_columns' in stored_pipeline:
+                        self.feature_columns = stored_pipeline['feature_columns']
+                    if 'domain_normalizers' in stored_pipeline:
+                        self.domain_normalizers = stored_pipeline['domain_normalizers']
                         
-                        # Advanced comment features
-                        'sa_positive_ratio': comments_data.get('positive_ratio', 0.5),
-                        'sa_negative_ratio': comments_data.get('negative_ratio', 0.5),
-                        'sa_engagement_score': comments_data.get('comment_count', 0) / 7,  # comments per day
-                        
-                        # Comment quality indicators
-                        'sa_high_engagement': 1 if comments_data.get('comment_count', 0) > 50 else 0,
-                        'sa_sentiment_consensus': 1 if abs(comments_data.get('sentiment_score', 0)) > 0.3 else 0,
-                        'sa_polarized_discussion': 1 if comments_data.get('sentiment_std', 0) > 0.5 else 0,
-                        
-                        # Derived features
-                        'sa_bullish_signal': 1 if (comments_data.get('sentiment_score', 0) > 0.2 and comments_data.get('comment_count', 0) > 20) else 0,
-                        'sa_bearish_signal': 1 if (comments_data.get('sentiment_score', 0) < -0.2 and comments_data.get('comment_count', 0) > 20) else 0,
-                    }
-                    
-                    sa_features_list.append(features)
-                    
                 except Exception as e:
-                    logger.warning(f"Error getting Seeking Alpha features for {ticker} on {date}: {e}")
-                    # Add default values on error
-                    default_features = {
-                        'sa_comments_sentiment': 0.0, 'sa_comments_volume': 0, 'sa_comments_confidence': 0.0,
-                        'sa_positive_ratio': 0.5, 'sa_negative_ratio': 0.5, 'sa_engagement_score': 0.0,
-                        'sa_high_engagement': 0, 'sa_sentiment_consensus': 0, 'sa_polarized_discussion': 0,
-                        'sa_bullish_signal': 0, 'sa_bearish_signal': 0
-                    }
-                    sa_features_list.append(default_features)
+                    logger.warning(f"Could not load stored pipeline for {ticker}-{window}: {e}")
+            else:
+                logger.warning(f"No stored pipeline found for {ticker}-{window}, using current pipeline")
             
-            if sa_features_list:
-                sa_df = pd.DataFrame(sa_features_list)
-                sa_df.index = df.index
-                df = pd.concat([df, sa_df], axis=1)
-                logger.info(f"Added comprehensive Seeking Alpha features for {ticker}")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error adding Seeking Alpha features for {ticker}: {e}")
-            return df
-
-    def create_prediction_features(
-        self,
-        df: pd.DataFrame,
-        ticker: str,
-        window: str,
-        mongo_client=None,
-        use_stored_pipeline: bool = True
-    ) -> np.ndarray:
-        """
-        Create features for prediction using the exact same pipeline as training.
-        This ensures feature consistency between training and prediction phases.
-        """
-        try:
-            window_size_map = {'next_day': 1, '7_day': 7, '30_day': 30, '90_day': 90}
+            # Use consistent window size mapping
+            window_size_map = {'next_day': 1, '7_day': 7, '30_day': 30}
             window_size = window_size_map.get(window, 1)
             
-            # Load stored feature pipeline if available
-            feature_pipeline_path = f"models/{ticker}/feature_pipeline_{ticker}_{window}.json"
+            # Prepare features using the same pipeline as training
+            features, _ = self.prepare_features(
+                df=df.copy(),
+                sentiment_dict=None,  # Will be fetched inside prepare_features
+                alpha_vantage_dict=None,  # Will be fetched inside prepare_features
+                window_size=window_size,
+                mongo_client=mongo_client,
+                ticker=ticker
+            )
             
-            if use_stored_pipeline and os.path.exists(feature_pipeline_path):
-                with open(feature_pipeline_path, 'r') as f:
-                    pipeline_info = json.load(f)
+            if features is None:
+                logger.error(f"Failed to create features for {ticker}-{window}")
+                return None
                 
-                # Apply the exact same feature engineering steps as training
-                logger.info(f"Using stored feature pipeline for {ticker}-{window}")
+            # For prediction, we only need the last sample
+            if len(features.shape) > 1 and features.shape[0] > 1:
+                features = features[-1:, :]  # Take only last row
                 
-                # Step 1: Technical indicators (always consistent)
-                df = self.add_technical_indicators(df)
-                
-                # Step 2: Get current values for external features that were used in training
-                feature_columns = pipeline_info.get('feature_columns', [])
-                external_features = pipeline_info.get('external_features', {})
-                
-                # Add placeholder external features with current/latest values
-                for feature_name, default_value in external_features.items():
-                    if feature_name not in df.columns:
-                        # Try to get current value from MongoDB or use default
-                        if mongo_client and 'sentiment' in feature_name:
-                            current_sentiment = mongo_client.get_latest_sentiment(ticker)
-                            if current_sentiment and feature_name in current_sentiment:
-                                df[feature_name] = current_sentiment[feature_name]
-                            else:
-                                df[feature_name] = default_value
-                        else:
-                            df[feature_name] = default_value
-                
-                # Step 3: Rolling features
-                df = self.add_rolling_features(df)
-                df = self.add_lagged_and_volatility_features(df)
-                
-                # Step 4: Handle outliers if it was done during training
-                if pipeline_info.get('outlier_handling_applied', False):
-                    df = self.handle_outliers(df)
-                
-                # Step 5: Select only the features that were used during training
-                numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-                available_features = [col for col in feature_columns if col in numeric_cols]
-                
-                if len(available_features) < len(feature_columns) * 0.8:
-                    logger.warning(f"Only {len(available_features)}/{len(feature_columns)} features available for prediction")
-                
-                # Fill missing features with zeros or stored defaults
-                for col in feature_columns:
-                    if col not in df.columns:
-                        default_val = external_features.get(col, 0.0)
-                        df[col] = default_val
-                        logger.debug(f"Added missing feature {col} with default value {default_val}")
-                
-                # Reorder columns to match training
-                df_features = df[feature_columns].copy()
-                
-            else:
-                # Fallback: Create features using current pipeline (may have dimension mismatch)
-                logger.warning(f"No stored pipeline found for {ticker}-{window}, using current pipeline")
-                df_features, _ = self.prepare_features(
-                    df,
-                    window_size=window_size,
-                    ticker=ticker,
-                    mongo_client=mongo_client,
-                    handle_outliers=True
-                )
-                return df_features
-            
-            # Handle NaN values
-            df_features = df_features.ffill().bfill().fillna(0)
-            
-            # Convert to numpy array
-            features = df_features.values
-            
-            # Save feature pipeline if requested (during training)
-            if save_pipeline and ticker and window:
-                # Collect external feature defaults
-                external_features = {}
-                for col in feature_df.columns:
-                    if col not in ['Close', 'Open', 'High', 'Low', 'Volume'] and 'SMA' not in col and 'EMA' not in col and 'RSI' not in col:
-                        # This is likely an external feature
-                        external_features[col] = float(feature_df[col].iloc[-1]) if not feature_df[col].empty else 0.0
-                
-                self.save_feature_pipeline(
-                    ticker=ticker,
-                    window=window,
-                    feature_columns=list(feature_df.columns),
-                    external_features=external_features,
-                    outlier_handling_applied=handle_outliers
-                )
-            
-            # Create targets (price changes for next day, next 30 days, next 90 days)
-            targets = None
-            if 'Close' in df.columns:
-                close_prices = df['Close'].values
-                if window_size == 1:
-                    # Next day prediction: tomorrow's price - today's price
-                    targets = np.diff(close_prices)  # Shape: (n-1,)
-                    features = features[:-1]  # Align features with targets
-                elif window_size > 1:
-                    # Multi-day prediction: price N days in future - current price
-                    targets = []
-                    for i in range(len(close_prices) - window_size):
-                        current_price = close_prices[i]
-                        future_price = close_prices[i + window_size] if i + window_size < len(close_prices) else current_price
-                        price_change = future_price - current_price
-                        targets.append(price_change)
-                    targets = np.array(targets)
-                    
-                    # Align features - we need to remove the last window_size-1 samples
-                    # because we can't predict future prices for them
-                    features = features[:-window_size] if len(features) > window_size else features
-                
-            # Handle reshaping based on model type expectations
-            if window_size > 1:
-                # For LSTM models: Create 3D arrays (samples, time_steps, features)
-                n_samples = len(targets) if targets is not None else features.shape[0] - window_size + 1
-                n_features = features.shape[1]
-                
-                if n_samples <= 0:
-                    raise ValueError(f"Not enough data for window_size {window_size}. Need at least {window_size} samples, got {features.shape[0]}")
-                
-                # Create sliding windows for LSTM - each sample contains window_size time steps
-                max_samples = features.shape[0] - window_size + 1
-                n_samples = min(n_samples, max_samples)
-                
-                if n_samples <= 0:
-                    raise ValueError(f"Not enough data for windowing. Features: {features.shape[0]}, window_size: {window_size}")
-                
-                windowed_features = np.zeros((n_samples, window_size, n_features))
-                for i in range(n_samples):
-                    end_idx = i + window_size
-                    if end_idx <= features.shape[0]:
-                        windowed_features[i] = features[i:end_idx]
-                    else:
-                        # Handle edge case by padding with last available features
-                        available_features = features[i:]
-                        windowed_features[i, :len(available_features)] = available_features
-                        # Pad remaining with last feature
-                        if len(available_features) > 0:
-                            windowed_features[i, len(available_features):] = available_features[-1]
-                
-                # For LightGBM/XGBoost: We'll flatten in the predictor, keep 3D here for LSTM
-                features = windowed_features
-                
-                # Ensure targets align with features
-                if targets is not None and len(targets) > n_samples:
-                    targets = targets[:n_samples]
-                    
-            return features, targets if targets is not None else feature_stats
+            logger.info(f"Created prediction features for {ticker}-{window}: shape {features.shape}")
+            return features
             
         except Exception as e:
             logger.error(f"Error creating prediction features for {ticker}-{window}: {e}")
-            raise
-    
-    def save_feature_pipeline(
-        self,
-        ticker: str,
-        window: str,
-        feature_columns: List[str],
-        external_features: Dict[str, float],
-        outlier_handling_applied: bool = False
-    ):
-        """Save the feature engineering pipeline for consistent prediction."""
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+
+    def save_feature_pipeline(self, ticker: str, window: str):
+        """Save feature pipeline for consistent prediction."""
         try:
-            os.makedirs(f"models/{ticker}", exist_ok=True)
+            import joblib
+            import os
             
-            pipeline_info = {
-                'ticker': ticker,
-                'window': window,
-                'feature_columns': feature_columns,
-                'external_features': external_features,
-                'outlier_handling_applied': outlier_handling_applied,
-                'created_at': datetime.utcnow().isoformat(),
-                'feature_count': len(feature_columns)
+            # Create directory if it doesn't exist
+            model_dir = f"models/{ticker}"
+            os.makedirs(model_dir, exist_ok=True)
+            
+            # Save feature pipeline components
+            pipeline_data = {
+                'feature_columns': getattr(self, 'feature_columns', []),
+                'domain_normalizers': getattr(self, 'domain_normalizers', {}),
+                'window_size': window,
+                'ticker': ticker
             }
             
-            pipeline_path = f"models/{ticker}/feature_pipeline_{ticker}_{window}.json"
-            with open(pipeline_path, 'w') as f:
-                json.dump(pipeline_info, f, indent=2)
-            
-            logger.info(f"Saved feature pipeline for {ticker}-{window}: {len(feature_columns)} features")
+            pipeline_path = f"{model_dir}/feature_pipeline_{window}.joblib"
+            joblib.dump(pipeline_data, pipeline_path)
+            logger.info(f"Saved feature pipeline for {ticker}-{window}")
             
         except Exception as e:
             logger.error(f"Error saving feature pipeline for {ticker}-{window}: {e}")
@@ -1136,64 +1445,65 @@ class FeatureEngineer:
         save_pipeline: bool = False,
         window: str = None
     ) -> Tuple[np.ndarray, Dict]:
-        """Prepare features for model training/prediction."""
+        """
+        Prepare features for model training with domain-aware preprocessing.
+        Features are organized by type for finance-aware model processing.
+        """
         try:
-            # Validate input
-            if not isinstance(df, pd.DataFrame):
-                raise ValueError("Input must be a pandas DataFrame")
-                
-            if df.empty:
-                raise ValueError("Input DataFrame is empty")
-                
-            # Check for required columns
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            if missing_columns:
-                raise ValueError(f"Missing required columns: {missing_columns}")
-                
-            # Create a copy to avoid modifying the original
-            df = df.copy()
+            # Validate inputs
+            if df is None or df.empty:
+                raise ValueError("DataFrame is empty or None")
             
-            # Add date column if not present
-            if 'date' not in df.columns:
-                df['date'] = pd.to_datetime(df.index)
-                
-            # Add technical indicators
+            logger.info(f"Starting feature preparation: df shape={df.shape}, window_size={window_size}")
+            
+            # Core feature engineering pipeline
+            logger.info("Adding technical indicators...")
             df = self.add_technical_indicators(df)
-
-            # Add external features if ticker is provided
-            if ticker:
-                # Add macro and sector data
-                df = self.merge_external_features(df, ticker=ticker, alpha_vantage_dict=alpha_vantage_dict)
-                # Add event features (earnings, dividends, FOMC)
-                df = self.add_event_features(df, ticker=ticker, apikey=os.getenv('ALPHAVANTAGE_API_KEY'))
-                # Add economic event features
-                df = self.add_economic_event_features(df, ticker)
-                # Add short interest features
-                df = self.add_short_interest_features(df, ticker, mongo_client)
-                # Add comprehensive SEC filings features
-                df = self.add_sec_filings_features(df, ticker, mongo_client)
-                # Add advanced Seeking Alpha features
-                df = self.add_seeking_alpha_advanced_features(df, ticker, mongo_client)
-
-            # Inject flat sentiment fields as columns (no double-counting, no re-normalization)
-            if sentiment_dict:
-                flat_sent = {
-                    k: v for k, v in sentiment_dict.items()
-                    if any(k.endswith(suffix) for suffix in ["_sentiment", "_volume", "_confidence"])
-                }
-                for field, value in flat_sent.items():
-                    df[field] = value if not isinstance(value, list) else len(value)
-
-            # Add rolling features
-            df = self.add_rolling_features(df)
             
-            # Add lagged and volatility features
+            # Add sentiment features if available
+            if sentiment_dict:
+                logger.info("Adding sentiment features...")
+                df = self.add_sentiment_features(df, sentiment_dict)
+            else:
+                logger.info("No sentiment data provided, skipping sentiment features")
+            
+            # Add Alpha Vantage features
+            if alpha_vantage_dict:
+                logger.info("Adding Alpha Vantage features...")
+                df = self.add_alpha_vantage_features(df, alpha_vantage_dict)
+            
+            # Add Finnhub financial features (the new comprehensive financial data)
+            if ticker and mongo_client:
+                logger.info("Adding Finnhub financial features...")
+                df = self.add_finnhub_financial_features(df, ticker, mongo_client)
+            
+            # Add historical options features (NEW: Critical for market sentiment and volatility expectations)
+            if ticker and mongo_client:
+                logger.info("Adding historical options features...")
+                df = self.add_historical_options_features(df, ticker, mongo_client)
+            
+            # NOTE: Economic calendar features are already included in sentiment_dict from sentiment pipeline
+            # Skipping redundant economic calendar processing to avoid duplicate web scraping
+            logger.info("Economic calendar features already included in sentiment data - skipping redundant processing")
+            
+            # NOTE: SEC sentiment features are already included in sentiment_dict from sentiment pipeline
+            # The sentiment pipeline includes SEC data via analyze_sec_sentiment method
+            # Skipping redundant SEC processing to avoid duplicate data fetching and async/await issues
+            logger.info("SEC sentiment features already included in sentiment data - skipping redundant processing")
+            
+            # Add rolling and lagged features
+            logger.info("Adding rolling and volatility features...")
+            df = self.add_rolling_features(df)
             df = self.add_lagged_and_volatility_features(df)
             
             # Handle outliers if requested
             if handle_outliers:
+                logger.info("Handling outliers...")
                 df = self.handle_outliers(df)
+            
+            # Handle missing values
+            logger.info("Handling missing values...")
+            df = self._handle_nan_values(df)
                 
             # Auto-optimize features based on historical performance
             if ticker and mongo_client:
@@ -1215,48 +1525,45 @@ class FeatureEngineer:
             # Fill remaining NaN values using modern pandas syntax
             feature_df = feature_df.ffill().bfill().fillna(0)
             
-            # Normalize features
-            feature_stats = self._normalize_features(feature_df)
+            # Organize features by type for finance-aware model
+            feature_columns = feature_df.columns.tolist()
+            organized_features = self._organize_features_by_type(feature_columns)
             
-            # Select features if requested
+            # Reorder DataFrame columns by feature type
+            ordered_columns = (
+                organized_features['price_volume'] +
+                organized_features['financial_ratios'] +
+                organized_features['sentiment'] +
+                organized_features['technical']
+            )
+            
+            # Ensure all ordered columns exist in feature_df
+            available_ordered_columns = [col for col in ordered_columns if col in feature_df.columns]
+            remaining_columns = [col for col in feature_df.columns if col not in available_ordered_columns]
+            final_columns = available_ordered_columns + remaining_columns
+            
+            feature_df = feature_df[final_columns]
+            
+            # Use finance-aware feature selection instead of generic SHAP
             if enable_shap_selection and ticker:
-                # Get feature importance from MongoDB if available
-                if mongo_client:
-                    feature_importance = mongo_client.db['feature_importance'].find_one({'ticker': ticker})
-                    if feature_importance:
-                        # Use stored feature importance
-                        selected_features = list(feature_importance.get('features', {}).keys())[:feature_select_k]
-                        # Filter to only include features that exist in our dataframe
-                        selected_features = [f for f in selected_features if f in feature_df.columns]
-                        if selected_features:
-                            feature_df = feature_df[selected_features]
-                else:
-                    # Use SHAP for feature selection
-                    self.select_features(feature_df.values, None, k=feature_select_k)
-                    if self.selected_features is not None:
-                        feature_df = feature_df.iloc[:, self.selected_features]
+                logger.info("Applying finance-aware feature selection...")
+                selected_features = self.finance_aware_feature_selection(
+                    feature_df, feature_df.columns.tolist(), ticker, feature_select_k
+                )
+                feature_df = feature_df[selected_features]
+                logger.info(f"Selected {len(selected_features)} features using finance-aware selection")
+            
+            # Normalize features using domain-aware normalization
+            feature_stats = self._normalize_features(feature_df)
                     
             # Convert to numpy array
             features = feature_df.values
             
-            # Save feature pipeline if requested (during training)
-            if save_pipeline and ticker and window:
-                # Collect external feature defaults
-                external_features = {}
-                for col in feature_df.columns:
-                    if col not in ['Close', 'Open', 'High', 'Low', 'Volume'] and 'SMA' not in col and 'EMA' not in col and 'RSI' not in col:
-                        # This is likely an external feature
-                        external_features[col] = float(feature_df[col].iloc[-1]) if not feature_df[col].empty else 0.0
-                
-                self.save_feature_pipeline(
-                    ticker=ticker,
-                    window=window,
-                    feature_columns=list(feature_df.columns),
-                    external_features=external_features,
-                    outlier_handling_applied=handle_outliers
-                )
+            # Ensure we have enough data points
+            if len(features) < window_size + 10:
+                raise ValueError(f"Not enough data points: {len(features)} < {window_size + 10}")
             
-            # Create targets (price changes for next day, next 30 days, next 90 days)
+            # Create targets if we have price data
             targets = None
             if 'Close' in df.columns:
                 close_prices = df['Close'].values
@@ -1313,78 +1620,231 @@ class FeatureEngineer:
                 # Ensure targets align with features
                 if targets is not None and len(targets) > n_samples:
                     targets = targets[:n_samples]
+            
+            # Save feature pipeline for consistency if requested
+            if save_pipeline and ticker and window:
+                self.save_feature_pipeline(
+                    ticker=ticker,
+                    window=window
+                )
                     
-            return features, targets if targets is not None else feature_stats
+            return features, targets
             
         except Exception as e:
             logger.error(f"Error preparing features: {e}")
             raise
 
-    def _normalize_features(self, df: pd.DataFrame) -> Dict[str, float]:
-        """Normalize features for model input, returning only scalars (last value in sequence)."""
-        try:
-            normalized = {}
+    def _organize_features_by_type(self, feature_columns: List[str]) -> Dict[str, List[str]]:
+        """
+        Organize features by type for the finance-aware model architecture.
+        Returns features grouped by: price_volume, financial_ratios, sentiment, technical
+        """
+        organized = {
+            'price_volume': [],
+            'financial_ratios': [],
+            'sentiment': [],
+            'technical': []
+        }
+        
+        for col in feature_columns:
+            col_lower = col.lower()
             
-            # Only process numeric columns
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            # Price and volume features
+            if any(keyword in col_lower for keyword in [
+                'close', 'open', 'high', 'low', 'volume', 'price', 'avgdailyshare'
+            ]):
+                organized['price_volume'].append(col)
             
-            # Price features (if they exist)
-            price_cols = ['Close', 'Open', 'High', 'Low']
-            for col in price_cols:
-                if col in numeric_cols and col in df.columns:
-                    if df[col].std() != 0:
-                        series = (df[col] - df[col].mean()) / df[col].std()
-                        normalized[f'{col}_norm'] = float(series.iloc[-1]) if not series.empty else 0.0
-                    else:
-                        normalized[f'{col}_norm'] = 0.0
-                        
-            # Volume features (if it exists)
-            if 'Volume' in numeric_cols and 'Volume' in df.columns:
-                if df['Volume'].std() != 0:
-                    series = (df['Volume'] - df['Volume'].mean()) / df['Volume'].std()
-                    normalized['Volume_norm'] = float(series.iloc[-1]) if not series.empty else 0.0
-                else:
-                    normalized['Volume_norm'] = 0.0
-                    
-            # Technical indicators (all other numeric columns)
-            tech_cols = [col for col in numeric_cols if col not in price_cols + ['Volume']]
-            for col in tech_cols:
-                if col in df.columns:
-                    try:
-                        if df[col].std() != 0:
-                            series = (df[col] - df[col].mean()) / df[col].std()
-                            normalized[f'{col}_norm'] = float(series.iloc[-1]) if not series.empty else 0.0
-                        else:
-                            normalized[f'{col}_norm'] = 0.0
-                    except (TypeError, ValueError) as e:
-                        # Skip columns that can't be normalized (e.g., ObjectId, strings)
-                        logger.warning(f"Skipping normalization for column {col}: {e}")
-                        continue
-                        
-            return normalized
+            # Financial ratios and fundamental metrics
+            elif any(keyword in col_lower for keyword in [
+                'ratio', 'pe', 'pb', 'ps', 'ev_ebitda', 'roe', 'roa', 'margin', 'yield',
+                'current_ratio', 'debt_equity', 'quick_ratio', 'earnings', 'revenue',
+                'book_value', 'beta', '52week', 'dividend', 'shares_outstanding',
+                'market_cap', 'enterprise_value'
+            ]):
+                organized['financial_ratios'].append(col)
             
-        except Exception as e:
-            logger.error(f"Error normalizing features: {str(e)}")
-            return {}  # Return empty dict instead of trying to process all columns
+            # Sentiment and recommendation features (INCLUDING OPTIONS SENTIMENT)
+            elif any(keyword in col_lower for keyword in [
+                'sentiment', 'mspr', 'insider', 'recommendation', 'analyst',
+                'grade', 'rating', 'target', 'estimate', 'earnings_call',
+                # OPTIONS SENTIMENT INDICATORS
+                'options_put_call', 'options_fear', 'options_volatility_expectation',
+                'options_iv_skew', 'options_strike_price_bias'
+            ]):
+                organized['sentiment'].append(col)
+            
+            # Technical indicators (INCLUDING OPTIONS TECHNICAL METRICS)
+            elif any(keyword in col_lower for keyword in [
+                'sma', 'ema', 'rsi', 'macd', 'bollinger', 'stoch', 'williams',
+                'adx', 'cci', 'momentum', 'volatility', 'support', 'resistance',
+                'atr', 'obv', 'vwap',
+                # OPTIONS TECHNICAL METRICS  
+                'options_total', 'options_volume', 'options_oi', 'options_weighted',
+                'options_itm', 'options_otm', 'options_strike_dispersion', 'options_volume_surge'
+            ]):
+                organized['technical'].append(col)
+            
+            # Default to technical if unsure
+            else:
+                organized['technical'].append(col)
+        
+        # Log the organization
+        for group, features in organized.items():
+            logger.info(f"{group.title()} features ({len(features)}): {features[:5]}{'...' if len(features) > 5 else ''}")
+        
+        return organized
 
-    def select_features(self, features: np.ndarray, targets: np.ndarray, k: int = 20) -> None:
-        """Select the most important features using SelectKBest."""
+    def finance_aware_feature_selection(self, df: pd.DataFrame, feature_names: List[str], 
+                                      ticker: str = None, k: int = 30) -> List[str]:
+        """
+        Finance-domain-aware feature selection that prioritizes features based on:
+        1. Financial theory importance
+        2. Market regime relevance
+        3. Data quality and recency
+        4. Cross-correlation with price movements
+        """
         try:
-            # Initialize feature selector
-            self.feature_selector = SelectKBest(score_func=f_regression, k=k)
+            # Define feature importance tiers based on financial theory
+            tier_1_critical = [
+                # Core valuation metrics
+                'pe_ratio', 'pb_ratio', 'ps_ratio', 'ev_ebitda',
+                # Profitability
+                'roe', 'roa', 'gross_margin', 'operating_margin', 'net_margin',
+                # Recent price action
+                'close', 'volume', 'volatility',
+                # Analyst sentiment
+                'recommendation_mean', 'recommendation_trend',
+                # Insider activity (recent)
+                'mspr', 'insider_sentiment'
+            ]
             
-            # Fit selector
-            self.feature_selector.fit(features, targets)
+            tier_2_important = [
+                # Growth metrics
+                'earnings_growth', 'revenue_growth', 'book_value_growth',
+                # Financial health
+                'current_ratio', 'debt_equity', 'quick_ratio',
+                # Market sentiment
+                'sentiment_score', 'sentiment_momentum',
+                # Technical indicators
+                'rsi', 'macd', 'sma_20', 'ema_50',
+                # Market context
+                'beta', '52_week_high', '52_week_low',
+                # OPTIONS CRITICAL METRICS (Tier 2 - Very Important)
+                'options_put_call_volume_ratio', 'options_put_call_oi_ratio',
+                'options_avg_call_iv', 'options_avg_put_iv', 'options_iv_skew',
+                'options_fear_indicator', 'options_volatility_expectation'
+            ]
             
-            # Get selected feature indices
-            self.selected_features = self.feature_selector.get_support(indices=True)
+            tier_3_supporting = [
+                # Sector comparison
+                'peer_comparison', 'sector_strength',
+                # Options activity
+                'put_call_ratio', 'options_volume',
+                # News sentiment
+                'news_sentiment', 'social_sentiment',
+                # Macro indicators
+                'interest_rates', 'gdp_growth', 'inflation',
+                # OPTIONS SUPPORTING METRICS (Tier 3 - Supporting)
+                'options_total_volume', 'options_total_open_interest',
+                'options_weighted_delta', 'options_weighted_gamma', 'options_weighted_theta',
+                'options_itm_call_volume_pct', 'options_otm_put_volume_pct',
+                'options_strike_price_bias', 'options_volume_surge'
+            ]
             
-            logger.info(f"Selected {len(self.selected_features)} most important features")
+            # Score each available feature
+            feature_scores = {}
+            
+            for feature_name in feature_names:
+                if feature_name not in df.columns:
+                    continue
+                    
+                base_score = 0
+                feature_lower = feature_name.lower()
+                
+                # Tier-based scoring
+                if any(tier1 in feature_lower for tier1 in tier_1_critical):
+                    base_score = 100
+                elif any(tier2 in feature_lower for tier2 in tier_2_important):
+                    base_score = 70
+                elif any(tier3 in feature_lower for tier3 in tier_3_supporting):
+                    base_score = 40
+                else:
+                    base_score = 20  # Default for unknown features
+                
+                # Data quality multipliers
+                series = df[feature_name].dropna()
+                if len(series) == 0:
+                    feature_scores[feature_name] = 0
+                    continue
+                        
+                quality_multiplier = 1.0
+                
+                # Penalize features with too many missing values
+                missing_ratio = 1 - (len(series) / len(df))
+                if missing_ratio > 0.5:
+                    quality_multiplier *= 0.3  # Severely penalize
+                elif missing_ratio > 0.2:
+                    quality_multiplier *= 0.7
+                
+                # Penalize features with no variance
+                if series.std() == 0:
+                    quality_multiplier *= 0.1
+                
+                # Bonus for recent data (if timestamp info available)
+                if any(time_word in feature_lower for time_word in ['recent', 'latest', 'current']):
+                    quality_multiplier *= 1.3
+                
+                # Bonus for high-frequency updates
+                if any(freq_word in feature_lower for freq_word in ['daily', 'intraday', 'realtime']):
+                    quality_multiplier *= 1.2
+                
+                # Interaction bonus for key combinations
+                interaction_bonus = 0
+                if 'pe' in feature_lower and any('growth' in name.lower() for name in feature_names):
+                    interaction_bonus += 10  # PEG ratio components
+                if 'mspr' in feature_lower and any('volume' in name.lower() for name in feature_names):
+                    interaction_bonus += 10  # Insider + volume
+                if 'sentiment' in feature_lower and any('recommendation' in name.lower() for name in feature_names):
+                    interaction_bonus += 8   # Sentiment alignment
+                
+                # Financial ratio validity check
+                if any(ratio_word in feature_lower for ratio_word in ['ratio', 'margin', 'roe', 'roa']):
+                    # Check for reasonable ranges
+                    if feature_lower.startswith('pe') and series.median() > 100:
+                        quality_multiplier *= 0.5  # Suspicious P/E ratios
+                    if 'margin' in feature_lower and (series.min() < -1 or series.max() > 1):
+                        quality_multiplier *= 1.2  # Good range for margins
+                
+                # Calculate final score
+                final_score = base_score * quality_multiplier + interaction_bonus
+                feature_scores[feature_name] = final_score
+            
+            # Sort features by score and select top k
+            sorted_features = sorted(feature_scores.items(), key=lambda x: x[1], reverse=True)
+            selected_features = [name for name, score in sorted_features[:k]]
+            
+            # Ensure we have critical features even if scored low
+            must_have = ['close', 'volume'] if any(f in feature_names for f in ['close', 'volume']) else []
+            for must_feature in must_have:
+                if must_feature in feature_names and must_feature not in selected_features:
+                    selected_features.append(must_feature)
+                    # Remove lowest scored feature to maintain k limit
+                    if len(selected_features) > k:
+                        selected_features = selected_features[:k]
+            
+            logger.info(f"Finance-aware feature selection: {len(selected_features)}/{len(feature_names)} features selected")
+            logger.info(f"Top 5 selected features: {[f'{name} ({feature_scores.get(name, 0):.1f})' for name in selected_features[:5]]}")
+            
+            return selected_features
             
         except Exception as e:
-            logger.error(f"Error selecting features: {str(e)}")
-            self.feature_selector = None
-            self.selected_features = None
+            logger.error(f"Error in finance-aware feature selection: {e}")
+            # Fallback to top k features by name priority
+            priority_features = [name for name in feature_names if any(
+                key in name.lower() for key in ['close', 'pe', 'roe', 'sentiment', 'volume', 'recommendation']
+            )]
+            return priority_features[:k] if len(priority_features) >= k else feature_names[:k]
 
     def get_feature_importance(self) -> Dict[str, float]:
         """Get feature importance scores."""
@@ -1629,7 +2089,9 @@ class FeatureEngineer:
                 if any(keyword in col.lower() for keyword in ['close', 'volume', 'rsi', 'macd', 'sentiment'])
             ][:5]  # Limit to top 5 to avoid explosion
             
+            interaction_features = {}
             interaction_count = 0
+            
             for i in range(len(interaction_candidates)):
                 for j in range(i+1, len(interaction_candidates)):
                     if interaction_count >= max_interactions:
@@ -1637,16 +2099,19 @@ class FeatureEngineer:
                         
                     col1, col2 = interaction_candidates[i], interaction_candidates[j]
                     if col1 in df.columns and col2 in df.columns:
-                        # Add interaction term
+                        # Calculate interaction term
                         interaction_name = f"{col1}_x_{col2}"
-                        df[interaction_name] = df[col1] * df[col2]
+                        interaction_features[interaction_name] = df[col1] * df[col2]
                         interaction_count += 1
                         
                 if interaction_count >= max_interactions:
                     break
             
-            if interaction_count > 0:
-                logger.info(f"Added {interaction_count} feature interaction terms")
+            # Add all interaction features at once using concat
+            if interaction_features:
+                interaction_df = pd.DataFrame(interaction_features, index=df.index)
+                df = pd.concat([df, interaction_df], axis=1)
+                logger.info(f"Added {len(interaction_features)} feature interaction terms")
                 
             return df
             
@@ -1714,3 +2179,272 @@ class FeatureEngineer:
         except Exception as e:
             logger.error(f"Error getting optimized feature set: {e}")
             return None 
+
+    def _normalize_features(self, df: pd.DataFrame) -> Dict[str, float]:
+        """
+        Domain-aware feature normalization that handles different data types appropriately.
+        Groups features by type and applies appropriate scaling/transformation.
+        """
+        try:
+            normalized = {}
+            
+            # Only process numeric columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            # Define feature groups with appropriate normalization strategies
+            feature_groups = {
+                'price_features': {
+                    'columns': ['Close', 'Open', 'High', 'Low', 'close_price', 'open_price', 'high_price', 'low_price'],
+                    'method': 'log_return'  # Log transformation for prices
+                },
+                'volume_features': {
+                    'columns': ['Volume', 'volume', 'avgDailyShareVolume', 'daily_volume'],
+                    'method': 'log_normalize'  # Log + Z-score for volume (right-skewed)
+                },
+                'sentiment_features': {
+                    'columns': [col for col in numeric_cols if 'sentiment' in col.lower() or 'mspr' in col.lower()],
+                    'method': 'bounded_normalize',  # Min-max for bounded features
+                    'bounds': (-1, 1)
+                },
+                'financial_ratios': {
+                    'columns': [col for col in numeric_cols if any(x in col.lower() for x in [
+                        'ratio', 'pe', 'pb', 'ps', 'ev_ebitda', 'roe', 'roa', 'margin', 'yield'
+                    ])],
+                    'method': 'robust_normalize'  # Robust scaling for ratios (outlier-resistant)
+                },
+                'percentage_features': {
+                    'columns': [col for col in numeric_cols if any(x in col.lower() for x in [
+                        'pct', 'change', 'growth', 'return', '_52week'
+                    ])],
+                    'method': 'bounded_normalize',
+                    'bounds': (-100, 100)  # Most percentage changes within ±100%
+                },
+                'count_features': {
+                    'columns': [col for col in numeric_cols if any(x in col.lower() for x in [
+                        'count', 'days', 'shares', 'analysts', 'recommendations'
+                    ])],
+                    'method': 'sqrt_normalize'  # Square root for count data
+                },
+                'beta_features': {
+                    'columns': [col for col in numeric_cols if 'beta' in col.lower()],
+                    'method': 'bounded_normalize',
+                    'bounds': (0, 3)  # Beta typically 0-3
+                },
+                'technical_indicators': {
+                    'columns': [col for col in numeric_cols if any(x in col.lower() for x in [
+                        'sma', 'ema', 'rsi', 'macd', 'bollinger', 'stoch', 'williams'
+                    ])],
+                    'method': 'z_normalize'  # Standard Z-score for technical indicators
+                },
+                'options_features': {
+                    'columns': [col for col in numeric_cols if col.lower().startswith('options_')],
+                    'method': 'options_normalize'  # Special handling for options data
+                }
+            }
+            
+            # Track which columns have been processed
+            processed_cols = set()
+            
+            # Process each feature group
+            for group_name, group_config in feature_groups.items():
+                group_cols = [col for col in group_config['columns'] if col in numeric_cols]
+                method = group_config['method']
+                
+                for col in group_cols:
+                    if col in processed_cols or col not in df.columns:
+                        continue
+                        
+                    try:
+                        series = df[col].dropna()
+                        if len(series) == 0:
+                            normalized[f'{col}_norm'] = 0.0
+                            continue
+                            
+                        # Apply appropriate normalization method
+                        if method == 'log_return':
+                            # Log return for prices
+                            if series.min() > 0:  # Ensure positive values
+                                log_series = np.log(series)
+                                if log_series.std() != 0:
+                                    norm_val = (log_series.iloc[-1] - log_series.mean()) / log_series.std()
+                                else:
+                                    norm_val = 0.0
+                            else:
+                                norm_val = 0.0
+                                
+                        elif method == 'log_normalize':
+                            # Log + Z-score for right-skewed data
+                            if series.min() > 0:
+                                log_series = np.log(series + 1)  # +1 to handle zeros
+                                if log_series.std() != 0:
+                                    norm_val = (log_series.iloc[-1] - log_series.mean()) / log_series.std()
+                                else:
+                                    norm_val = 0.0
+                            else:
+                                norm_val = 0.0
+                                
+                        elif method == 'bounded_normalize':
+                            # Min-max scaling for bounded features
+                            bounds = group_config.get('bounds', (series.min(), series.max()))
+                            min_val, max_val = bounds
+                            if max_val != min_val:
+                                norm_val = 2 * (series.iloc[-1] - min_val) / (max_val - min_val) - 1
+                            else:
+                                norm_val = 0.0
+                            # Clip to [-1, 1]
+                            norm_val = np.clip(norm_val, -1, 1)
+                            
+                        elif method == 'robust_normalize':
+                            # Robust scaling using median and IQR
+                            median_val = series.median()
+                            q75, q25 = np.percentile(series, [75, 25])
+                            iqr = q75 - q25
+                            if iqr != 0:
+                                norm_val = (series.iloc[-1] - median_val) / iqr
+                            else:
+                                norm_val = 0.0
+                            # Clip extreme outliers
+                            norm_val = np.clip(norm_val, -5, 5)
+                            
+                        elif method == 'sqrt_normalize':
+                            # Square root + Z-score for count data
+                            sqrt_series = np.sqrt(series + 1)  # +1 to handle zeros
+                            if sqrt_series.std() != 0:
+                                norm_val = (sqrt_series.iloc[-1] - sqrt_series.mean()) / sqrt_series.std()
+                            else:
+                                norm_val = 0.0
+                                
+                        elif method == 'options_normalize':
+                            # Special normalization for options features
+                            col_lower = col.lower()
+                            
+                            if 'put_call' in col_lower:
+                                # Put/call ratios: 0.5-2.0 typical range, log-scale
+                                if series.iloc[-1] > 0:
+                                    norm_val = np.log(series.iloc[-1] + 0.1) - np.log(1.0)  # Center around 1.0
+                                else:
+                                    norm_val = 0.0
+                            
+                            elif 'iv' in col_lower or 'volatility' in col_lower:
+                                # Implied volatility: 0.1-1.0 typical range
+                                norm_val = (series.iloc[-1] - 0.3) / 0.2  # Center around 30% IV
+                                norm_val = np.clip(norm_val, -3, 3)
+                            
+                            elif 'delta' in col_lower:
+                                # Delta: -1 to +1 range for puts/calls
+                                norm_val = series.iloc[-1]  # Already bounded
+                            
+                            elif 'gamma' in col_lower or 'theta' in col_lower or 'vega' in col_lower:
+                                # Greeks: use robust scaling due to wide ranges
+                                median_val = series.median()
+                                q75, q25 = np.percentile(series, [75, 25])
+                                iqr = q75 - q25
+                                if iqr != 0:
+                                    norm_val = (series.iloc[-1] - median_val) / iqr
+                                else:
+                                    norm_val = 0.0
+                                norm_val = np.clip(norm_val, -5, 5)
+                            
+                            elif 'volume' in col_lower or 'oi' in col_lower:
+                                # Options volume/OI: log transformation for right-skewed data
+                                if series.iloc[-1] > 0:
+                                    norm_val = np.log(series.iloc[-1] + 1) / 10  # Scale down
+                                else:
+                                    norm_val = 0.0
+                            
+                            elif 'strike' in col_lower or 'bias' in col_lower:
+                                # Strike-related: percentage from current price
+                                norm_val = np.clip(series.iloc[-1], -0.5, 0.5)  # ±50% max
+                            
+                            elif 'fear' in col_lower or 'expectation' in col_lower:
+                                # Regime indicators: typically 0-3 range
+                                norm_val = (series.iloc[-1] - 1.0) / 1.0  # Center around 1.0
+                                norm_val = np.clip(norm_val, -2, 2)
+                            
+                            else:
+                                # Default options normalization: robust scaling
+                                if series.std() != 0:
+                                    norm_val = (series.iloc[-1] - series.mean()) / series.std()
+                                else:
+                                    norm_val = 0.0
+                                norm_val = np.clip(norm_val, -3, 3)
+                        
+                        else:  # method == 'z_normalize'
+                            # Standard Z-score normalization
+                            if series.std() != 0:
+                                norm_val = (series.iloc[-1] - series.mean()) / series.std()
+                            else:
+                                norm_val = 0.0
+                        
+                        # Store normalized value
+                        normalized[f'{col}_norm'] = float(norm_val) if not np.isnan(norm_val) else 0.0
+                        processed_cols.add(col)
+                        
+                        # Add feature group indicator for model awareness
+                        normalized[f'{col}_group'] = hash(group_name) % 100  # Group encoding
+                        
+                    except (TypeError, ValueError, AttributeError) as e:
+                        logger.warning(f"Skipping normalization for {col} in group {group_name}: {e}")
+                        normalized[f'{col}_norm'] = 0.0
+                        continue
+            
+            # Handle any remaining unprocessed columns with standard normalization
+            unprocessed_cols = [col for col in numeric_cols if col not in processed_cols]
+            for col in unprocessed_cols:
+                if col in df.columns:
+                    try:
+                        series = df[col].dropna()
+                        if len(series) > 0 and series.std() != 0:
+                            norm_val = (series.iloc[-1] - series.mean()) / series.std()
+                            normalized[f'{col}_norm'] = float(norm_val) if not np.isnan(norm_val) else 0.0
+                        else:
+                            normalized[f'{col}_norm'] = 0.0
+                        # Mark as miscellaneous group
+                        normalized[f'{col}_group'] = 99  # Misc group
+                    except Exception as e:
+                        logger.warning(f"Skipping unprocessed column {col}: {e}")
+                        continue
+            
+            # Add feature interaction terms for key relationships
+            interaction_pairs = [
+                ('pe_ratio_norm', 'earnings_growth_norm'),  # P/E vs growth
+                ('mspr_norm', 'volume_norm'),  # Insider activity vs volume
+                ('sentiment_score_norm', 'recommendation_mean_norm'),  # Sentiment vs analyst rec
+                ('current_ratio_norm', 'debt_equity_norm'),  # Liquidity vs leverage
+                # OPTIONS INTERACTION TERMS (Critical for options-based predictions)
+                ('options_put_call_volume_ratio_norm', 'options_volatility_expectation_norm'),  # Fear vs volatility
+                ('options_iv_skew_norm', 'sentiment_score_norm'),  # Options sentiment vs general sentiment
+                ('options_weighted_delta_norm', 'volume_norm'),  # Options positioning vs stock volume
+                ('options_fear_indicator_norm', 'beta_norm'),  # Market fear vs stock sensitivity
+                ('options_strike_price_bias_norm', 'pe_ratio_norm')  # Price expectations vs valuation
+            ]
+            
+            for feat1, feat2 in interaction_pairs:
+                if feat1 in normalized and feat2 in normalized:
+                    normalized[f'{feat1}_{feat2}_interaction'] = normalized[feat1] * normalized[feat2]
+            
+            logger.info(f"Normalized {len(normalized)} features across {len(feature_groups)} domain-specific groups")
+            return normalized
+            
+        except Exception as e:
+            logger.error(f"Error in domain-aware feature normalization: {str(e)}")
+            return {}  # Return empty dict instead of trying to process all columns
+
+    def select_features(self, features: np.ndarray, targets: np.ndarray, k: int = 20) -> None:
+        """Select the most important features using SelectKBest."""
+        try:
+            # Initialize feature selector
+            self.feature_selector = SelectKBest(score_func=f_regression, k=k)
+            
+            # Fit selector
+            self.feature_selector.fit(features, targets)
+            
+            # Get selected feature indices
+            self.selected_features = self.feature_selector.get_support(indices=True)
+            
+            logger.info(f"Selected {len(self.selected_features)} most important features")
+            
+        except Exception as e:
+            logger.error(f"Error selecting features: {str(e)}")
+            self.feature_selector = None
+            self.selected_features = None

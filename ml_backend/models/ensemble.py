@@ -122,6 +122,10 @@ class EnsemblePredictor:
         self.xgb = XGBoostPredictor()
         self.feature_engineer = feature_engineer
         self.trained = False
+        # NEW: Dynamic weighting system
+        self.model_performance_history = {}
+        self.base_weights = {'lstm': 0.35, 'transformer': 0.35, 'xgb': 0.30}
+        self.adaptive_weights = self.base_weights.copy()
 
     def fit(self, X, y):
         # LSTM expects 3D, XGBoost expects 2D
@@ -135,37 +139,170 @@ class EnsemblePredictor:
         self.xgb.fit(X_flat, y)
         self.trained = True
 
-    def predict(self, X):
+    def predict(self, X, ticker=None, window=None, market_regime=None):
         if not self.trained:
             raise ValueError("EnsemblePredictor is not trained. Call fit() first.")
         preds = []
-        # Extract the true, unnormalized current price from the last time step in the sequence (assume 'Close' is the last feature in the last time step)
-        # If X is 3D: (samples, sequence_length, num_features_per_step)
-        # Use the last sample's last time step's 'Close' value
-        # If feature_engineer has feature_columns, use its index
+        model_names = []
+        
+        # Extract the true, unnormalized current price from the last time step in the sequence
         if self.feature_engineer and hasattr(self.feature_engineer, 'feature_columns') and 'Close' in self.feature_engineer.feature_columns:
             close_idx = self.feature_engineer.feature_columns.index('Close')
         else:
             close_idx = -1  # fallback to last column
         raw_current_price = float(X[-1, -1, close_idx])
+        
+        # Get predictions from each model
+        model_predictions = {}
+        
         # LSTM
-        lstm_pred = self.lstm.predict_all_windows(X, raw_current_price=raw_current_price)
-        # Use the first window's prediction (or average if multiple)
-        if lstm_pred:
-            lstm_vals = [v['prediction'] for v in lstm_pred.values() if v and 'prediction' in v]
-            if lstm_vals:
-                preds.append(np.array(lstm_vals))
+        try:
+            lstm_pred = self.lstm.predict_all_windows(X, raw_current_price=raw_current_price)
+            if lstm_pred:
+                lstm_vals = [v['prediction'] for v in lstm_pred.values() if v and 'prediction' in v]
+                if lstm_vals:
+                    model_predictions['lstm'] = np.mean(lstm_vals)
+                    model_names.append('lstm')
+        except Exception as e:
+            logger.warning(f"LSTM prediction failed: {e}")
+        
         # Transformer
-        preds.append(self.transformer.predict(X))
+        try:
+            transformer_pred = self.transformer.predict(X)
+            model_predictions['transformer'] = np.mean(transformer_pred) if hasattr(transformer_pred, '__len__') else transformer_pred
+            model_names.append('transformer')
+        except Exception as e:
+            logger.warning(f"Transformer prediction failed: {e}")
+        
         # XGBoost
-        X_flat = X.reshape((X.shape[0], -1))
-        preds.append(self.xgb.predict(X_flat))
-        # Average/blend predictions
-        # Ensure all preds are the same shape
-        min_len = min(len(p) for p in preds)
-        preds = [p[:min_len] for p in preds]
-        ensemble_pred = np.mean(preds, axis=0)
+        try:
+            X_flat = X.reshape((X.shape[0], -1))
+            xgb_pred = self.xgb.predict(X_flat)
+            model_predictions['xgb'] = np.mean(xgb_pred) if hasattr(xgb_pred, '__len__') else xgb_pred
+            model_names.append('xgb')
+        except Exception as e:
+            logger.warning(f"XGBoost prediction failed: {e}")
+        
+        if not model_predictions:
+            raise ValueError("All models failed to make predictions")
+        
+        # NEW: Dynamic ensemble weighting based on performance and market conditions
+        if ticker and window:
+            weights = self._calculate_dynamic_weights(model_predictions, ticker, window, market_regime)
+        else:
+            # Fallback to base weights
+            weights = {model: self.base_weights.get(model, 1.0/len(model_predictions)) 
+                      for model in model_predictions.keys()}
+        
+        # Normalize weights
+        total_weight = sum(weights.values())
+        if total_weight > 0:
+            weights = {k: v/total_weight for k, v in weights.items()}
+        else:
+            weights = {k: 1.0/len(model_predictions) for k in model_predictions.keys()}
+        
+        # Calculate weighted ensemble prediction
+        ensemble_pred = sum(pred * weights[model] for model, pred in model_predictions.items())
+        
+        logger.info(f"Ensemble prediction: {ensemble_pred:.4f} with weights: {weights}")
+        
         return ensemble_pred
+
+    def _calculate_dynamic_weights(self, model_predictions: dict, ticker: str, window: str, market_regime: str = None) -> dict:
+        """Calculate dynamic weights based on recent performance and market conditions."""
+        try:
+            # Start with base weights
+            weights = self.base_weights.copy()
+            
+            # Factor 1: Recent Performance (last 10 predictions)
+            performance_weights = self._get_performance_based_weights(ticker, window)
+            
+            # Factor 2: Market Regime Adaptation
+            regime_weights = self._get_regime_based_weights(market_regime)
+            
+            # Factor 3: Prediction Confidence (model agreement)
+            confidence_weights = self._get_confidence_based_weights(model_predictions)
+            
+            # Combine all factors with weights
+            final_weights = {}
+            for model in model_predictions.keys():
+                base_w = weights.get(model, 0.33)
+                perf_w = performance_weights.get(model, 0.33)
+                regime_w = regime_weights.get(model, 0.33)
+                conf_w = confidence_weights.get(model, 0.33)
+                
+                # Weighted combination
+                final_weights[model] = (
+                    base_w * 0.25 +         # Base weight
+                    perf_w * 0.40 +         # Performance (most important)
+                    regime_w * 0.25 +       # Market regime
+                    conf_w * 0.10           # Confidence
+                )
+            
+            # Ensure all weights are positive and sum to 1
+            min_weight = 0.05  # Minimum weight for any model
+            for model in final_weights:
+                final_weights[model] = max(min_weight, final_weights[model])
+            
+            return final_weights
+            
+        except Exception as e:
+            logger.warning(f"Error calculating dynamic weights: {e}")
+            return {model: 1.0/len(model_predictions) for model in model_predictions.keys()}
+    
+    def _get_performance_based_weights(self, ticker: str, window: str) -> dict:
+        """Get weights based on recent prediction performance."""
+        try:
+            # This would query MongoDB for recent prediction accuracy
+            # For now, return equal weights as placeholder
+            return {'lstm': 0.33, 'transformer': 0.33, 'xgb': 0.34}
+        except:
+            return {'lstm': 0.33, 'transformer': 0.33, 'xgb': 0.34}
+    
+    def _get_regime_based_weights(self, market_regime: str = None) -> dict:
+        """Adjust weights based on market regime."""
+        try:
+            if market_regime == 'high_volatility':
+                # In high volatility, favor more stable models
+                return {'lstm': 0.25, 'transformer': 0.25, 'xgb': 0.50}
+            elif market_regime == 'trending':
+                # In trending markets, favor sequence models
+                return {'lstm': 0.45, 'transformer': 0.45, 'xgb': 0.10}
+            elif market_regime == 'sideways':
+                # In sideways markets, favor traditional ML
+                return {'lstm': 0.20, 'transformer': 0.30, 'xgb': 0.50}
+            else:
+                # Default balanced weights
+                return {'lstm': 0.35, 'transformer': 0.35, 'xgb': 0.30}
+        except:
+            return {'lstm': 0.35, 'transformer': 0.35, 'xgb': 0.30}
+    
+    def _get_confidence_based_weights(self, model_predictions: dict) -> dict:
+        """Adjust weights based on prediction confidence (model agreement)."""
+        try:
+            if len(model_predictions) < 2:
+                return {model: 1.0 for model in model_predictions.keys()}
+            
+            pred_values = list(model_predictions.values())
+            pred_std = np.std(pred_values)
+            pred_mean = np.mean(pred_values)
+            
+            # If models agree (low std), use equal weights
+            # If models disagree (high std), favor the median prediction
+            if pred_std / abs(pred_mean) < 0.1:  # Low disagreement
+                return {model: 1.0/len(model_predictions) for model in model_predictions.keys()}
+            else:
+                # High disagreement - favor models closer to median
+                median_pred = np.median(pred_values)
+                weights = {}
+                for model, pred in model_predictions.items():
+                    # Closer to median = higher weight
+                    distance = abs(pred - median_pred)
+                    weights[model] = 1.0 / (1.0 + distance)
+                
+                return weights
+        except:
+            return {model: 1.0/len(model_predictions) for model in model_predictions.keys()}
 
     def _to_dataframe(self, X, y):
         # Helper to convert X (3D) and y to DataFrame for LSTM

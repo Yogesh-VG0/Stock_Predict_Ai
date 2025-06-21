@@ -1,0 +1,13 @@
+{
+  "ticker": "AAPL",
+  "window": "next_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-21T19:46:43.899530",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}
