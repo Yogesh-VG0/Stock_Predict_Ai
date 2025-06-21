@@ -10,7 +10,31 @@ MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
 
 # S&P 100 Tickers (Top 25 from your list, with company names)
 TOP_100_TICKERS = [
-    "AAPL"
+    "AAPL",   # Apple Inc.
+    "MSFT",   # Microsoft Corporation
+    "NVDA",   # Nvidia Corporation
+    "AMZN",   # Amazon.com, Inc.
+    "GOOGL",  # Alphabet Inc. (Class A)
+    "META",   # Meta Platforms, Inc.
+    "BRK.B",  # Berkshire Hathaway Inc. (Class B)
+    "TSLA",   # Tesla, Inc.
+    "AVGO",   # Broadcom Inc.
+    "LLY",    # Eli Lilly and Company
+    "WMT",    # Walmart Inc.
+    "JPM",    # JPMorgan Chase & Co.
+    "V",      # Visa Inc.
+    "MA",     # Mastercard Incorporated
+    "NFLX",   # Netflix, Inc.
+    "XOM",    # Exxon Mobil Corporation
+    "COST",   # Costco Wholesale Corporation
+    "ORCL",   # Oracle Corporation
+    "PG",     # The Procter & Gamble Company
+    "JNJ",    # Johnson & Johnson
+    "UNH",    # UnitedHealth Group Incorporated
+    "HD",     # The Home Depot, Inc.
+    "ABBV",   # AbbVie Inc.
+    "KO",     # The Coca-Cola Company
+    "CRM"     # Salesforce, Inc.
 ]
 
 # API Configuration

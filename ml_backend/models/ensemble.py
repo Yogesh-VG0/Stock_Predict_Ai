@@ -10,6 +10,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.regularizers import l2
 import pandas as pd
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -117,7 +118,7 @@ class XGBoostPredictor:
 
 class EnsemblePredictor:
     def __init__(self, feature_engineer=None):
-        self.lstm = StockPredictor(feature_engineer=feature_engineer)
+        self.lstm = None  # Will be initialized properly
         self.transformer = None
         self.xgb = XGBoostPredictor()
         self.feature_engineer = feature_engineer
@@ -127,70 +128,100 @@ class EnsemblePredictor:
         self.base_weights = {'lstm': 0.35, 'transformer': 0.35, 'xgb': 0.30}
         self.adaptive_weights = self.base_weights.copy()
 
-    def fit(self, X, y):
-        # LSTM expects 3D, XGBoost expects 2D
-        # Train LSTM
-        self.lstm.train_all_models({'main': self._to_dataframe(X, y)})
-        # Train Transformer
-        self.transformer = TransformerPredictor(input_shape=X.shape[1:])
-        self.transformer.fit(X, y)
-        # Train XGBoost
-        X_flat = X.reshape((X.shape[0], -1))
-        self.xgb.fit(X_flat, y)
-        self.trained = True
+    def fit(self, X, y, ticker=None, window=None, mongo_client=None):
+        """
+        FIXED: Properly train all ensemble models with correct feature integration.
+        """
+        try:
+            logger.info("Training ensemble models with proper integration...")
+            
+            # Initialize LSTM properly if we have the required components
+            if self.feature_engineer and mongo_client:
+                from .predictor import StockPredictor
+                self.lstm = StockPredictor(mongo_client)
+                self.lstm.set_feature_engineer(self.feature_engineer)
+                
+                # Train LSTM with proper data format
+                if ticker and window:
+                    # Use the proper training method
+                    self.lstm.train_models(ticker, X, y, window)
+                else:
+                    logger.warning("LSTM training skipped: ticker and window required")
+            else:
+                logger.warning("LSTM training skipped: feature_engineer and mongo_client required")
+            
+            # Train Transformer
+            self.transformer = TransformerPredictor(input_shape=X.shape[1:])
+            self.transformer.fit(X, y)
+            
+            # Train XGBoost
+            X_flat = X.reshape((X.shape[0], -1))
+            self.xgb.fit(X_flat, y)
+            
+            self.trained = True
+            logger.info("Ensemble training completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error training ensemble: {e}")
+            raise
 
-    def predict(self, X, ticker=None, window=None, market_regime=None):
+    def predict(self, X, ticker=None, window=None, market_regime=None, raw_current_price=None):
+        """
+        FIXED: Properly handle predictions from all models with correct data formats.
+        """
         if not self.trained:
             raise ValueError("EnsemblePredictor is not trained. Call fit() first.")
-        preds = []
-        model_names = []
-        
-        # Extract the true, unnormalized current price from the last time step in the sequence
-        if self.feature_engineer and hasattr(self.feature_engineer, 'feature_columns') and 'Close' in self.feature_engineer.feature_columns:
-            close_idx = self.feature_engineer.feature_columns.index('Close')
-        else:
-            close_idx = -1  # fallback to last column
-        raw_current_price = float(X[-1, -1, close_idx])
-        
-        # Get predictions from each model
+            
         model_predictions = {}
         
-        # LSTM
-        try:
-            lstm_pred = self.lstm.predict_all_windows(X, raw_current_price=raw_current_price)
-            if lstm_pred:
-                lstm_vals = [v['prediction'] for v in lstm_pred.values() if v and 'prediction' in v]
-                if lstm_vals:
-                    model_predictions['lstm'] = np.mean(lstm_vals)
-                    model_names.append('lstm')
-        except Exception as e:
-            logger.warning(f"LSTM prediction failed: {e}")
+        # LSTM prediction (FIXED: Use proper predict method)
+        if self.lstm and hasattr(self.lstm, 'models') and ticker and window:
+            try:
+                # Create a dummy DataFrame for LSTM prediction
+                if raw_current_price:
+                    # Use the proper predict method from StockPredictor
+                    lstm_result = self.lstm.predict(
+                        df=X,  # X should be a DataFrame or convert it
+                        window=window,
+                        ticker=ticker,
+                        raw_current_price=raw_current_price
+                    )
+                    if lstm_result and 'prediction' in lstm_result:
+                        model_predictions['lstm'] = lstm_result['prediction']
+                else:
+                    logger.warning("LSTM prediction skipped: raw_current_price required")
+            except Exception as e:
+                logger.warning(f"LSTM prediction failed: {e}")
         
-        # Transformer
-        try:
-            transformer_pred = self.transformer.predict(X)
-            model_predictions['transformer'] = np.mean(transformer_pred) if hasattr(transformer_pred, '__len__') else transformer_pred
-            model_names.append('transformer')
-        except Exception as e:
-            logger.warning(f"Transformer prediction failed: {e}")
+        # Transformer prediction
+        if self.transformer:
+            try:
+                transformer_pred = self.transformer.predict(X)
+                model_predictions['transformer'] = (
+                    np.mean(transformer_pred) if hasattr(transformer_pred, '__len__') 
+                    else transformer_pred
+                )
+            except Exception as e:
+                logger.warning(f"Transformer prediction failed: {e}")
         
-        # XGBoost
+        # XGBoost prediction
         try:
             X_flat = X.reshape((X.shape[0], -1))
             xgb_pred = self.xgb.predict(X_flat)
-            model_predictions['xgb'] = np.mean(xgb_pred) if hasattr(xgb_pred, '__len__') else xgb_pred
-            model_names.append('xgb')
+            model_predictions['xgb'] = (
+                np.mean(xgb_pred) if hasattr(xgb_pred, '__len__') 
+                else xgb_pred
+            )
         except Exception as e:
             logger.warning(f"XGBoost prediction failed: {e}")
         
         if not model_predictions:
             raise ValueError("All models failed to make predictions")
         
-        # NEW: Dynamic ensemble weighting based on performance and market conditions
+        # Calculate dynamic weights
         if ticker and window:
             weights = self._calculate_dynamic_weights(model_predictions, ticker, window, market_regime)
         else:
-            # Fallback to base weights
             weights = {model: self.base_weights.get(model, 1.0/len(model_predictions)) 
                       for model in model_predictions.keys()}
         
@@ -206,7 +237,12 @@ class EnsemblePredictor:
         
         logger.info(f"Ensemble prediction: {ensemble_pred:.4f} with weights: {weights}")
         
-        return ensemble_pred
+        return {
+            'prediction': ensemble_pred,
+            'model_predictions': model_predictions,
+            'weights': weights,
+            'confidence': self._calculate_ensemble_confidence(model_predictions, weights)
+        }
 
     def _calculate_dynamic_weights(self, model_predictions: dict, ticker: str, window: str, market_regime: str = None) -> dict:
         """Calculate dynamic weights based on recent performance and market conditions."""
@@ -251,12 +287,75 @@ class EnsemblePredictor:
             return {model: 1.0/len(model_predictions) for model in model_predictions.keys()}
     
     def _get_performance_based_weights(self, ticker: str, window: str) -> dict:
-        """Get weights based on recent prediction performance."""
+        """
+        FIXED: Get weights based on recent prediction performance using MongoDB.
+        """
         try:
-            # This would query MongoDB for recent prediction accuracy
-            # For now, return equal weights as placeholder
-            return {'lstm': 0.33, 'transformer': 0.33, 'xgb': 0.34}
-        except:
+            # Default weights as fallback
+            default_weights = {'lstm': 0.33, 'transformer': 0.33, 'xgb': 0.34}
+            
+            # Check if we have a feature engineer with MongoDB access
+            if not self.feature_engineer or not hasattr(self.feature_engineer, 'mongo_client'):
+                return default_weights
+                
+            mongo_client = self.feature_engineer.mongo_client
+            if not mongo_client:
+                return default_weights
+            
+            # Query recent prediction performance from MongoDB
+            collection = mongo_client.db['model_performance']
+            
+            # Get performance data for the last 30 days
+            thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+            
+            performance_data = list(collection.find({
+                'ticker': ticker,
+                'window': window,
+                'timestamp': {'$gte': thirty_days_ago}
+            }).sort('timestamp', -1).limit(50))
+            
+            if not performance_data:
+                logger.info(f"No performance history found for {ticker}-{window}, using default weights")
+                return default_weights
+            
+            # Calculate performance metrics for each model
+            model_scores = {'lstm': [], 'transformer': [], 'xgb': []}
+            
+            for record in performance_data:
+                if 'model_accuracies' in record:
+                    accuracies = record['model_accuracies']
+                    for model in model_scores.keys():
+                        if model in accuracies and accuracies[model] is not None:
+                            model_scores[model].append(accuracies[model])
+            
+            # Calculate average performance and convert to weights
+            performance_weights = {}
+            total_performance = 0
+            
+            for model, scores in model_scores.items():
+                if scores:
+                    avg_score = np.mean(scores)
+                    # Convert accuracy to weight (higher accuracy = higher weight)
+                    performance_weights[model] = max(0.1, avg_score)  # Minimum weight of 0.1
+                    total_performance += performance_weights[model]
+                else:
+                    performance_weights[model] = 0.33  # Default if no history
+                    total_performance += 0.33
+            
+            # Normalize weights
+            if total_performance > 0:
+                performance_weights = {
+                    model: weight / total_performance 
+                    for model, weight in performance_weights.items()
+                }
+            else:
+                performance_weights = default_weights
+            
+            logger.info(f"Performance-based weights for {ticker}-{window}: {performance_weights}")
+            return performance_weights
+            
+        except Exception as e:
+            logger.warning(f"Error calculating performance-based weights: {e}")
             return {'lstm': 0.33, 'transformer': 0.33, 'xgb': 0.34}
     
     def _get_regime_based_weights(self, market_regime: str = None) -> dict:
@@ -303,6 +402,47 @@ class EnsemblePredictor:
                 return weights
         except:
             return {model: 1.0/len(model_predictions) for model in model_predictions.keys()}
+
+    def _calculate_ensemble_confidence(self, model_predictions: dict, weights: dict) -> float:
+        """
+        Calculate ensemble confidence based on model agreement and individual model confidence.
+        """
+        try:
+            if len(model_predictions) < 2:
+                return 0.5  # Low confidence with only one model
+            
+            pred_values = list(model_predictions.values())
+            
+            # Factor 1: Model agreement (lower std = higher confidence)
+            pred_std = np.std(pred_values)
+            pred_mean = np.mean(pred_values)
+            
+            if abs(pred_mean) > 1e-6:
+                agreement_factor = max(0.0, 1.0 - (pred_std / abs(pred_mean)))
+            else:
+                agreement_factor = 0.5
+            
+            # Factor 2: Weight distribution (more balanced = higher confidence)
+            weight_values = list(weights.values())
+            weight_entropy = -sum(w * np.log(w + 1e-10) for w in weight_values)
+            max_entropy = np.log(len(weight_values))
+            balance_factor = weight_entropy / max_entropy if max_entropy > 0 else 0.5
+            
+            # Factor 3: Number of successful models
+            model_count_factor = min(len(model_predictions) / 3.0, 1.0)  # Max confidence with 3+ models
+            
+            # Combine factors
+            confidence = (
+                agreement_factor * 0.5 +    # Model agreement is most important
+                balance_factor * 0.3 +      # Weight balance
+                model_count_factor * 0.2    # Number of models
+            )
+            
+            return max(0.1, min(0.95, confidence))  # Clamp between 0.1 and 0.95
+            
+        except Exception as e:
+            logger.warning(f"Error calculating ensemble confidence: {e}")
+            return 0.5
 
     def _to_dataframe(self, X, y):
         # Helper to convert X (3D) and y to DataFrame for LSTM
@@ -399,3 +539,51 @@ class EnsemblePredictor:
                 
         except Exception as e:
             logger.error(f"Error calculating feature importance for {ticker}: {e}") 
+
+    def store_model_performance(self, ticker: str, window: str, actual_price: float, 
+                              predicted_price: float, model_predictions: dict, mongo_client=None):
+        """
+        Store model performance for future weight calculations.
+        """
+        try:
+            if not mongo_client:
+                if self.feature_engineer and hasattr(self.feature_engineer, 'mongo_client'):
+                    mongo_client = self.feature_engineer.mongo_client
+                else:
+                    return False
+            
+            # Calculate accuracy for each model
+            model_accuracies = {}
+            for model, pred in model_predictions.items():
+                if pred is not None:
+                    # Calculate accuracy as 1 - |relative_error|
+                    if actual_price != 0:
+                        relative_error = abs(pred - actual_price) / abs(actual_price)
+                        accuracy = max(0.0, 1.0 - relative_error)
+                    else:
+                        accuracy = 0.5  # Neutral score if actual price is 0
+                    model_accuracies[model] = accuracy
+                else:
+                    model_accuracies[model] = None
+            
+            # Store in MongoDB
+            collection = mongo_client.db['model_performance']
+            
+            performance_doc = {
+                'ticker': ticker,
+                'window': window,
+                'actual_price': actual_price,
+                'predicted_price': predicted_price,
+                'model_predictions': model_predictions,
+                'model_accuracies': model_accuracies,
+                'timestamp': datetime.utcnow(),
+                'ensemble_accuracy': model_accuracies.get('ensemble', 0.0)
+            }
+            
+            collection.insert_one(performance_doc)
+            logger.info(f"Stored performance data for {ticker}-{window}: accuracies {model_accuracies}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error storing model performance: {e}")
+            return False 

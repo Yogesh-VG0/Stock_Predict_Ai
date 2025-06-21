@@ -58,20 +58,32 @@ class LoggingCallback(Callback):
         logger.info(f"Epoch {epoch+1}/{self.epochs}: loss={logs.get('loss', 0):.4f}, val_loss={logs.get('val_loss', 0):.4f}, elapsed={elapsed:.1f}s, ETA={eta:.1f}s")
 
 class StockPredictor:
-    def __init__(self, mongo_client):
+    def __init__(self, mongo_client, feature_engineer=None):
+        """
+        FIXED: Initialize StockPredictor with proper dependency handling.
+        """
         self.mongo_client = mongo_client
         self.models = {}
         self.lgbm_models = {}
         self.xgb_models = {}
         self.feature_selectors = {}
         self.feature_selector = None
-        self.feature_engineer = None  # Will be set via set_feature_engineer
+        
+        # FIXED: Properly handle feature_engineer initialization
+        if feature_engineer is not None:
+            self.feature_engineer = feature_engineer
+        else:
+            # Initialize a default feature engineer if none provided
+            from ml_backend.data.features import FeatureEngineer
+            self.feature_engineer = FeatureEngineer(mongo_client=mongo_client)
+        
         self.scaler = StandardScaler()
         self.model_metadata = {}
         self.model_dir = "models"  # Default models directory
         # Updated windows: next_day, 7_day (1 week), 30_day (1 month)
         self.prediction_windows = ['next_day', '7_day', '30_day']
-        # Marketstack API configuration
+        
+        # API configuration
         self.marketstack_api_key = os.getenv("MARKETSTACK_API_KEY")
         self.marketstack_base_url = "http://api.marketstack.com/v2"
         self.stockdata_api_key = os.getenv("STOCKDATA_API_KEY")
@@ -84,6 +96,10 @@ class StockPredictor:
         self.metrics = {}
         self.feature_columns = []
         
+        # Ensure mongo_client is valid
+        if not self.mongo_client:
+            raise ValueError("MongoDB client is required for StockPredictor initialization")
+
     def prepare_training_data(self, ticker: str, window: str, 
                             start_date: str = None, end_date: str = None):
         """Prepare data for training with consistent feature engineering."""
@@ -1435,7 +1451,7 @@ class StockPredictor:
         raw_current_price: float = None,
         short_interest_data: List[Dict] = None
     ) -> Dict[str, Any]:
-        """Make stock price prediction with enhanced current price detection."""
+        """Make stock price prediction with enhanced feature integration and error handling."""
         try:
             # Get current price using enhanced fallback system
             if raw_current_price is None:
@@ -1443,33 +1459,47 @@ class StockPredictor:
             
             logger.info(f"Using current price for {ticker}: ${raw_current_price:.2f}")
 
+            # FIXED: Proper feature preparation for prediction
             if isinstance(df, pd.DataFrame):
-                # Use proper path to feature_columns.json
-                feature_columns_path = os.path.join(self.model_dir, 'feature_columns.json')
-                with open(feature_columns_path, 'r') as f:
-                    feature_columns = json.load(f)
-                df = df.reindex(columns=feature_columns, fill_value=0)
+                # Use feature engineer to prepare features consistently
+                sentiment_data = self.mongo_client.get_latest_sentiment(ticker) if self.mongo_client else None
                 
-                # Add short interest data if provided
-                if short_interest_data:
-                    short_interest_df = pd.DataFrame(short_interest_data)
-                    short_interest_df['settlement_date'] = pd.to_datetime(short_interest_df['settlement_date'])
-                    short_interest_df.set_index('settlement_date', inplace=True)
-                    df = df.merge(short_interest_df, left_index=True, right_index=True, how='left')
-                    df.fillna(method='ffill', inplace=True)
+                # Get window size mapping
+                window_size_map = {'next_day': 1, '7_day': 7, '30_day': 30}
+                window_size = window_size_map.get(window, 1)
                 
-                features, _ = self.feature_engineer.prepare_features(df)
-                if raw_current_price is None:
-                    raw_current_price = float(df['Close'].iloc[-1])
+                # Prepare features using the same pipeline as training
+                features, _ = self.feature_engineer.prepare_features(
+                    df=df.copy(),
+                    sentiment_dict=sentiment_data,
+                    window_size=window_size,
+                    ticker=ticker,
+                    mongo_client=self.mongo_client
+                )
+                
+                if features is None:
+                    raise ValueError(f"Feature preparation failed for {ticker}-{window}")
+                
+                logger.info(f"Prepared features shape: {features.shape}")
+                
+                # For prediction, we only need the last sample
+                if len(features.shape) > 1 and features.shape[0] > 1:
+                    features = features[-1:, :]  # Take only last row for prediction
+                    
             else:
                 features = df
                 if raw_current_price is None:
                     raise ValueError("raw_current_price must be provided when input is not a DataFrame.")
 
-            logger.info(f"Input features for prediction (ticker={ticker}, window={window}): {features}")
+            logger.info(f"Input features for prediction (ticker={ticker}, window={window}): shape {features.shape}")
+            
+            # Prepare features for different model types
             if features.ndim == 2:
-                features = features[np.newaxis, ...]
-            X_flat = features.reshape(1, -1)
+                features_3d = features[np.newaxis, ...] if features.shape[0] == 1 else features
+            else:
+                features_3d = features
+                
+            X_flat = features_3d.reshape(features_3d.shape[0], -1)
             
             # Apply the same feature selection used during training
             if hasattr(self, 'feature_selectors') and (ticker, window) in self.feature_selectors:
@@ -1493,29 +1523,27 @@ class StockPredictor:
             xgb_model = self.xgb_models.get((ticker, window))
             xgb_pred = xgb_model.predict(X_flat)[0] if xgb_model else None
 
-
-            # LSTM (if available)
+            # LSTM (if available) - FIXED: Proper shape handling
             lstm_pred = None
             if (ticker, window) in self.models:
                 try:
-                    # Prepare features for LSTM prediction
+                    # Ensure proper 3D shape for LSTM
                     if window == 'next_day':
-                        # For next_day, features should be 2D -> reshape to 3D
-                        if len(features.shape) == 2:
-                            lstm_features = features.reshape(1, 1, features.shape[1])
+                        # For next_day, reshape 2D to 3D
+                        if len(features_3d.shape) == 2:
+                            lstm_features = features_3d.reshape(1, 1, features_3d.shape[1])
                         else:
-                            lstm_features = features
+                            lstm_features = features_3d
                     else:
-                        # For 30_day and 90_day, features should already be 3D
-                        lstm_features = features
+                        # For multi-day windows, use 3D features directly
+                        lstm_features = features_3d
                     
-                    # Ensure we have the right shape
                     logger.info(f"LSTM input shape for {window}: {lstm_features.shape}")
                     
                     # Make prediction
                     pred_norm = self.models[(ticker, window)].predict(lstm_features, verbose=0)[0]
                     
-                    # Handle prediction output - take first column if multiple outputs
+                    # Handle prediction output
                     if len(pred_norm.shape) > 0 and len(pred_norm) > 1:
                         pred_norm = pred_norm[0]
                     elif len(pred_norm.shape) == 0:
@@ -1553,15 +1581,22 @@ class StockPredictor:
                 "median": median_pred,
                 "lstm": lstm_pred,
                 "xgb": raw_current_price + xgb_pred if xgb_pred is not None else None,
-
                 "lgbm": raw_current_price + lgbm_pred if lgbm_pred is not None else None,
-                "quantiles": preds
+                "quantiles": preds,
+                "raw_current_price": raw_current_price,
+                "feature_shape": features.shape,
+                "models_used": {
+                    "lstm": lstm_pred is not None,
+                    "lgbm": lgbm_pred is not None,
+                    "xgb": xgb_pred is not None,
+                    "quantile": any(p is not None for p in preds.values())
+                }
             }
 
             logger.info(f"Unified prediction (ticker={ticker}, window={window}): {result}")
 
             # Get feature importance for explanation
-            feature_importance = self.explain_prediction(features, window, ticker)
+            feature_importance = self.explain_prediction(features_3d, window, ticker)
             
             # Generate LLM explanation
             explanation_data = {
@@ -1585,7 +1620,7 @@ class StockPredictor:
             if self.feature_engineer:
                 self.feature_engineer.store_llm_explanation(
                     ticker,
-                    df['date'].iloc[-1] if isinstance(df, pd.DataFrame) else datetime.utcnow(),
+                    df['date'].iloc[-1] if isinstance(df, pd.DataFrame) and 'date' in df.columns else datetime.utcnow(),
                     explanation_data
                 )
             
@@ -1596,6 +1631,8 @@ class StockPredictor:
 
         except Exception as e:
             logger.error(f"Error making unified prediction for {ticker} - {window} window: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
     def explain_prediction(self, features: np.ndarray, window: str, ticker: str) -> Dict[str, float]:
