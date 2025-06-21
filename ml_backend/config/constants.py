@@ -11,30 +11,7 @@ MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
 # S&P 100 Tickers (Top 25 from your list, with company names)
 TOP_100_TICKERS = [
     "AAPL",   # Apple Inc.
-    "MSFT",   # Microsoft Corporation
-    "NVDA",   # Nvidia Corporation
-    "AMZN",   # Amazon.com, Inc.
-    "GOOGL",  # Alphabet Inc. (Class A)
-    "META",   # Meta Platforms, Inc.
-    "BRK-B",  # Berkshire Hathaway Inc. (Class B)
-    "TSLA",   # Tesla, Inc.
-    "AVGO",   # Broadcom Inc.
-    "LLY",    # Eli Lilly and Company
-    "WMT",    # Walmart Inc.
-    "JPM",    # JPMorgan Chase & Co.
-    "V",      # Visa Inc.
-    "MA",     # Mastercard Incorporated
-    "NFLX",   # Netflix, Inc.
-    "XOM",    # Exxon Mobil Corporation
-    "COST",   # Costco Wholesale Corporation
-    "ORCL",   # Oracle Corporation
-    "PG",     # The Procter & Gamble Company
-    "JNJ",    # Johnson & Johnson
-    "UNH",    # UnitedHealth Group Incorporated
-    "HD",     # The Home Depot, Inc.
-    "ABBV",   # AbbVie Inc.
-    "KO",     # The Coca-Cola Company
-    "CRM"     # Salesforce, Inc.
+    "MSFT"   # Microsoft Corporation
 ]
 
 # API Configuration
@@ -55,10 +32,115 @@ API_CONFIG = {
 
 # Data Collection
 HISTORICAL_DATA_YEARS = 10
+# Reddit Configuration
 REDDIT_SUBREDDITS = [
     "stocks", "wallstreetbets", "investing", "finance", "economics",
     "StockMarket", "SecurityAnalysis", "OptionTrading"
 ]
+
+# Ticker-specific subreddit mapping for enhanced Reddit sentiment analysis
+TICKER_SUBREDDITS = {
+    "AAPL": ["AAPL", "applestocks", "stocks", "wallstreetbets"],
+    "MSFT": ["Microsoft", "stocks", "investing"],
+    "NVDA": ["NVDA_Stock", "NVDA", "stocks", "wallstreetbets"],
+    "AMZN": ["AmazonStock", "Amazon", "stocks", "investing"],
+    "GOOG": ["stocks", "investing", "wallstreetbets"],
+    "GOOGL": ["stocks", "investing", "wallstreetbets"],
+    "META": ["MetaStock", "Facebook", "stocks", "wallstreetbets"],
+    "BRK.B": ["brkb", "stocks", "investing"],
+    "TSLA": ["teslainvestorsclub", "TSLA", "stocks", "wallstreetbets"],
+    "AVGO": ["stocks", "investing", "wallstreetbets"],
+    "LLY": ["stocks", "investing"],
+    "WMT": ["walmart", "stocks", "investing"],
+    "JPM": ["stocks", "investing"],
+    "V": ["stocks", "investing"],
+    "MA": ["stocks", "investing"],
+    "NFLX": ["NetflixStock", "Netflix", "stocks", "wallstreetbets"],
+    "XOM": ["stocks", "investing"],
+    "COST": ["Costco", "stocks", "investing"],
+    "ORCL": ["stocks", "investing"],
+    "PG": ["stocks", "investing"],
+    "JNJ": ["stocks", "investing"],
+    "UNH": ["stocks", "investing"],
+    "HD": ["HomeDepot", "stocks", "investing"],
+    "ABBV": ["stocks", "investing"],
+    "KO": ["CocaCola", "stocks", "investing"],
+    "BAC": ["stocks", "investing"],
+    "TMUS": ["tmobile", "stocks", "investing"],
+    "PLTR": ["PLTR", "wallstreetbets", "stocks"],
+    "PM": ["stocks", "investing"],
+    "CRM": ["salesforce", "stocks", "investing"],
+    "CVX": ["stocks", "investing"],
+    "WFC": ["stocks", "investing"],
+    "CSCO": ["cisco", "stocks", "investing"],
+    "MCD": ["McDonalds", "stocks", "investing"],
+    "ABT": ["stocks", "investing"],
+    "IBM": ["IBM", "stocks", "investing"],
+    "GE": ["GeneralElectric", "stocks", "investing"],
+    "MRK": ["stocks", "investing"],
+    "LIN": ["stocks", "investing"],
+    "T": ["ATT", "stocks", "investing"],
+    "NOW": ["servicenow", "stocks", "investing"],
+    "ACN": ["Accenture", "stocks", "investing"],
+    "AXP": ["stocks", "investing"],
+    "MS": ["stocks", "investing"],
+    "PEP": ["Pepsi", "stocks", "investing"],
+    "VZ": ["verizon", "stocks", "investing"],
+    "ISRG": ["IntuitiveSurgical", "stocks", "investing"],
+    "INTU": ["Intuit", "stocks", "investing"],
+    "GS": ["GoldmanSachs", "stocks", "investing"],
+    "RTX": ["Raytheon", "stocks", "investing"],
+    "BKNG": ["Booking", "stocks", "investing"],
+    "DIS": ["Disney", "stocks", "investing"],
+    "QCOM": ["Qualcomm", "stocks", "investing"],
+    "TMO": ["ThermoFisher", "stocks", "investing"],
+    "ADBE": ["Adobe", "stocks", "investing"],
+    "AMD": ["AMD_Stock", "AMD", "stocks", "wallstreetbets"],
+    "AMGN": ["stocks", "investing"],
+    "SCHW": ["CharlesSchwab", "stocks", "investing"],
+    "CAT": ["Caterpillar", "stocks", "investing"],
+    "TXN": ["TexasInstruments", "stocks", "investing"],
+    "DHR": ["stocks", "investing"],
+    "BLK": ["stocks", "investing"],
+    "PFE": ["Pfizer", "stocks", "investing"],
+    "BA": ["boeing", "stocks", "investing"],
+    "NEE": ["stocks", "investing"],
+    "HON": ["Honeywell", "stocks", "investing"],
+    "GILD": ["stocks", "investing"],
+    "UNP": ["UnionPacific", "stocks", "investing"],
+    "C": ["Citigroup", "stocks", "investing"],
+    "CMCSA": ["Comcast", "stocks", "investing"],
+    "DE": ["JohnDeere", "stocks", "investing"],
+    "LOW": ["Lowes", "stocks", "investing"],
+    "COP": ["stocks", "investing"],
+    "LMT": ["LockheedMartin", "stocks", "investing"],
+    "CHTR": ["Charter", "stocks", "investing"],
+    "MDT": ["Medtronic", "stocks", "investing"],
+    "AMT": ["stocks", "investing"],
+    "BMY": ["BMS", "stocks", "investing"],
+    "SO": ["SouthernCompany", "stocks", "investing"],
+    "MO": ["Altria", "stocks", "investing"],
+    "DUK": ["DukeEnergy", "stocks", "investing"],
+    "SBUX": ["starbucks", "stocks", "investing"],
+    "MDLZ": ["stocks", "investing"],
+    "INTC": ["Intel", "stocks", "investing"],
+    "CVS": ["CVS", "stocks", "investing"],
+    "NKE": ["Nike", "stocks", "investing"],
+    "UPS": ["UPS", "stocks", "investing"],
+    "MMM": ["3M", "stocks", "investing"],
+    "CL": ["Colgate", "stocks", "investing"],
+    "GD": ["GeneralDynamics", "stocks", "investing"],
+    "COF": ["CapitalOne", "stocks", "investing"],
+    "PYPL": ["PayPal", "stocks", "investing"],
+    "USB": ["USBank", "stocks", "investing"],
+    "EMR": ["EmersonElectric", "stocks", "investing"],
+    "BK": ["BankofNewYork", "stocks", "investing"],
+    "SPG": ["SimonProperty", "stocks", "investing"],
+    "MET": ["MetLife", "stocks", "investing"],
+    "FDX": ["FedEx", "stocks", "investing"],
+    "AIG": ["AIG", "stocks", "investing"],
+    "TGT": ["Target", "stocks", "investing"]
+}
 
 # RSS Feeds - Removed general market feeds since we use stock-specific RSS feeds
 # Stock-specific RSS feeds are generated dynamically in sentiment.py:

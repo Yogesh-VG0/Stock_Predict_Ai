@@ -784,7 +784,7 @@ class SECFilingsAnalyzer:
                 }
                 
             # Filter out insider transactions and non-relevant forms
-            excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP']
+            excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K', 'SC 13D/A', 'SC 13G/A']
             filings = [f for f in filings if f.get('type', '') not in excluded_forms]
             logger.info(f"FMP returned {len(filings)} total filings, processing {len(filings)} after filtering")
             total_filings = len(filings)
@@ -871,30 +871,24 @@ class SECFilingsAnalyzer:
                 logger.warning("Kaleidoscope API key not found, attempting FMP fallback for SEC filings")
                 return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
             
-            # Calculate date range
+            # Calculate date range - extend lookback for more filings
             end_date = datetime.utcnow()
-            start_date = end_date - timedelta(days=lookback_days)
+            start_date = end_date - timedelta(days=max(lookback_days, 90))  # Minimum 90 days
             
             # Convert dates to Unix timestamps
             start_timestamp = int(start_date.timestamp())
             end_timestamp = int(end_date.timestamp())
             
             # Construct API URL with new format
-            url = f"https://api.kscope.io/v2/sec/search/{ticker}?key={self.kaleidoscope_api_key}&content=sec&sd={start_timestamp}&ed={end_timestamp}&limit=30"
+            url = f"https://api.kscope.io/v2/sec/search/{ticker}?key={self.kaleidoscope_api_key}&content=sec&sd={start_timestamp}&ed={end_timestamp}&limit=50"  # Increased limit
             
-            logger.info(f"Fetching SEC filings for {ticker} from Kaleidoscope API...")
+            logger.info(f"Fetching SEC filings for {ticker} from Kaleidoscope API (extended {max(lookback_days, 90)} days)...")
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
                     if response.status == 404:
                         logger.warning(f"No SEC filings found for {ticker} via Kaleidoscope")
-                        return {
-                            "sec_filings_sentiment": 0.0,
-                            "sec_filings_volume": 0,
-                            "sec_filings_confidence": 0.0,
-                            "sec_filings_analyzed": 0,
-                            "sec_filings_error": "No filings found via Kaleidoscope"
-                        }
+                        return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
                     
                     if response.status != 200:
                         logger.error(f"Kaleidoscope API returned status {response.status} for {ticker}")
@@ -910,7 +904,8 @@ class SECFilingsAnalyzer:
                     
                     filings = data['data']
                     # Filter out only insider transactions and administrative forms
-                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP']
+                    # Keep more forms for better sentiment analysis
+                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K', 'SC 13D/A', 'SC 13G/A']
                     filings = [f for f in filings if f['Form'] not in excluded_forms]
                     total_filings = len(filings)
                     
@@ -922,6 +917,16 @@ class SECFilingsAnalyzer:
                         form_type = f['Form']
                         form_counts[form_type] = form_counts.get(form_type, 0) + 1
                     logger.info(f"Processing SEC forms: {form_counts}")
+                    
+                    # If still very limited filings, try FMP fallback
+                    if total_filings <= 2:
+                        logger.warning(f"Very few SEC filings found for {ticker} via Kaleidoscope ({total_filings}), trying FMP fallback")
+                        fmp_result = await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
+                        
+                        # If FMP has more filings, use it; otherwise continue with Kaleidoscope
+                        if fmp_result.get('sec_filings_volume', 0) > total_filings:
+                            logger.info(f"FMP has more filings ({fmp_result.get('sec_filings_volume', 0)}), using FMP instead")
+                            return fmp_result
                     
                     if total_filings == 0:
                         logger.warning(f"No relevant SEC filings found for {ticker} via Kaleidoscope, trying FMP fallback")
@@ -1318,7 +1323,7 @@ class SECFilingsAnalyzer:
                         }
                     
                     # Filter out insider transactions and non-relevant forms
-                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP']
+                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K', 'SC 13D/A', 'SC 13G/A']
                     filings = [f for f in data if f.get('type', '') not in excluded_forms]
                     logger.info(f"FMP returned {len(data)} total filings, processing {len(filings)} after filtering")
                     total_filings = len(filings)

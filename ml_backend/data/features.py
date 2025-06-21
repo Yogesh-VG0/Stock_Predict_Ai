@@ -687,28 +687,59 @@ class FeatureEngineer:
         return features_array_shap, selected_features
 
     def add_sentiment_features(self, df: pd.DataFrame, sentiment_dict: Dict = None) -> pd.DataFrame:
-        """Add sentiment features to the DataFrame, avoiding double-counting of sentiment sources."""
+        """
+        Add sentiment features to the DataFrame, avoiding double-counting of sentiment sources.
+        
+        This method ONLY uses the blended sentiment score and metadata to avoid duplicating
+        individual sentiment sources (FinViz, Yahoo, RSS, etc.) that are already analyzed
+        in the sentiment pipeline.
+        
+        Args:
+            df: DataFrame to add features to
+            sentiment_dict: Dictionary containing blended sentiment results from sentiment.py
+            
+        Returns:
+            DataFrame with sentiment features added
+            
+        Note:
+            Individual sentiment sources (finviz_sentiment, yahoo_news_sentiment, etc.) 
+            are NOT used here to prevent duplication with the sentiment analysis pipeline.
+        """
         if sentiment_dict is None:
+            logger.warning("No sentiment data provided for feature engineering")
             return df
 
         df = df.copy()
         
-        # Use only the blended sentiment score and its components
+        # Use only the blended sentiment score and its metadata
+        # These are aggregated scores, not individual source duplicates
         sentiment_features = {
-            'blended_sentiment_score': sentiment_dict.get('blended_sentiment_score', 0.0),
+            'blended_sentiment_score': sentiment_dict.get('blended_sentiment', 0.0),
             'sentiment_confidence': sentiment_dict.get('sentiment_confidence', 0.5),
-            'sentiment_volume': sentiment_dict.get('sentiment_volume', 0)
+            'sentiment_volume': sentiment_dict.get('sentiment_volume', 0),
+            
+            # Economic events are separate from news sentiment sources
+            'economic_event_sentiment': sentiment_dict.get('economic_event_sentiment', 0.0),
+            'economic_event_volatility': sentiment_dict.get('economic_event_volatility', 0.0),
+            'economic_event_volume': sentiment_dict.get('economic_event_volume', 0),
+            
+            # Insider trading sentiment (separate from news)
+            'insider_sentiment': sentiment_dict.get('finnhub_insider_sentiment', 0.0),
+            'recommendation_sentiment': sentiment_dict.get('finnhub_recommendation_sentiment', 0.0),
         }
         
-        # Add economic calendar features separately (not part of sentiment)
+        # Add economic calendar features separately (event-driven, not sentiment)
         if 'economic_event_features' in sentiment_dict:
             for key, value in sentiment_dict['economic_event_features'].items():
-                sentiment_features[f'event_{key}'] = value
+                # Prefix to avoid conflicts and make source clear
+                if isinstance(value, (int, float)):  # Only add numeric features
+                    sentiment_features[f'event_{key}'] = value
         
         # Add features to DataFrame
         for feature, value in sentiment_features.items():
             df[feature] = value
             
+        logger.info(f"Added {len(sentiment_features)} sentiment features (avoiding source duplication)")
         return df
 
     def add_alpha_vantage_features(self, df: pd.DataFrame, alpha_vantage_dict: Dict = None) -> pd.DataFrame:
