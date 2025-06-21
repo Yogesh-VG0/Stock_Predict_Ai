@@ -17,7 +17,8 @@ from dotenv import load_dotenv
 from ..config.constants import (
     REDDIT_SUBREDDITS,
     RETRY_CONFIG,
-    TOP_100_TICKERS
+    TOP_100_TICKERS,
+    TICKER_SUBREDDITS
 )
 from ..utils.mongodb import MongoDBClient
 from .sec_filings import SECFilingsAnalyzer
@@ -30,6 +31,9 @@ import asyncio
 import pandas_market_calendars as mcal
 import numpy as np
 from .economic_calendar import EconomicCalendar
+from .fred_macro import fetch_and_store_all_fred_indicators
+import sys
+import traceback
 
 # Load environment variables
 load_dotenv()
@@ -106,96 +110,141 @@ def _is_recent(date_obj):
 
 class SentimentAnalyzer:
     _macro_data_fetched = False  # Class variable to ensure macro data is fetched only once per process
+
     def __init__(self, mongo_client: MongoDBClient, calendar_fetcher=None):
         
-        """
-        Initialize the SentimentAnalyzer class.
-        
-        Args:
-            mongo_client: MongoDB client instance
-            calendar_fetcher: Optional shared EconomicCalendar instance
-        """
         self.mongo_client = mongo_client
-        self.api_key = os.getenv("ALPHAVANTAGE_API_KEY")
-        self.vader = SentimentIntensityAnalyzer()
-        self.recent_cutoff = get_cutoff_datetime()
-        self.news_fetcher = None
-        
-        # Initialize FMP API manager
-        self.fmp_manager = FMPAPIManager(mongo_client)
-        
-        self.max_retries = RETRY_CONFIG["max_retries"]
-        self.base_delay = RETRY_CONFIG["base_delay"]
-        self.max_delay = RETRY_CONFIG["max_delay"]
-        
-        # Initialize sentiment analysis tools
-        self.vader = SentimentIntensityAnalyzer()
-        
-        # Initialize SEC filings analyzer
+        # Initialize FinBERT model if available
         try:
+            from transformers import pipeline
+            self.finbert = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+            logger.info("FinBERT model loaded for enhanced sentiment analysis")
+        except ImportError:
+            logger.warning("Transformers/FinBERT not available, using VADER only")
+            self.finbert = None
+        except Exception as e:
+            logger.warning(f"Failed to load FinBERT: {e}, using VADER only")
+            self.finbert = None
+        
+        # Initialize VADER sentiment analyzer
+        try:
+            from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+            self.vader = SentimentIntensityAnalyzer()
+            logger.info("VADER sentiment analyzer initialized")
+        except ImportError:
+            logger.error("VADER sentiment analyzer not available")
+            self.vader = None
+        
+        # Initialize Twitter-RoBERTa for Reddit sentiment analysis
+        try:
+            from transformers import pipeline
+            self.twitter_roberta = pipeline("sentiment-analysis", 
+                                           model="cardiffnlp/twitter-roberta-base-sentiment-latest",
+                                           device=-1)  # Use CPU
+            logger.info("Twitter-RoBERTa model loaded for Reddit sentiment analysis")
+        except Exception as e:
+            logger.warning(f"Failed to load Twitter-RoBERTa: {e}, using VADER only for Reddit")
+            self.twitter_roberta = None
+        
+        # Initialize SEC analyzer
+        try:
+            from .sec_filings import SECFilingsAnalyzer
             self.sec_analyzer = SECFilingsAnalyzer(mongo_client)
-            logger.info("SEC analyzer initialized successfully")
+            logger.info("SEC analyzer initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize SEC analyzer: {e}")
             self.sec_analyzer = None
-
+        
         # Initialize Seeking Alpha analyzer
         try:
+            from .seeking_alpha import SeekingAlphaAnalyzer
             self.seeking_alpha_analyzer = SeekingAlphaAnalyzer(mongo_client)
-            logger.info("SeekingAlpha analyzer initialized successfully")
+            logger.info("Seeking Alpha analyzer initialized")
         except Exception as e:
-            logger.warning(f"Failed to initialize SeekingAlpha analyzer: {e}")
+            logger.warning(f"Failed to initialize Seeking Alpha analyzer: {e}")
             self.seeking_alpha_analyzer = None
         
-        # Initialize BERT models (load from cache if available)
-        try:
-            # Load FinBERT for news/SEC/earnings (PyTorch only)
-            self.finbert = pipeline(
-                "sentiment-analysis",
-                model="yiyanghkust/finbert-tone",
-                framework="pt",
-                device=-1
-            )
-            # Load DistilBERT as fallback (PyTorch only)
-            self.distilbert = pipeline(
-                "sentiment-analysis",
-                model="distilbert-base-uncased-finetuned-sst-2-english",
-                framework="pt",
-                device=-1
-            )
-            logger.info("Loaded FinBERT and DistilBERT models for sentiment analysis (PyTorch only).")
-        except Exception as e:
-            logger.error(f"Error initializing sentiment models: {str(e)}")
-            logger.warning("Falling back to VADER sentiment analysis only")
-            self.finbert = None
-            self.distilbert = None
-
-        # Load Twitter-Roberta model
-        self.twitter_roberta = pipeline(
-            "sentiment-analysis",
-            model="cardiffnlp/twitter-roberta-base-sentiment",
-            framework="pt",
-            device=-1
-        )
-        logger.info("Loaded Twitter-Roberta model for sentiment analysis (PyTorch only).")
-
-        # Use shared economic calendar instance to prevent multiple browser sessions
-        global SHARED_ECONOMIC_CALENDAR
-        if calendar_fetcher:
-            self.calendar_fetcher = calendar_fetcher
-            logger.info("Using provided EconomicCalendar instance")
-        elif SHARED_ECONOMIC_CALENDAR is not None:
-            self.calendar_fetcher = SHARED_ECONOMIC_CALENDAR
-            logger.info("Using shared EconomicCalendar instance")
-        else:
+        # Initialize FMP API Manager
+        self.fmp_manager = FMPAPIManager(mongo_client)
+        logger.info("FMP API Manager initialized")
+        
+        # Initialize macro data once per class (not per instance)
+        if not SentimentAnalyzer._macro_data_fetched:
             try:
-                SHARED_ECONOMIC_CALENDAR = EconomicCalendar(mongo_client)
-                self.calendar_fetcher = SHARED_ECONOMIC_CALENDAR
-                logger.info("EconomicCalendar initialized successfully")
+                # Get macro data once and store in MongoDB
+                from .fred_macro import fetch_and_store_all_fred_indicators
+                from datetime import datetime, timedelta
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=365 * 2)  # 2 years of data
+                
+                logger.info("Fetching macro data (one-time initialization)...")
+                fetch_and_store_all_fred_indicators(
+                    start_date.strftime('%Y-%m-%d'),
+                    end_date.strftime('%Y-%m-%d'),
+                    mongo_client
+                )
+                SentimentAnalyzer._macro_data_fetched = True
+                logger.info("Macro data fetched and stored in MongoDB")
             except Exception as e:
-                logger.warning(f"Failed to initialize EconomicCalendar: {e}")
-                self.calendar_fetcher = None
-                    
+                logger.warning(f"Failed to fetch macro data: {e}")
+        
+        # Initialize calendar fetcher
+        self.calendar_fetcher = calendar_fetcher
+        
+        # Initialize short interest analyzer (will be created on-demand)
+        self.short_interest_analyzer = None
+        
+        # Track API health status for rate limiting and error handling
+        self.api_status = {
+            'finviz': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'yahoo': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'marketaux': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'alpha_vantage': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'finnhub': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'fmp': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'sec': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'yahoo_news': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'rss_news': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'reddit': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'seekingalpha': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'seekingalpha_comments': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'alpha_earnings_call': {'working': True, 'last_error': None, 'cooldown_until': None},
+            'alphavantage': {'working': True, 'last_error': None, 'cooldown_until': None},
+        }
+        
+        logger.info(f"SentimentAnalyzer initialized with FinBERT: {self.finbert is not None}, VADER: {self.vader is not None}")
+        logger.info(f"Additional models: Twitter-RoBERTa: {self.twitter_roberta is not None}, SEC: {self.sec_analyzer is not None}, SeekingAlpha: {self.seeking_alpha_analyzer is not None}")
+        
+    def _check_api_health(self, api_name: str) -> bool:
+        """Check if an API is healthy and not in cooldown."""
+        status = self.api_status.get(api_name, {})
+        if not status.get('working', True):
+            cooldown_until = status.get('cooldown_until')
+            if cooldown_until and datetime.utcnow() < cooldown_until:
+                return False
+            else:
+                # Reset status if cooldown period is over
+                self.api_status[api_name]['working'] = True
+                self.api_status[api_name]['cooldown_until'] = None
+        return True
+    
+    def _mark_api_error(self, api_name: str, error: str, cooldown_minutes: int = 15):
+        """Mark an API as having an error and set cooldown period."""
+        self.api_status[api_name] = {
+            'working': False,
+            'last_error': error,
+            'cooldown_until': datetime.utcnow() + timedelta(minutes=cooldown_minutes)
+        }
+        logger.warning(f"API {api_name} marked as down for {cooldown_minutes} minutes due to: {error}")
+    
+    def _mark_api_success(self, api_name: str):
+        """Mark an API as working successfully."""
+        self.api_status[api_name] = {
+            'working': True,
+            'last_error': None,
+            'cooldown_until': None
+        }
+
     def _extract_section(self, transcript: str, section_name: str) -> str:
         """Extract a specific section from the transcript."""
         try:
@@ -479,134 +528,20 @@ class SentimentAnalyzer:
             return {}
 
     async def fetch_fmp_dividends(self, ticker: str) -> dict:
-        """Fetch dividend data from FMP."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP dividends.")
-            return {}
-        
-        url = f"https://financialmodelingprep.com/stable/dividends?symbol={ticker}&limit=5&apikey={api_key}"
-        
-        try:
-            cached = self.mongo_client.get_alpha_vantage_data(ticker, 'dividends')
-            if cached:
-                return cached
-                
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"FMP dividends returned status {resp.status} for {ticker}")
-                        return {}
-                    data = await resp.json()
-                    self.mongo_client.store_alpha_vantage_data(ticker, 'dividends', data)
-                    self.mongo_client.store_alpha_vantage_data(ticker, 'ratings', data)
-                    return {"dividends": data}
-        except Exception as e:
-            logger.error(f"Error fetching FMP dividends for {ticker}: {e}")
-            return {}
+        """Fetch dividend data from FMP using centralized manager."""
+        return await self.fmp_manager.get_dividends_historical(ticker)
 
     async def fetch_fmp_earnings(self, ticker: str) -> dict:
-        """Fetch earnings data from FMP (limited to 5 responses per call)."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP earnings.")
-            return {}
-        
-        url = f"https://financialmodelingprep.com/stable/earnings?symbol={ticker}&limit=5&apikey={api_key}"
-        
-        try:
-            cached = self.mongo_client.get_alpha_vantage_data(ticker, 'earnings')
-            if cached:
-                return cached
-                
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"FMP earnings returned status {resp.status} for {ticker}")
-                        return {}
-                    data = await resp.json()
-                    self.mongo_client.store_alpha_vantage_data(ticker, 'earnings', data)
-                    return {"earnings": data}
-        except Exception as e:
-            logger.error(f"Error fetching FMP earnings for {ticker}: {e}")
-            return {}
+        """Fetch earnings data from FMP using centralized manager."""
+        return await self.fmp_manager.get_earnings_historical(ticker)
 
     async def fetch_fmp_earnings_calendar(self, ticker: str = None) -> dict:
-        """Fetch earnings calendar from FMP for next 3 months."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP earnings calendar.")
-            return {}
-        
-        # Calculate date range (today to 3 months from now)
-        from_date = datetime.utcnow().strftime("%Y-%m-%d")
-        to_date = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%d")
-        
-        # Use only 'to' parameter as 'from' doesn't work
-        url = f"https://financialmodelingprep.com/stable/earnings-calendar?to={to_date}&apikey={api_key}"
-        
-        try:
-            cache_key = f'earnings_calendar_{to_date}'
-            cached = self.mongo_client.get_alpha_vantage_data('market', cache_key)
-            if cached:
-                if ticker:
-                    return {"earnings_calendar": [e for e in cached if e.get('symbol') == ticker]}
-                return {"earnings_calendar": cached}
-                
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"FMP earnings calendar returned status {resp.status}")
-                        return {}
-                    data = await resp.json()
-                    
-                    # Store in cache with date-specific key
-                    self.mongo_client.store_alpha_vantage_data('market', cache_key, data)
-                    
-                    if ticker:
-                        return {"earnings_calendar": [e for e in data if e.get('symbol') == ticker]}
-                    return {"earnings_calendar": data}
-        except Exception as e:
-            logger.error(f"Error fetching FMP earnings calendar: {e}")
-            return {}
+        """Fetch earnings calendar from FMP using centralized manager."""
+        return await self.fmp_manager.get_earnings_calendar(ticker=ticker)
 
     async def fetch_fmp_dividends_calendar(self, ticker: str = None) -> dict:
-        """Fetch dividends calendar from FMP for next 3 months."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP dividends calendar.")
-            return {}
-        
-        # Calculate date range (today to 3 months from now)
-        to_date = (datetime.utcnow() + timedelta(days=90)).strftime("%Y-%m-%d")
-        
-        # Use only 'to' parameter as 'from' doesn't work
-        url = f"https://financialmodelingprep.com/stable/dividends-calendar?to={to_date}&apikey={api_key}"
-        
-        try:
-            cache_key = f'dividends_calendar_{to_date}'
-            cached = self.mongo_client.get_alpha_vantage_data('market', cache_key)
-            if cached:
-                if ticker:
-                    return {"dividends_calendar": [d for d in cached if d.get('symbol') == ticker]}
-                return {"dividends_calendar": cached}
-                
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"FMP dividends calendar returned status {resp.status}")
-                        return {}
-                    data = await resp.json()
-                    
-                    # Store in cache with date-specific key
-                    self.mongo_client.store_alpha_vantage_data('market', cache_key, data)
-                    
-                    if ticker:
-                        return {"dividends_calendar": [d for d in data if d.get('symbol') == ticker]}
-                    return {"dividends_calendar": data}
-        except Exception as e:
-            logger.error(f"Error fetching FMP dividends calendar: {e}")
-            return {}
+        """Fetch dividends calendar from FMP using centralized manager."""
+        return await self.fmp_manager.get_dividends_calendar(ticker=ticker)
 
     async def fetch_finnhub_quote(self, ticker: str) -> dict:
         """Fetch real-time quote from Finnhub."""
@@ -910,99 +845,54 @@ class SentimentAnalyzer:
             return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0, "marketaux_raw_data": [], "marketaux_nlp_results": []}
 
     async def analyze_fmp_financial_estimates(self, ticker: str) -> dict:
-        """Analyze sentiment from FMP financial estimates."""
+        """Analyze sentiment from FMP financial estimates using centralized manager."""
         try:
-            # Run in threadpool since this is a blocking operation
-            return await run_in_threadpool(self._analyze_fmp_financial_estimates_sync, ticker)
-        except Exception as e:
-            logger.warning(f"FMP financial estimates analysis failed for {ticker}: {e}")
-            return {"fmp_financial_estimates_sentiment": 0.0, "fmp_financial_estimates_volume": 0, "fmp_financial_estimates_confidence": 0.0}
-
-    def _analyze_fmp_financial_estimates_sync(self, ticker: str) -> dict:
-        """Synchronous implementation of FMP financial estimates analysis."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP Financial Estimates.")
-            return {"fmp_estimates_sentiment": 0.0, "fmp_estimates_volume": 0, "fmp_estimates_confidence": 0.0}
-        url = f"https://financialmodelingprep.com/stable/analyst-estimates?symbol={ticker}&period=annual&apikey={api_key}"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"FMP Financial Estimates returned status {resp.status_code} for {ticker}")
+            result = await self.fmp_manager.get_analyst_estimates(ticker)
+            estimates = result.get('estimates', [])
+            
+            if not estimates:
                 return {"fmp_estimates_sentiment": 0.0, "fmp_estimates_volume": 0, "fmp_estimates_confidence": 0.0}
-            data = resp.json()
-            if not data:
-                return {"fmp_estimates_sentiment": 0.0, "fmp_estimates_volume": 0, "fmp_estimates_confidence": 0.0}
+            
             # Use the most recent estimate
-            est = data[0]
-            eps_avg = est.get('epsAvg', 0.0)
+            est = estimates[0]
+            eps_avg = est.get('estimatedEpsAvg', 0.0)
             # Normalize EPS to [-1, 1] using a soft cap (e.g., 0-10 for large caps)
             norm_eps = max(-1, min(1, (eps_avg - 5) / 5))
             logger.info(f"FMP Financial Estimates: epsAvg={eps_avg}, norm={norm_eps}")
-            return {"fmp_estimates_sentiment": norm_eps, "fmp_estimates_volume": est.get('numAnalystsEps', 1), "fmp_estimates_confidence": min(est.get('numAnalystsEps', 1)/10, 1.0)}
+            return {"fmp_estimates_sentiment": norm_eps, "fmp_estimates_volume": est.get('numberAnalystEstimatedEps', 1), "fmp_estimates_confidence": min(est.get('numberAnalystEstimatedEps', 1)/10, 1.0)}
         except Exception as e:
-            logger.error(f"Error fetching FMP Financial Estimates for {ticker}: {e}")
+            logger.error(f"Error analyzing FMP financial estimates for {ticker}: {e}")
             return {"fmp_estimates_sentiment": 0.0, "fmp_estimates_volume": 0, "fmp_estimates_confidence": 0.0}
 
     async def analyze_fmp_ratings_snapshot(self, ticker: str) -> dict:
-        """Analyze sentiment from FMP ratings snapshot."""
+        """Analyze sentiment from FMP ratings snapshot using centralized manager."""
         try:
-            # Run in threadpool since this is a blocking operation
-            return await run_in_threadpool(self._analyze_fmp_ratings_snapshot_sync, ticker)
-        except Exception as e:
-            logger.warning(f"FMP ratings snapshot analysis failed for {ticker}: {e}")
-            return {"fmp_ratings_snapshot_sentiment": 0.0, "fmp_ratings_snapshot_volume": 0, "fmp_ratings_snapshot_confidence": 0.0}
-
-    def _analyze_fmp_ratings_snapshot_sync(self, ticker: str) -> dict:
-        """Synchronous implementation of FMP ratings snapshot analysis."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP Ratings Snapshot.")
-            return {"fmp_ratings_sentiment": 0.0, "fmp_ratings_volume": 0, "fmp_ratings_confidence": 0.0}
-        url = f"https://financialmodelingprep.com/stable/ratings-snapshot?symbol={ticker}&apikey={api_key}"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"FMP Ratings Snapshot returned status {resp.status_code} for {ticker}")
+            result = await self.fmp_manager.get_ratings_snapshot(ticker)
+            ratings = result.get('ratings', [])
+            
+            if not ratings:
                 return {"fmp_ratings_sentiment": 0.0, "fmp_ratings_volume": 0, "fmp_ratings_confidence": 0.0}
-            data = resp.json()
-            if not data:
-                return {"fmp_ratings_sentiment": 0.0, "fmp_ratings_volume": 0, "fmp_ratings_confidence": 0.0}
-            snap = data[0]
-            overall = snap.get('overallScore', 0)
+            
+            rating = ratings[0]
+            overall = rating.get('ratingScore', 0)
             # Normalize overallScore (1-5) to [-1, 1]
             norm_score = (overall - 3) / 2
             logger.info(f"FMP Ratings Snapshot: overallScore={overall}, norm={norm_score}")
             return {"fmp_ratings_sentiment": norm_score, "fmp_ratings_volume": 1, "fmp_ratings_confidence": 1.0}
         except Exception as e:
-            logger.error(f"Error fetching FMP Ratings Snapshot for {ticker}: {e}")
+            logger.error(f"Error analyzing FMP ratings snapshot for {ticker}: {e}")
             return {"fmp_ratings_sentiment": 0.0, "fmp_ratings_volume": 0, "fmp_ratings_confidence": 0.0}
 
     async def analyze_fmp_price_target_summary(self, ticker: str) -> dict:
-        """Analyze sentiment from FMP price target summary."""
+        """Analyze sentiment from FMP price target summary using centralized manager."""
         try:
-            # Run in threadpool since this is a blocking operation
-            return await run_in_threadpool(self._analyze_fmp_price_target_summary_sync, ticker)
-        except Exception as e:
-            logger.warning(f"FMP price target summary analysis failed for {ticker}: {e}")
-            return {"fmp_price_target_summary_sentiment": 0.0, "fmp_price_target_summary_volume": 0, "fmp_price_target_summary_confidence": 0.0}
-
-    def _analyze_fmp_price_target_summary_sync(self, ticker: str) -> dict:
-        """Synchronous implementation of FMP price target summary analysis."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP Price Target Summary.")
-            return {"fmp_price_target_sentiment": 0.0, "fmp_price_target_volume": 0, "fmp_price_target_confidence": 0.0}
-        url = f"https://financialmodelingprep.com/stable/price-target-summary?symbol={ticker}&apikey={api_key}"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"FMP Price Target Summary returned status {resp.status_code} for {ticker}")
+            result = await self.fmp_manager.get_price_target_summary(ticker)
+            price_targets = result.get('price_targets', [])
+            
+            if not price_targets:
                 return {"fmp_price_target_sentiment": 0.0, "fmp_price_target_volume": 0, "fmp_price_target_confidence": 0.0}
-            data = resp.json()
-            if not data:
-                return {"fmp_price_target_sentiment": 0.0, "fmp_price_target_volume": 0, "fmp_price_target_confidence": 0.0}
-            pt = data[0]
+            
+            pt = price_targets[0]
             avg_target = pt.get('lastYearAvgPriceTarget', 0.0)
             # For normalization, you may want to compare to current price (fetch if available)
             # For now, use a soft cap: (avg_target - 200) / 100 for large caps
@@ -1010,42 +900,27 @@ class SentimentAnalyzer:
             logger.info(f"FMP Price Target Summary: lastYearAvgPriceTarget={avg_target}, norm={norm_pt}")
             return {"fmp_price_target_sentiment": norm_pt, "fmp_price_target_volume": pt.get('lastYearCount', 1), "fmp_price_target_confidence": min(pt.get('lastYearCount', 1)/10, 1.0)}
         except Exception as e:
-            logger.error(f"Error fetching FMP Price Target Summary for {ticker}: {e}")
+            logger.error(f"Error analyzing FMP price target summary for {ticker}: {e}")
             return {"fmp_price_target_sentiment": 0.0, "fmp_price_target_volume": 0, "fmp_price_target_confidence": 0.0}
 
     async def analyze_fmp_grades_summary(self, ticker: str) -> dict:
-        """Analyze sentiment from FMP grades summary."""
+        """Analyze sentiment from FMP grades summary using centralized manager."""
         try:
-            # Run in threadpool since this is a blocking operation
-            return await run_in_threadpool(self._analyze_fmp_grades_summary_sync, ticker)
-        except Exception as e:
-            logger.warning(f"FMP grades summary analysis failed for {ticker}: {e}")
-            return {"fmp_grades_summary_sentiment": 0.0, "fmp_grades_summary_volume": 0, "fmp_grades_summary_confidence": 0.0}
-
-    def _analyze_fmp_grades_summary_sync(self, ticker: str) -> dict:
-        """Synchronous implementation of FMP grades summary analysis."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping FMP Grades Summary.")
-            return {"fmp_grades_sentiment": 0.0, "fmp_grades_volume": 0, "fmp_grades_confidence": 0.0}
-        url = f"https://financialmodelingprep.com/stable/grades-consensus?symbol={ticker}&apikey={api_key}"
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code != 200:
-                logger.warning(f"FMP Grades Summary returned status {resp.status_code} for {ticker}")
+            result = await self.fmp_manager.get_grades_consensus(ticker)
+            grades = result.get('grades', [])
+            
+            if not grades:
                 return {"fmp_grades_sentiment": 0.0, "fmp_grades_volume": 0, "fmp_grades_confidence": 0.0}
-            data = resp.json()
-            if not data:
-                return {"fmp_grades_sentiment": 0.0, "fmp_grades_volume": 0, "fmp_grades_confidence": 0.0}
-            gs = data[0]
-            consensus = gs.get('consensus', '').lower()
+            
+            gs = grades[0]
+            consensus = gs.get('gradingCompany', '').lower()
             # Map consensus to sentiment
             mapping = {'strong buy': 1.0, 'buy': 0.7, 'hold': 0.0, 'sell': -0.7, 'strong sell': -1.0}
             norm_score = mapping.get(consensus, 0.0)
             logger.info(f"FMP Grades Summary: consensus={consensus}, norm={norm_score}")
             return {"fmp_grades_sentiment": norm_score, "fmp_grades_volume": 1, "fmp_grades_confidence": 1.0}
         except Exception as e:
-            logger.error(f"Error fetching FMP Grades Summary for {ticker}: {e}")
+            logger.error(f"Error analyzing FMP grades summary for {ticker}: {e}")
             return {"fmp_grades_sentiment": 0.0, "fmp_grades_volume": 0, "fmp_grades_confidence": 0.0}
 
     def _safe_dict_convert(self, value: Any) -> Any:
@@ -1081,11 +956,22 @@ class SentimentAnalyzer:
             return str(value)
 
     async def get_combined_sentiment(self, ticker: str, force_refresh: bool = False):
+        """
+        Get combined sentiment from all sources with proper MongoDB storage.
+        
+        Args:
+            ticker: Stock ticker symbol
+            force_refresh: Force refresh of cached data
+            
+        Returns:
+            Dictionary containing comprehensive sentiment analysis
+        """
         sentiment_dict = {
             "ticker": ticker,
             "timestamp": datetime.utcnow(),
         }
 
+        # Define sentiment sources and their corresponding keys
         sources = [
             self.get_finviz_sentiment,
             self.get_sec_sentiment,
@@ -1105,9 +991,21 @@ class SentimentAnalyzer:
             "fmp", "finnhub", "seekingalpha", "seekingalpha_comments",
             "alpha_earnings_call", "alphavantage"
         ]
+        
+        # Process each sentiment source
         for source_func, key in zip(sources, keys):
             try:
+                # Check API health before making request
+                if not self._check_api_health(key):
+                    logger.info(f"Skipping {key} sentiment - API in cooldown")
+                    continue
+                
                 result = await source_func(ticker)
+                
+                # Mark API as successful if we get a result
+                if result:
+                    self._mark_api_success(key)
+                
                 # Try different possible keys for sentiment score, volume, and confidence
                 score = result.get("sentiment_score", result.get(f"{key}_sentiment", 0))
                 volume = result.get("volume", result.get(f"{key}_volume", 0))
@@ -1117,7 +1015,7 @@ class SentimentAnalyzer:
                 sentiment_dict[f"{key}_volume"] = volume
                 sentiment_dict[f"{key}_confidence"] = confidence
                 
-                # Store raw data and NLP results
+                # Store raw data and NLP results for debugging and transparency
                 for suffix in ["raw_data", "nlp_results", "api_status", "error"]:
                     result_key = f"{key}_{suffix}"
                     if result_key in result:
@@ -1127,31 +1025,68 @@ class SentimentAnalyzer:
                         
             except Exception as e:
                 logger.warning(f"Sentiment fetch failed for {key}: {e}")
-        # Economic Calendar Sentiment
+                # Mark API as having an error
+                self._mark_api_error(key, str(e))
+                
+                # Set default values for failed sources
+                sentiment_dict[f"{key}_sentiment"] = 0.0
+                sentiment_dict[f"{key}_volume"] = 0
+                sentiment_dict[f"{key}_confidence"] = 0.0
+                sentiment_dict[f"{key}_error"] = str(e)
+                
+        # Add Economic Calendar Sentiment (global events, not ticker-specific)
         try:
-            sentiment_dict = await self.integrate_economic_events_sentiment(sentiment_dict, ticker, mongo_client=self.mongo_client)
+            sentiment_dict = await self.integrate_economic_events_sentiment(
+                sentiment_dict, ticker, mongo_client=self.mongo_client
+            )
+            logger.info(f"Economic events sentiment added for {ticker}")
         except Exception as e:
             logger.error(f"Failed to add economic calendar sentiment for {ticker}: {e}")
-        # Short Interest Sentiment
+            sentiment_dict['economic_event_sentiment'] = 0.0
+            sentiment_dict['economic_event_volume'] = 0
+            sentiment_dict['economic_event_confidence'] = 0.0
+            
+        # Add Short Interest Sentiment
         try:
             short_sentiment = await self.analyze_short_interest_sentiment(ticker)
             sentiment_dict.update(short_sentiment)
+            logger.info(f"Short interest sentiment added for {ticker}")
         except Exception as e:
             logger.error(f"Failed to fetch short interest sentiment for {ticker}: {e}")
+            sentiment_dict['short_interest_sentiment'] = 0.0
+            sentiment_dict['short_interest_volume'] = 0
+            sentiment_dict['short_interest_confidence'] = 0.0
+            
         # Calculate final blended sentiment score
         try:
             blended_sentiment = self.blend_sentiment_scores(sentiment_dict)
             sentiment_dict["blended_sentiment"] = blended_sentiment
-            logger.info(f"Final blended sentiment for {ticker}: {blended_sentiment:.3f}")
+            
+            # Calculate overall confidence and volume
+            sentiment_dict["sentiment_confidence"] = self._calculate_sentiment_confidence(sentiment_dict)
+            sentiment_dict["sentiment_volume"] = self._calculate_sentiment_volume(sentiment_dict)
+            
+            logger.info(f"Final blended sentiment for {ticker}: {blended_sentiment:.3f} "
+                       f"(confidence: {sentiment_dict['sentiment_confidence']:.2f}, "
+                       f"volume: {sentiment_dict['sentiment_volume']})")
         except Exception as e:
             logger.error(f"Error calculating blended sentiment for {ticker}: {e}")
             sentiment_dict["blended_sentiment"] = 0.0
+            sentiment_dict["sentiment_confidence"] = 0.0
+            sentiment_dict["sentiment_volume"] = 0
         
-        # Finalize fields
+        # Add metadata for storage
         sentiment_dict["date"] = sentiment_dict["timestamp"].replace(hour=0, minute=0, second=0, microsecond=0)
         sentiment_dict["last_updated"] = datetime.utcnow()
-        # Store in DB
-        self.mongo_client.store_sentiment(ticker, sentiment_dict)
+        sentiment_dict["api_status"] = self.api_status  # Store API health status
+        
+        # Store in MongoDB with error handling
+        try:
+            self.mongo_client.store_sentiment(ticker, sentiment_dict)
+            logger.info(f"Sentiment data for {ticker} stored in MongoDB successfully")
+        except Exception as e:
+            logger.error(f"Failed to store sentiment data for {ticker} in MongoDB: {e}")
+            
         return sentiment_dict
 
     def _calculate_sentiment_confidence(self, sources: Dict) -> float:
@@ -1200,61 +1135,14 @@ class SentimentAnalyzer:
         return total_volume
 
     async def fetch_fmp_dividends_and_store(self, ticker: str) -> dict:
-        """Fetch dividend history for a ticker from FMP and store in MongoDB."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping dividends fetch.")
-            return {"status": "no_api_key", "dividends": None}
-        url = f"https://financialmodelingprep.com/stable/dividends?symbol={ticker}&limit=5&apikey={api_key}"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"FMP dividends endpoint returned status {resp.status} for {ticker}")
-                        return {"status": "api_error", "dividends": None}
-                    data = await resp.json()
-                    self.mongo_client.db['alpha_vantage_data'].replace_one(
-                        {"symbol": ticker, "endpoint": 'dividends'},
-                        {"symbol": ticker, "endpoint": 'dividends', "data": data, "timestamp": datetime.utcnow()},
-                        upsert=True
-                    )
-            logger.info(f"Stored FMP dividends for {ticker} in MongoDB.")
-            return {"status": "ok", "dividends": data}
-        except Exception as e:
-            logger.error(f"Error fetching dividends for {ticker} from FMP: {e}")
-            return {"status": "exception", "dividends": None}
+        """Fetch dividend history for a ticker from FMP using centralized manager."""
+        logger.warning("fetch_fmp_dividends_and_store is deprecated. Use fmp_manager.get_dividends_historical instead.")
+        return await self.fmp_manager.get_dividends_historical(ticker)
 
     async def fetch_fmp_analyst_ratings_and_store(self, ticker: str) -> dict:
-        """Fetch analyst ratings for a ticker from FMP and store in MongoDB."""
-        api_key = os.getenv("FMP_API_KEY")
-        if not api_key:
-            logger.warning("FMP_API_KEY not set. Skipping analyst ratings fetch.")
-            return {"status": "no_api_key", "ratings": {}}
-        endpoints = {
-            "grades_consensus": f"https://financialmodelingprep.com/stable/grades-consensus?symbol={ticker}&apikey={api_key}",
-            "price_target_summary": f"https://financialmodelingprep.com/stable/price-target-summary?symbol={ticker}&apikey={api_key}",
-            "price_target_consensus": f"https://financialmodelingprep.com/stable/price-target-consensus?symbol={ticker}&apikey={api_key}",
-            "grades": f"https://financialmodelingprep.com/stable/grades?symbol={ticker}&apikey={api_key}",
-            "grades_historical": f"https://financialmodelingprep.com/stable/grades-historical?symbol={ticker}&apikey={api_key}"
-        }
-        results = {}
-        for key, url in endpoints.items():
-            try:
-                resp = requests.get(url, timeout=15)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self.mongo_client.db['analyst_ratings'].replace_one(
-                        {"symbol": ticker, "endpoint": key},
-                        {"symbol": ticker, "endpoint": key, "data": data, "timestamp": datetime.utcnow()},
-                        upsert=True
-                    )
-                    results[key] = data
-                    logger.info(f"Stored analyst ratings {key} for {ticker} in MongoDB.")
-                else:
-                    logger.warning(f"FMP analyst ratings endpoint {key} returned status {resp.status_code} for {ticker}")
-            except Exception as e:
-                logger.error(f"Error fetching analyst ratings {key} for {ticker} from FMP: {e}")
-        return {"status": "ok", "ratings": results}
+        """Fetch analyst ratings for a ticker from FMP using centralized manager."""
+        logger.warning("fetch_fmp_analyst_ratings_and_store is deprecated. Use fmp_manager.get_all_fmp_data instead.")
+        return await self.fmp_manager.get_all_fmp_data(ticker)
 
     def get_latest_quarter(self) -> str:
         """Return the most recent completed quarter in format YYYYQn (e.g., 2024Q1)."""
@@ -1342,41 +1230,75 @@ class SentimentAnalyzer:
     async def analyze_finnhub_insider_sentiment(self, ticker: str) -> dict:
         """Analyze insider sentiment using Finnhub data."""
         try:
-            # Get insider transactions from MongoDB
+            # First try to fetch fresh data
+            insider_transactions = await self.fetch_finnhub_insider_transactions(ticker)
+            if not insider_transactions or not insider_transactions.get('data'):
+                logger.warning(f"No insider transactions data available for {ticker}")
+                
+            # Get insider transactions from MongoDB (including freshly stored data)
             insider_data = self.mongo_client.get_insider_trading(ticker)
             if not insider_data:
+                logger.warning(f"No insider transactions found in MongoDB for {ticker}")
                 return {
                     'source': 'finnhub_insider',
                     'sentiment': 0.0,
                     'volume': 0,
-                    'confidence': 0.0
+                    'confidence': 0.0,
+                    'transactions': 0,
+                    'error': 'No insider transaction data available'
                 }
+            
+            logger.info(f"Found {len(insider_data)} insider transactions for {ticker}")
+            
             # Calculate sentiment based on transaction types and volumes
             total_volume = 0
             weighted_sentiment = 0
+            buy_transactions = 0
+            sell_transactions = 0
+            
             for transaction in insider_data:
-                volume = abs(float(transaction.get('transactionShares', 0)))
-                price = float(transaction.get('transactionPrice', 0))
-                transaction_value = volume * price
-                # Weight by transaction value
-                if transaction.get('transactionType') == 'Buy':
-                    weighted_sentiment += transaction_value
-                elif transaction.get('transactionType') == 'Sell':
-                    weighted_sentiment -= transaction_value
-                total_volume += volume
+                try:
+                    # Finnhub insider API structure: https://finnhub.io/docs/api/insider-sentiment
+                    volume = abs(float(transaction.get('share', 0))) or abs(float(transaction.get('change', 0)))
+                    price = float(transaction.get('transactionPrice', 0)) or 1.0  # Use 1.0 if no price
+                    transaction_value = volume * price if price > 0 else volume
+                    
+                    # Check transaction code and change
+                    transaction_code = transaction.get('transactionCode', '').upper()
+                    change = float(transaction.get('change', 0))
+                    
+                    # Enhanced transaction type detection based on Finnhub data structure
+                    if transaction_code in ['P', 'M', 'A'] or change > 0:  # Purchase, Multiple, Acquisition or positive change
+                        weighted_sentiment += transaction_value
+                        buy_transactions += 1
+                    elif transaction_code in ['S', 'D'] or change < 0:  # Sale, Disposition or negative change
+                        weighted_sentiment -= transaction_value
+                        sell_transactions += 1
+                    
+                    total_volume += volume
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error processing transaction for {ticker}: {e}")
+                    continue
+            
             # Normalize sentiment
             if total_volume > 0:
                 sentiment = weighted_sentiment / (total_volume * 100)  # Scale down for normalization
-                confidence = min(1.0, total_volume / 10000)  # Higher volume = higher confidence
+                sentiment = max(-1.0, min(1.0, sentiment))  # Clamp to [-1, 1]
+                confidence = min(1.0, len(insider_data) / 5)  # Higher volume = higher confidence
             else:
                 sentiment = 0.0
                 confidence = 0.0
+            
+            logger.info(f"Finnhub insider sentiment for {ticker}: {sentiment:.3f} (buys: {buy_transactions}, sells: {sell_transactions})")
+            
             return {
                 'source': 'finnhub_insider',
                 'sentiment': sentiment,
-                'volume': total_volume,
+                'volume': int(total_volume),
                 'confidence': confidence,
-                'transactions': len(insider_data)
+                'transactions': len(insider_data),
+                'buy_transactions': buy_transactions,
+                'sell_transactions': sell_transactions
             }
         except Exception as e:
             logger.error(f"Error analyzing Finnhub insider sentiment for {ticker}: {e}")
@@ -1384,7 +1306,8 @@ class SentimentAnalyzer:
                 'source': 'finnhub_insider',
                 'sentiment': 0.0,
                 'volume': 0,
-                'confidence': 0.0
+                'confidence': 0.0,
+                'error': str(e)
             }
 
     async def analyze_finnhub_recommendation_trends(self, ticker: str) -> dict:
@@ -1432,14 +1355,21 @@ class SentimentAnalyzer:
             return None
 
     def _analyze_reddit_sentiment_sync(self, ticker: str) -> Dict[str, float]:
-        """Synchronous Reddit sentiment analysis using Twitter-Roberta."""
+        """Synchronous Reddit sentiment analysis using Twitter-Roberta and ticker-specific subreddits."""
         try:
             import praw
+            from ..config.constants import TICKER_SUBREDDITS, REDDIT_SUBREDDITS
+            
             sentiment_scores = []
             total_volume = 0
             raw_data = []
             nlp_results = []
             max_retries = 3
+            
+            # Get ticker-specific subreddits or use general ones
+            target_subreddits = TICKER_SUBREDDITS.get(ticker, REDDIT_SUBREDDITS)
+            logger.info(f"📊 Reddit sentiment for {ticker} using subreddits: {target_subreddits}")
+            
             for attempt in range(max_retries):
                 try:
                     reddit = praw.Reddit(
@@ -1447,85 +1377,129 @@ class SentimentAnalyzer:
                         client_secret=os.getenv("REDDIT_CLIENT_SECRET"),
                         user_agent=os.getenv("REDDIT_USER_AGENT")
                     )
-                    for subreddit in REDDIT_SUBREDDITS:
+                    
+                    for subreddit_name in target_subreddits:
                         try:
-                            posts = reddit.subreddit(subreddit).search(ticker, sort="new", time_filter="week", limit=20)
+                            logger.info(f"🔍 Searching r/{subreddit_name} for {ticker}")
+                            posts = reddit.subreddit(subreddit_name).search(ticker, sort="new", time_filter="week", limit=20)
+                            posts_found = 0
+                            
                             for post in posts:
                                 if post.score < 10:
                                     continue
+                                posts_found += 1
                                 text = post.title + " " + post.selftext
                                 text = text[:512]
+                                
+                                sentiment_score = 0.0  # Initialize with default value
+                                
                                 if self.twitter_roberta is not None:
                                     sentiment = self.twitter_roberta(text)[0]
                                     if 'label' in sentiment:
                                         sentiment_score = LABEL_MAP.get(sentiment['label'], 0.0)
                                     else:
-                                        sentiment_score = sentiment['score']
+                                        sentiment_score = sentiment.get('score', 0.0)
                                     sentiment_scores.append(sentiment_score * min(post.score / 100, 1.0))
                                 else:
                                     s = self.vader.polarity_scores(text)
-                                    sentiment_scores.append(s["compound"] * min(post.score / 100, 1.0))
+                                    sentiment_score = s["compound"]
+                                    sentiment_scores.append(sentiment_score * min(post.score / 100, 1.0))
+                                
                                 total_volume += 1
                                 raw_data.append({
                                     "type": "post",
+                                    "subreddit": subreddit_name,
                                     "title": post.title,
-                                    "selftext": post.selftext,
+                                    "selftext": post.selftext[:200],  # Truncate for storage
                                     "score": post.score
                                 })
                                 nlp_results.append({
-                                    "text": text,
+                                    "text": text[:200],  # Truncate for storage
                                     "sentiment": sentiment_score,
-                                    "model": "twitter_roberta" if self.twitter_roberta is not None else "vader"
+                                    "model": "twitter_roberta" if self.twitter_roberta is not None else "vader",
+                                    "subreddit": subreddit_name
                                 })
+                                
+                                # Process top comments
                                 post.comments.replace_more(limit=0)
                                 for comment in post.comments.list()[:5]:
                                     if comment.score < 5:
                                         continue
                                     comment_text = comment.body[:512]
+                                    
+                                    comment_sentiment_score = 0.0  # Initialize with default value
+                                    
                                     if self.twitter_roberta is not None:
                                         sentiment = self.twitter_roberta(comment_text)[0]
                                         if 'label' in sentiment:
-                                            sentiment_score = LABEL_MAP.get(sentiment['label'], 0.0)
+                                            comment_sentiment_score = LABEL_MAP.get(sentiment['label'], 0.0)
                                         else:
-                                            sentiment_score = sentiment['score']
-                                        sentiment_scores.append(sentiment_score * min(comment.score / 50, 1.0))
+                                            comment_sentiment_score = sentiment.get('score', 0.0)
+                                        sentiment_scores.append(comment_sentiment_score * min(comment.score / 50, 1.0))
                                     else:
                                         s = self.vader.polarity_scores(comment_text)
-                                        sentiment_scores.append(s["compound"] * min(comment.score / 50, 1.0))
+                                        comment_sentiment_score = s["compound"]
+                                        sentiment_scores.append(comment_sentiment_score * min(comment.score / 50, 1.0))
+                                    
                                     total_volume += 1
                                     raw_data.append({
                                         "type": "comment",
-                                        "body": comment.body,
+                                        "subreddit": subreddit_name,
+                                        "body": comment.body[:200],  # Truncate for storage
                                         "score": comment.score
                                     })
                                     nlp_results.append({
-                                        "text": comment_text,
-                                        "sentiment": sentiment_score,
-                                        "model": "twitter_roberta" if self.twitter_roberta is not None else "vader"
+                                        "text": comment_text[:200],  # Truncate for storage
+                                        "sentiment": comment_sentiment_score,
+                                        "model": "twitter_roberta" if self.twitter_roberta is not None else "vader",
+                                        "subreddit": subreddit_name
                                     })
+                            
+                            logger.info(f"✅ Found {posts_found} posts in r/{subreddit_name} for {ticker}")
+                            
                         except Exception as e:
-                            logger.error(f"Error analyzing Reddit sentiment for {ticker} in {subreddit}: {str(e)}")
+                            logger.error(f"❌ Error analyzing Reddit sentiment for {ticker} in r/{subreddit_name}: {str(e)}")
                             continue
                     break  # Success
                 except praw.exceptions.APIException as e:
-                    logger.warning(f"Reddit API rate limit for {ticker}, attempt {attempt+1}")
+                    logger.warning(f"⚠️ Reddit API rate limit for {ticker}, attempt {attempt+1}")
                     time.sleep(self._exponential_backoff(attempt))
                 except Exception as e:
-                    logger.error(f"Error initializing Reddit client: {str(e)}")
+                    logger.error(f"💥 Error initializing Reddit client: {str(e)}")
                     break
+            
             if total_volume < 1:
-                logger.info(f"Reddit volume {total_volume} below threshold 1, setting sentiment to 0.")
-                return {"reddit_sentiment": 0.0, "reddit_volume": total_volume, "reddit_confidence": 0.0, "reddit_raw_data": raw_data, "reddit_nlp_results": nlp_results}
+                logger.info(f"📊 Reddit volume {total_volume} below threshold 1 for {ticker}, setting sentiment to 0.")
+                return {
+                    "reddit_sentiment": 0.0, 
+                    "reddit_volume": total_volume, 
+                    "reddit_confidence": 0.0, 
+                    "reddit_raw_data": raw_data, 
+                    "reddit_nlp_results": nlp_results,
+                    "reddit_subreddits_used": target_subreddits
+                }
+            
+            average_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0
+            logger.info(f"🎯 Reddit sentiment for {ticker}: {average_sentiment:.3f} (volume: {total_volume})")
+            
             return {
-                "reddit_sentiment": sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0,
+                "reddit_sentiment": average_sentiment,
                 "reddit_volume": total_volume,
                 "reddit_confidence": min(total_volume / 50, 1.0),
                 "reddit_raw_data": raw_data,
-                "reddit_nlp_results": nlp_results
+                "reddit_nlp_results": nlp_results,
+                "reddit_subreddits_used": target_subreddits
             }
         except Exception as e:
-            logger.error(f"Error in Reddit sentiment analysis: {e}")
-            return None
+            logger.error(f"💥 Error in Reddit sentiment analysis for {ticker}: {e}")
+            return {
+                "reddit_sentiment": 0.0, 
+                "reddit_volume": 0, 
+                "reddit_confidence": 0.0, 
+                "reddit_raw_data": [], 
+                "reddit_nlp_results": [],
+                "reddit_error": str(e)
+            }
 
     def fetch_fomc_meetings_and_store(self):
         """Fetch FOMC meeting dates from the Fed website, cache in MongoDB, and return the dates."""
@@ -1774,87 +1748,81 @@ class SentimentAnalyzer:
             }
 
     async def analyze_fmp_sentiment(self, ticker: str) -> Dict[str, Any]:
-        """Analyze sentiment from FMP data sources including calendar data."""
+        """Analyze sentiment from FMP data sources using consolidated manager."""
         try:
-            # Combine multiple FMP sentiment sources
-            estimates = await self.analyze_fmp_financial_estimates(ticker)
-            ratings = await self.analyze_fmp_ratings_snapshot(ticker)
-            price_targets = await self.analyze_fmp_price_target_summary(ticker)
-            grades = await self.analyze_fmp_grades_summary(ticker)
+            # Get all FMP data in one consolidated call to avoid duplicate API requests
+            fmp_data = await self.fmp_manager.get_all_fmp_data(ticker)
             
-            # Fetch calendar data for economic calendar integration
-            earnings_calendar = await self.fetch_fmp_earnings_calendar(ticker)
-            dividends_calendar = await self.fetch_fmp_dividends_calendar(ticker)
+            if not fmp_data:
+                return {
+                    'sentiment_score': 0.0,
+                    'volume': 0,
+                    'confidence': 0.0,
+                    'error': 'No FMP data available'
+                }
             
-            # Calculate weighted average sentiment
+            # Calculate sentiment from different components
             sentiments = []
             weights = []
+            total_volume = 0
             
-            if estimates.get('fmp_estimates_sentiment', 0) != 0:
-                sentiments.append(estimates['fmp_estimates_sentiment'])
+            # Process estimates
+            estimates = fmp_data.get('estimates', [])
+            if estimates:
+                est = estimates[0]
+                eps_avg = est.get('estimatedEpsAvg', 0.0)
+                norm_eps = max(-1, min(1, (eps_avg - 5) / 5))
+                sentiments.append(norm_eps)
                 weights.append(0.3)
+                total_volume += est.get('numberAnalystEstimatedEps', 1)
             
-            if ratings.get('fmp_ratings_sentiment', 0) != 0:
-                sentiments.append(ratings['fmp_ratings_sentiment'])
+            # Process ratings
+            ratings = fmp_data.get('ratings', [])
+            if ratings:
+                rating = ratings[0]
+                overall = rating.get('ratingScore', 0)
+                norm_score = (overall - 3) / 2
+                sentiments.append(norm_score)
                 weights.append(0.3)
+                total_volume += 1
             
-            if price_targets.get('fmp_price_target_sentiment', 0) != 0:
-                sentiments.append(price_targets['fmp_price_target_sentiment'])
+            # Process price targets
+            price_targets = fmp_data.get('price_targets', [])
+            if price_targets:
+                pt = price_targets[0]
+                avg_target = pt.get('lastYearAvgPriceTarget', 0.0)
+                norm_pt = max(-1, min(1, (avg_target - 200) / 100))
+                sentiments.append(norm_pt)
                 weights.append(0.25)
+                total_volume += pt.get('lastYearCount', 1)
             
-            if grades.get('fmp_grades_sentiment', 0) != 0:
-                sentiments.append(grades['fmp_grades_sentiment'])
+            # Process grades
+            grades = fmp_data.get('grades', [])
+            if grades:
+                gs = grades[0]
+                consensus = gs.get('gradingCompany', '').lower()
+                mapping = {'strong buy': 1.0, 'buy': 0.7, 'hold': 0.0, 'sell': -0.7, 'strong sell': -1.0}
+                norm_score = mapping.get(consensus, 0.0)
+                sentiments.append(norm_score)
                 weights.append(0.15)
+                total_volume += 1
             
+            # Calculate weighted sentiment
             if sentiments:
                 weighted_sentiment = sum(s * w for s, w in zip(sentiments, weights)) / sum(weights)
-                volume = sum([
-                    estimates.get('fmp_estimates_volume', 0),
-                    ratings.get('fmp_ratings_volume', 0),
-                    price_targets.get('fmp_price_target_volume', 0),
-                    grades.get('fmp_grades_volume', 0)
-                ])
-                confidence = sum([
-                    estimates.get('fmp_estimates_confidence', 0),
-                    ratings.get('fmp_ratings_confidence', 0),
-                    price_targets.get('fmp_price_target_confidence', 0),
-                    grades.get('fmp_grades_confidence', 0)
-                ]) / 4
+                confidence = sum(weights) / 4  # Normalize confidence
             else:
                 weighted_sentiment = 0.0
-                volume = 0
                 confidence = 0.0
             
-            # Structure raw data with proper calendar data for economic calendar
-            raw_data = {
-                'estimates': estimates,
-                'ratings': ratings,
-                'price_targets': price_targets,
-                'grades': grades
-            }
-            
-            # Add calendar data in the expected structure for economic calendar
-            if earnings_calendar and 'earnings_calendar' in earnings_calendar:
-                raw_data['earnings'] = earnings_calendar['earnings_calendar']
-                logger.info(f"Added {len(earnings_calendar['earnings_calendar'])} earnings entries to FMP raw data")
-            
-            if dividends_calendar and 'dividends_calendar' in dividends_calendar:
-                raw_data['dividends'] = dividends_calendar['dividends_calendar']
-                logger.info(f"Added {len(dividends_calendar['dividends_calendar'])} dividends entries to FMP raw data")
+            logger.info(f"FMP consolidated sentiment for {ticker}: {weighted_sentiment:.3f} from {len(sentiments)} sources")
             
             return {
                 'sentiment_score': weighted_sentiment,
-                'volume': volume,
+                'volume': total_volume,
                 'confidence': confidence,
-                'raw_data': raw_data,
-                'components': {
-                    'estimates': estimates,
-                    'ratings': ratings,
-                    'price_targets': price_targets,
-                    'grades': grades,
-                    'earnings_calendar': earnings_calendar,
-                    'dividends_calendar': dividends_calendar
-                }
+                'raw_data': fmp_data,  # This will include calendar data for economic calendar
+                'components_analyzed': len(sentiments)
             }
         except Exception as e:
             logger.error(f"Error analyzing FMP sentiment for {ticker}: {str(e)}")
@@ -1920,23 +1888,45 @@ class SentimentAnalyzer:
         """Analyze sentiment from Alpha Vantage earnings call transcripts."""
         try:
             quarter = self.get_latest_quarter()
+            logger.info(f"Fetching earnings call for {ticker} quarter: {quarter}")
+            
+            # Try current quarter first
             earnings_call = await self.fetch_alpha_vantage_earnings_call(ticker, quarter)
             
-            if not earnings_call or earnings_call.get('status') != 'ok':
+            # If no data for current quarter, try previous quarter
+            if not earnings_call or 'error' in earnings_call:
+                logger.info(f"No data for {quarter}, trying previous quarter")
+                # Try previous quarter
+                year = int(quarter[:4])
+                q = int(quarter[5:])
+                if q == 1:
+                    prev_quarter = f"{year-1}Q4"
+                else:
+                    prev_quarter = f"{year}Q{q-1}"
+                
+                earnings_call = await self.fetch_alpha_vantage_earnings_call(ticker, prev_quarter)
+                logger.info(f"Tried previous quarter {prev_quarter}")
+            
+            if not earnings_call or 'error' in earnings_call:
+                logger.warning(f"No earnings call data available for {ticker} in recent quarters")
                 return {
                     'sentiment_score': 0.0,
                     'volume': 0,
                     'confidence': 0.0,
-                    'error': 'No earnings call data available'
+                    'error': f'No earnings call data available for {ticker} in quarters {quarter} or previous'
                 }
             
-            transcript = earnings_call.get('transcript', {})
+            # Check if we have transcript data
+            transcript = None
+            if isinstance(earnings_call, dict):
+                transcript = earnings_call.get('transcript', earnings_call.get('data', {}))
+            
             if not transcript:
                 return {
                     'sentiment_score': 0.0,
                     'volume': 0,
                     'confidence': 0.0,
-                    'error': 'No transcript available'
+                    'error': 'No transcript available in earnings call data'
                 }
             
             # Check if transcript is structured (array of speaker segments with pre-calculated sentiment)
@@ -1979,7 +1969,8 @@ class SentimentAnalyzer:
                 'sentiment_score': sentiment_score,
                 'volume': volume,
                 'confidence': 0.8,  # High confidence in earnings call data
-                'transcript_segments': len(transcript) if isinstance(transcript, list) else 1
+                'transcript_segments': len(transcript) if isinstance(transcript, list) else 1,
+                'quarter_analyzed': quarter
             }
         except Exception as e:
             logger.error(f"Error analyzing Alpha Vantage earnings call sentiment for {ticker}: {str(e)}")
@@ -1991,24 +1982,150 @@ class SentimentAnalyzer:
             }
 
     async def analyze_alphavantage_news_sentiment(self, ticker: str) -> Dict[str, Any]:
-        """Analyze sentiment from Alpha Vantage news (placeholder implementation)."""
+        """Analyze sentiment from Alpha Vantage NEWS_SENTIMENT API."""
         try:
-            # This is a placeholder implementation since Alpha Vantage doesn't have a news sentiment API
-            # We can use the earnings call sentiment as a proxy or return neutral
-            logger.info(f"Alpha Vantage news sentiment not available for {ticker}, returning neutral")
-            return {
-                'sentiment_score': 0.0,
-                'volume': 0,
-                'confidence': 0.0,
-                'note': 'Alpha Vantage news sentiment not implemented'
+            api_key = os.getenv("ALPHAVANTAGE_API_KEY")
+            if not api_key:
+                logger.warning("ALPHAVANTAGE_API_KEY not set. Skipping Alpha Vantage news sentiment.")
+                return {
+                    'alphavantage_sentiment': 0.0,
+                    'alphavantage_volume': 0,
+                    'alphavantage_confidence': 0.0,
+                    'alphavantage_error': 'API key not set'
+                }
+            
+            # Alpha Vantage NEWS_SENTIMENT API
+            url = f"https://www.alphavantage.co/query"
+            params = {
+                'function': 'NEWS_SENTIMENT',
+                'tickers': ticker,
+                'sort': 'LATEST',
+                'limit': '50',  # Get up to 50 recent articles
+                'apikey': api_key
             }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=15) as response:
+                    if response.status != 200:
+                        logger.warning(f"Alpha Vantage NEWS_SENTIMENT returned status {response.status}")
+                        return {
+                            'alphavantage_sentiment': 0.0,
+                            'alphavantage_volume': 0,
+                            'alphavantage_confidence': 0.0,
+                            'alphavantage_error': f'API returned status {response.status}'
+                        }
+                    
+                    data = await response.json()
+                    
+                    # Check for API errors
+                    if 'Error Message' in data:
+                        logger.error(f"Alpha Vantage NEWS_SENTIMENT error: {data['Error Message']}")
+                        return {
+                            'alphavantage_sentiment': 0.0,
+                            'alphavantage_volume': 0,
+                            'alphavantage_confidence': 0.0,
+                            'alphavantage_error': data['Error Message']
+                        }
+                    
+                    # Check for rate limit
+                    if 'Note' in data:
+                        logger.warning(f"Alpha Vantage rate limit: {data['Note']}")
+                        return {
+                            'alphavantage_sentiment': 0.0,
+                            'alphavantage_volume': 0,
+                            'alphavantage_confidence': 0.0,
+                            'alphavantage_error': 'Rate limit exceeded'
+                        }
+                    
+                    # Process news sentiment data
+                    feed = data.get('feed', [])
+                    if not feed:
+                        logger.info(f"No news sentiment data from Alpha Vantage for {ticker}")
+                        return {
+                            'alphavantage_sentiment': 0.0,
+                            'alphavantage_volume': 0,
+                            'alphavantage_confidence': 0.0,
+                            'alphavantage_note': 'No news articles found'
+                        }
+                    
+                    sentiment_scores = []
+                    ticker_relevance_scores = []
+                    raw_data = []
+                    
+                    for article in feed:
+                        try:
+                            # Get overall sentiment score
+                            overall_sentiment = article.get('overall_sentiment_score', 0.0)
+                            
+                            # Get ticker-specific sentiment
+                            ticker_sentiments = article.get('ticker_sentiment', [])
+                            ticker_sentiment = 0.0
+                            ticker_relevance = 0.0
+                            
+                            for ts in ticker_sentiments:
+                                if ts.get('ticker', '').upper() == ticker.upper():
+                                    ticker_sentiment = float(ts.get('sentiment_score', 0.0))
+                                    ticker_relevance = float(ts.get('relevance_score', 0.0))
+                                    break
+                            
+                            # Use ticker-specific sentiment if available, otherwise overall
+                            final_sentiment = ticker_sentiment if ticker_sentiment != 0.0 else overall_sentiment
+                            sentiment_scores.append(final_sentiment)
+                            ticker_relevance_scores.append(ticker_relevance)
+                            
+                            raw_data.append({
+                                'title': article.get('title', ''),
+                                'url': article.get('url', ''),
+                                'time_published': article.get('time_published', ''),
+                                'source': article.get('source', ''),
+                                'overall_sentiment_score': overall_sentiment,
+                                'ticker_sentiment_score': ticker_sentiment,
+                                'relevance_score': ticker_relevance
+                            })
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing Alpha Vantage article: {e}")
+                            continue
+                    
+                    if not sentiment_scores:
+                        return {
+                            'alphavantage_sentiment': 0.0,
+                            'alphavantage_volume': 0,
+                            'alphavantage_confidence': 0.0,
+                            'alphavantage_raw_data': raw_data,
+                            'alphavantage_note': 'No valid sentiment scores found'
+                        }
+                    
+                    # Calculate weighted average sentiment (weighted by relevance)
+                    if ticker_relevance_scores and any(r > 0 for r in ticker_relevance_scores):
+                        # Weight by relevance scores
+                        weighted_sentiment = sum(s * r for s, r in zip(sentiment_scores, ticker_relevance_scores))
+                        total_weight = sum(ticker_relevance_scores)
+                        avg_sentiment = weighted_sentiment / total_weight if total_weight > 0 else 0.0
+                    else:
+                        # Simple average if no relevance scores
+                        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+                    
+                    volume = len(sentiment_scores)
+                    confidence = min(volume / 20, 1.0)  # Higher confidence with more articles
+                    
+                    logger.info(f"Alpha Vantage news sentiment for {ticker}: {avg_sentiment:.3f} ({volume} articles)")
+                    
+                    return {
+                        'alphavantage_sentiment': avg_sentiment,
+                        'alphavantage_volume': volume,
+                        'alphavantage_confidence': confidence,
+                        'alphavantage_raw_data': raw_data[:10],  # Store top 10 articles
+                        'alphavantage_error': None
+                    }
+            
         except Exception as e:
             logger.error(f"Error analyzing Alpha Vantage news sentiment for {ticker}: {str(e)}")
             return {
-                'sentiment_score': 0.0,
-                'volume': 0,
-                'confidence': 0.0,
-                'error': str(e)
+                'alphavantage_sentiment': 0.0,
+                'alphavantage_volume': 0,
+                'alphavantage_confidence': 0.0,
+                'alphavantage_error': str(e)
             }
 
     async def analyze_short_interest_sentiment(self, ticker: str) -> Dict[str, Any]:
@@ -2179,6 +2296,81 @@ class SentimentAnalyzer:
             logger.error(f"Error analyzing sentiment: {e}")
             return 0.0
 
+    async def fetch_finnhub_insider_sentiment_direct(self, ticker: str) -> dict:
+        """
+        Fetch insider sentiment directly from Finnhub's insider sentiment API.
+        This provides pre-calculated MSPR (Monthly Share Purchase Ratio) values.
+        """
+        api_key = os.getenv("FINNHUB_API_KEY")
+        if not api_key:
+            logger.warning("FINNHUB_API_KEY not set. Skipping Finnhub insider sentiment.")
+            return {}
+        
+        try:
+            # Get data for the last 12 months
+            from_date = (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
+            to_date = datetime.utcnow().strftime('%Y-%m-%d')
+            
+            import finnhub
+            finnhub_client = finnhub.Client(api_key=api_key)
+            
+            # Use Finnhub's insider sentiment API
+            data = finnhub_client.stock_insider_sentiment(ticker, from_date, to_date)
+            
+            if data and 'data' in data and data['data']:
+                logger.info(f"Finnhub insider sentiment API returned {len(data['data'])} data points for {ticker}")
+                return data
+            else:
+                logger.warning(f"No insider sentiment data from Finnhub API for {ticker}")
+                return {}
+                
+        except Exception as e:
+            logger.error(f"Error fetching Finnhub insider sentiment API for {ticker}: {e}")
+            return {}
+
+    async def analyze_finnhub_insider_sentiment_enhanced(self, ticker: str) -> dict:
+        """
+        Enhanced insider sentiment analysis using both the direct API and transaction parsing.
+        """
+        try:
+            # Try the direct insider sentiment API first
+            direct_sentiment = await self.fetch_finnhub_insider_sentiment_direct(ticker)
+            
+            if direct_sentiment and 'data' in direct_sentiment and direct_sentiment['data']:
+                # Use the pre-calculated MSPR values from Finnhub
+                sentiment_data = direct_sentiment['data']
+                
+                # Calculate average sentiment from recent months
+                total_mspr = sum(item.get('mspr', 0) for item in sentiment_data)
+                avg_mspr = total_mspr / len(sentiment_data) if sentiment_data else 0
+                
+                # Normalize MSPR to [-1, 1] range (MSPR typically ranges from -100 to 100)
+                normalized_sentiment = max(-1.0, min(1.0, avg_mspr / 100))
+                
+                # Calculate volume as sum of absolute changes
+                total_volume = sum(abs(item.get('change', 0)) for item in sentiment_data)
+                
+                logger.info(f"Finnhub insider sentiment API for {ticker}: MSPR={avg_mspr:.2f}, normalized={normalized_sentiment:.3f}")
+                
+                return {
+                    'source': 'finnhub_insider_api',
+                    'sentiment': normalized_sentiment,
+                    'volume': int(total_volume),
+                    'confidence': 0.9,  # High confidence for official API
+                    'mspr_average': avg_mspr,
+                    'data_points': len(sentiment_data),
+                    'raw_data': sentiment_data
+                }
+            else:
+                # Fallback to transaction parsing method
+                logger.info(f"Finnhub insider sentiment API had no data for {ticker}, falling back to transaction parsing")
+                return await self.analyze_finnhub_insider_sentiment(ticker)
+                
+        except Exception as e:
+            logger.error(f"Error in enhanced Finnhub insider sentiment for {ticker}: {e}")
+            # Fallback to original method
+            return await self.analyze_finnhub_insider_sentiment(ticker)
+
 
 def get_previous_trading_day(date_str):
     nyse = mcal.get_calendar('NYSE')
@@ -2220,81 +2412,246 @@ def fetch_and_store_options_sentiment(mongo_client, ticker, date):
         logger.info(f"No options data for {ticker}, skipping storage.")
 
 class FMPAPIManager:
-    """Centralized FMP API manager to eliminate duplicate calls and improve caching."""
+    """Centralized FMP API manager using correct stable endpoints."""
     
     def __init__(self, mongo_client: MongoDBClient):
         self.api_key = os.getenv("FMP_API_KEY")
         self.mongo_client = mongo_client
-        self.base_url = "https://financialmodelingprep.com"
+        self.base_url = "https://financialmodelingprep.com/stable"  # ✅ CORRECT STABLE BASE URL
         self.cache_duration = 3600  # 1 hour cache
         
+        # Track API status
+        self.api_working = True
+        self.last_error_time = None
+        self.error_cooldown = 300  # 5 minutes cooldown after errors
+        
+        # Free tier supported tickers - only these will work
+        self.FREE_TIER_TICKERS = {
+            'AAPL', 'TSLA', 'AMZN', 'MSFT', 'NVDA', 'GOOGL', 'META', 'NFLX', 'JPM', 'V', 
+            'BAC', 'AMD', 'PYPL', 'DIS', 'T', 'PFE', 'COST', 'INTC', 'KO', 'TGT', 'NKE', 
+            'SPY', 'BA', 'BABA', 'XOM', 'WMT', 'GE', 'CSCO', 'VZ', 'JNJ', 'CVX', 'PLTR', 
+            'SQ', 'SHOP', 'SBUX', 'SOFI', 'HOOD', 'RBLX', 'SNAP', 'UBER', 'FDX', 'ABBV', 
+            'ETSY', 'MRNA', 'LMT', 'GM', 'F', 'RIVN', 'LCID', 'CCL', 'DAL', 'UAL', 'AAL', 
+            'TSM', 'SONY', 'ET', 'NOK', 'MRO', 'COIN', 'SIRI', 'RIOT', 'CPRX', 'VWO', 
+            'SPYG', 'ROKU', 'VIAC', 'ATVI', 'BIDU', 'DOCU', 'ZM', 'PINS', 'TLRY', 'WBA', 
+            'MGM', 'NIO', 'C', 'GS', 'WFC', 'ADBE', 'PEP', 'UNH', 'CARR', 'FUBO', 'HCA', 
+            'TWTR', 'BILI', 'RKT'
+        }
+        
+    def _is_ticker_supported(self, ticker: str) -> bool:
+        """Check if ticker is supported on free tier."""
+        return ticker.upper() in self.FREE_TIER_TICKERS
+        
     async def _make_fmp_request(self, endpoint: str, ticker: str = None, **params) -> dict:
-        """Make centralized FMP API request with caching."""
+        """Make centralized FMP API request with caching and improved error handling."""
         if not self.api_key:
             logger.warning("FMP_API_KEY not set. Skipping FMP request.")
             return {}
+        
+        # Check if ticker is supported on free tier
+        if ticker and not self._is_ticker_supported(ticker):
+            logger.warning(f"❌ Ticker {ticker} not supported on FMP free tier")
+            return {}
+        
+        # Check if we're in cooldown period
+        if (not self.api_working and self.last_error_time and 
+            (datetime.utcnow() - self.last_error_time).total_seconds() < self.error_cooldown):
+            logger.warning(f"FMP API in cooldown period, skipping {endpoint}")
+            return {}
             
         # Create cache key
-        cache_key = f"fmp_{endpoint}_{ticker or 'global'}_{hash(str(sorted(params.items())))}"
+        cache_key = f"fmp_{endpoint.replace('/', '_')}_{ticker or 'global'}_{hash(str(sorted(params.items())))}"
         
         # Check cache first
-        cached = self.mongo_client.get_alpha_vantage_data(ticker or 'global', cache_key)
-        if cached and 'timestamp' in cached:
-            age = (datetime.utcnow() - cached['timestamp']).total_seconds()
-            if age < self.cache_duration:
-                return cached.get('data', {})
+        try:
+            cached = self.mongo_client.get_alpha_vantage_data(ticker or 'global', cache_key)
+            if cached and 'timestamp' in cached:
+                age = (datetime.utcnow() - cached['timestamp']).total_seconds()
+                if age < self.cache_duration:
+                    logger.info(f"Using cached FMP data for {endpoint} - {ticker or 'global'}")
+                    return cached.get('data', {})
+        except Exception as e:
+            logger.warning(f"Error checking FMP cache: {e}")
         
         # Make API request
         try:
             url = f"{self.base_url}/{endpoint}"
-            params['apikey'] = self.api_key
-            if ticker:
-                params['symbol'] = ticker
+            
+            # Add API key to params
+            all_params = dict(params)
+            all_params['apikey'] = self.api_key
+            
+            # Log the exact URL being called for debugging
+            logger.info(f"🔗 FMP STABLE API Call: {url} with params: {all_params}")
                 
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as resp:
-                    if resp.status != 200:
-                        logger.warning(f"FMP {endpoint} returned status {resp.status}")
+                async with session.get(url, params=all_params, timeout=15) as resp:
+                    
+                    if resp.status == 403:
+                        logger.error(f"❌ FMP 403 Forbidden: {endpoint} - Check API subscription level or ticker support")
+                        self.api_working = False
+                        self.last_error_time = datetime.utcnow()
                         return {}
-                    data = await resp.json()
+                    elif resp.status == 429:
+                        logger.warning(f"⚠️ FMP 429 Rate Limited: {endpoint}")
+                        self.api_working = False
+                        self.last_error_time = datetime.utcnow()
+                        return {}
+                    elif resp.status != 200:
+                        logger.warning(f"⚠️ FMP {endpoint} returned status {resp.status}")
+                        return {}
+                    
+                    # Try to parse JSON response
+                    try:
+                        data = await resp.json()
+                    except Exception as e:
+                        logger.error(f"Failed to parse FMP response as JSON: {e}")
+                        return {}
+                    
+                    # Check for FMP error messages
+                    if isinstance(data, dict):
+                        if 'Error Message' in data:
+                            logger.error(f"❌ FMP API error: {data['Error Message']}")
+                            if 'limit' in data['Error Message'].lower() or 'subscription' in data['Error Message'].lower():
+                                self.api_working = False
+                                self.last_error_time = datetime.utcnow()
+                            return {}
+                        elif 'error' in data:
+                            logger.error(f"❌ FMP API error: {data['error']}")
+                            return {}
+                    
+                    # Reset API status on successful request
+                    if not self.api_working:
+                        logger.info("✅ FMP API is working again")
+                        self.api_working = True
+                        self.last_error_time = None
+                    
+                    logger.info(f"✅ FMP STABLE API Success: {endpoint} returned {len(data) if isinstance(data, list) else 'object'}")
                     
                     # Store in cache
-                    self.mongo_client.store_alpha_vantage_data(
-                        ticker or 'global', 
-                        cache_key, 
-                        {'data': data, 'timestamp': datetime.utcnow()}
-                    )
+                    try:
+                        self.mongo_client.store_alpha_vantage_data(
+                            ticker or 'global', 
+                            cache_key, 
+                            {'data': data, 'timestamp': datetime.utcnow()}
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to cache FMP data: {e}")
+                    
                     return data
                     
+        except asyncio.TimeoutError:
+            logger.error(f"⏰ FMP {endpoint} request timed out")
+            return {}
         except Exception as e:
-            logger.error(f"Error fetching FMP {endpoint}: {e}")
+            logger.error(f"💥 Error fetching FMP {endpoint}: {e}")
             return {}
     
-    async def get_dividends(self, ticker: str, limit: int = 5) -> dict:
-        """Get dividend data from FMP."""
-        data = await self._make_fmp_request("stable/dividends", ticker, limit=limit)
-        return {"dividends": data}
+    async def get_dividends_company(self, ticker: str) -> dict:
+        """Get company dividends using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/dividends?symbol=AAPL
+        data = await self._make_fmp_request("dividends", ticker, symbol=ticker)
+        return {"company_dividends": data if isinstance(data, list) else []}
     
-    async def get_earnings(self, ticker: str, limit: int = 5) -> dict:
-        """Get earnings data from FMP."""
-        data = await self._make_fmp_request("stable/earnings", ticker, limit=limit)
-        return {"earnings": data}
+    async def get_dividends_calendar(self, from_date: str = None, to_date: str = None) -> dict:
+        """Get dividends calendar using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/dividends-calendar
+        if not from_date:
+            from_date = datetime.utcnow().strftime("%Y-%m-%d")
+        if not to_date:
+            to_date = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")  # Free tier: 1 month max
+        
+        params = {"from": from_date, "to": to_date}
+        data = await self._make_fmp_request("dividends-calendar", None, **params)
+        return {"dividends_calendar": data if isinstance(data, list) else []}
     
-    async def get_earnings_calendar(self, ticker: str = None) -> dict:
-        """Get earnings calendar from FMP."""
-        params = {"limit": 100}
-        if ticker:
-            params["symbol"] = ticker
-        data = await self._make_fmp_request("v3/earning_calendar", ticker, **params)
-        return {"earnings_calendar": data}
+    async def get_earnings_company(self, ticker: str) -> dict:
+        """Get company earnings using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/earnings?symbol=AAPL&limit=5
+        data = await self._make_fmp_request("earnings", ticker, symbol=ticker, limit=5)  # Free tier: max 5
+        return {"company_earnings": data if isinstance(data, list) else []}
     
-    async def get_dividends_calendar(self, ticker: str = None) -> dict:
-        """Get dividends calendar from FMP."""
-        params = {"limit": 100}
-        if ticker:
-            params["symbol"] = ticker
-        data = await self._make_fmp_request("v3/stock_dividend_calendar", ticker, **params)
-        return {"dividends_calendar": data}
+    async def get_earnings_calendar(self, from_date: str = None, to_date: str = None) -> dict:
+        """Get earnings calendar using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/earnings-calendar
+        if not from_date:
+            from_date = datetime.utcnow().strftime("%Y-%m-%d")
+        if not to_date:
+            to_date = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")  # Free tier: 1 month max
+        
+        params = {"from": from_date, "to": to_date}
+        data = await self._make_fmp_request("earnings-calendar", None, **params)
+        return {"earnings_calendar": data if isinstance(data, list) else []}
+    
+    async def get_analyst_estimates(self, ticker: str, period: str = "annual") -> dict:
+        """Get analyst estimates using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/analyst-estimates?symbol=AAPL&period=annual&page=0&limit=10
+        data = await self._make_fmp_request("analyst-estimates", ticker, symbol=ticker, period=period, page=0, limit=10)
+        return {"analyst_estimates": data if isinstance(data, list) else []}
+    
+    async def get_ratings_snapshot(self, ticker: str) -> dict:
+        """Get ratings snapshot using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/ratings-snapshot?symbol=AAPL
+        data = await self._make_fmp_request("ratings-snapshot", ticker, symbol=ticker)
+        return {"ratings_snapshot": data if isinstance(data, list) else []}
+    
+    async def get_price_target_summary(self, ticker: str) -> dict:
+        """Get price target summary using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/price-target-summary?symbol=AAPL
+        data = await self._make_fmp_request("price-target-summary", ticker, symbol=ticker)
+        return {"price_target_summary": data if isinstance(data, list) else []}
+    
+    async def get_price_target_consensus(self, ticker: str) -> dict:
+        """Get price target consensus using correct stable endpoint."""
+        # ✅ CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/price-target-consensus?symbol=AAPL
+        data = await self._make_fmp_request("price-target-consensus", ticker, symbol=ticker)
+        return {"price_target_consensus": data if isinstance(data, list) else []}
+    
+    async def get_all_fmp_data(self, ticker: str) -> dict:
+        """Get all FMP data for a ticker using correct stable endpoints."""
+        logger.info(f"🔄 Fetching consolidated FMP STABLE data for {ticker}")
+        
+        # Check if ticker is supported
+        if not self._is_ticker_supported(ticker):
+            logger.warning(f"❌ Ticker {ticker} not supported on FMP free tier")
+            return {"error": f"Ticker {ticker} not supported on free tier"}
+        
+        # Check if API is working before making multiple calls
+        if not self.api_working:
+            logger.warning(f"⚠️ FMP API not working, returning empty data for {ticker}")
+            return {}
+        
+        # Make all calls concurrently to avoid sequential delays
+        import asyncio
+        results = await asyncio.gather(
+            self.get_dividends_company(ticker),
+            self.get_dividends_calendar(),
+            self.get_earnings_company(ticker),
+            self.get_earnings_calendar(),
+            self.get_analyst_estimates(ticker),
+            self.get_ratings_snapshot(ticker),
+            self.get_price_target_summary(ticker),
+            self.get_price_target_consensus(ticker),
+            return_exceptions=True
+        )
+        
+        # Combine all results
+        consolidated_data = {}
+        api_call_names = [
+            'company_dividends', 'dividends_calendar', 'company_earnings', 'earnings_calendar',
+            'analyst_estimates', 'ratings_snapshot', 'price_target_summary', 'price_target_consensus'
+        ]
+        
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"❌ FMP STABLE {api_call_names[i]} failed: {result}")
+                consolidated_data[api_call_names[i]] = []
+            else:
+                consolidated_data.update(result)
+                logger.info(f"✅ FMP STABLE {api_call_names[i]} success")
+        
+        logger.info(f"🎯 FMP STABLE consolidated data for {ticker}: {list(consolidated_data.keys())}")
+        return consolidated_data
 
 # Add FMP manager to SentimentAnalyzer
 # ... existing code ...
