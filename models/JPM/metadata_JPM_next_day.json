@@ -1,0 +1,13 @@
+{
+  "ticker": "JPM",
+  "window": "next_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T16:49:54.887605",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

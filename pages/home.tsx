@@ -13,6 +13,7 @@ import TradingViewEconomicCalendar from "@/components/tradingview/TradingViewEco
 import TradingViewHeatmap from "@/components/tradingview/TradingViewHeatmap"
 import TradingViewTimeline from "@/components/tradingview/TradingViewTimeline"
 import FinlogixEarningsCalendar from "@/components/tradingview/FinlogixEarningsCalendar"
+import TradingViewSingleQuote from "@/components/tradingview/TradingViewSingleQuote"
 
 
 
@@ -81,75 +82,47 @@ export default function HomePage() {
         <div className="space-y-6">
           <EnhancedQuickPredictionWidget />
 
-          {/* Market Indices */}
-          <Card className="hover:border-zinc-700 transition-colors">
+                    {/* Market Overview */}
+          <Card
+            className="hover:border-zinc-700 transition-colors"
+            style={{ minHeight: 540 }}
+          >
             <CardHeader className="pb-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <Activity className="h-4 w-4 text-blue-500" />
-                Major Indices
+                Market Overview
               </CardTitle>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">S&P 500</div>
-                    <div className="text-xs text-zinc-400">^GSPC</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-medium">Available in ticker tape</div>
-                    <div className="text-xs text-zinc-400">Real-time</div>
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs text-zinc-400 font-medium mb-1"></div>
+                  <div style={{ height: 126, width: "100%" }}>
+                    <TradingViewSingleQuote symbol="OANDA:SPX500USD" height={126} />
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">NASDAQ</div>
-                    <div className="text-xs text-zinc-400">^IXIC</div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-sm font-medium">Available in ticker tape</div>
-                    <div className="text-xs text-zinc-400">Real-time</div>
+                <div>
+                  <div className="text-xs text-zinc-400 font-medium mb-1"></div>
+                  <div style={{ height: 126, width: "100%" }}>
+                    <TradingViewSingleQuote symbol="OANDA:NAS100USD" height={126} />
                   </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">Dow Jones</div>
-                    <div className="text-xs text-zinc-400">^DJI</div>
+                <div>
+                  <div className="text-xs text-zinc-400 font-medium mb-1"></div>
+                  <div style={{ height: 126, width: "100%" }}>
+                    <TradingViewSingleQuote symbol="CAPITALCOM:VIX" height={126} />
                   </div>
-                  <div className="text-right">
-                    <div className="text-sm font-medium">Available in ticker tape</div>
-                    <div className="text-xs text-zinc-400">Real-time</div>
+                </div>
+                <div>
+                  <div className="text-xs text-zinc-400 font-medium mb-1"></div>
+                  <div style={{ height: 126, width: "100%" }}>
+                    <TradingViewSingleQuote symbol="OANDA:EURUSD" height={126} />
                   </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Quick Stats */}
-          <Card className="hover:border-zinc-700 transition-colors">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Zap className="h-4 w-4 text-amber-500" />
-                Market Stats
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">VIX</span>
-                  <span className="text-sm">View in ticker tape</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">10Y Treasury</span>
-                  <span className="text-sm">Real-time data</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400">USD/EUR</span>
-                  <span className="text-sm">Live forex</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
 
           {/* Top Stories */}
           <Card className="p-0 overflow-hidden">

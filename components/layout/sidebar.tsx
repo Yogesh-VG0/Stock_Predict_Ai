@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { motion } from "framer-motion"
 import {
@@ -25,6 +25,7 @@ import {
   SidebarMenuItem,
   SidebarMenuButton,
 } from "@/components/ui/sidebar"
+import { useWebSocket } from "@/hooks/use-websocket-context"
 
 interface SidebarProps {
   onClose: () => void
@@ -32,30 +33,60 @@ interface SidebarProps {
 
 export default function Sidebar({ onClose }: SidebarProps) {
   const location = useLocation()
-  const [topStocks, setTopStocks] = useState([
-    { symbol: "AAPL", name: "Apple Inc.", change: 2.34 },
-    { symbol: "MSFT", name: "Microsoft Corp.", change: 1.56 },
-    { symbol: "GOOGL", name: "Alphabet Inc.", change: -0.78 },
-    { symbol: "AMZN", name: "Amazon.com Inc.", change: 3.21 },
-    { symbol: "TSLA", name: "Tesla Inc.", change: -2.45 },
-    { symbol: "META", name: "Meta Platforms Inc.", change: 1.23 },
-    { symbol: "NVDA", name: "NVIDIA Corp.", change: 4.56 },
-    { symbol: "JPM", name: "JPMorgan Chase & Co.", change: 0.89 },
-    { symbol: "V", name: "Visa Inc.", change: 0.45 },
-    { symbol: "WMT", name: "Walmart Inc.", change: -0.32 },
-  ])
+  const { stockPrices } = useWebSocket()
+
+  // Define top stocks with company names
+  const topStocksConfig = [
+    { symbol: "AAPL", name: "Apple Inc." },
+    { symbol: "MSFT", name: "Microsoft Corp." },
+    { symbol: "NVDA", name: "NVIDIA Corp." },
+    { symbol: "AMZN", name: "Amazon.com Inc." },
+    { symbol: "GOOGL", name: "Alphabet Inc." },
+    { symbol: "META", name: "Meta Platforms Inc." },
+    { symbol: "BRK.B", name: "Berkshire Hathaway" },
+    { symbol: "TSLA", name: "Tesla Inc." },
+    { symbol: "AVGO", name: "Broadcom Inc." },
+    { symbol: "LLY", name: "Eli Lilly & Co." },
+    { symbol: "WMT", name: "Walmart Inc." },
+    { symbol: "JPM", name: "JPMorgan Chase" },
+    { symbol: "V", name: "Visa Inc." },
+    { symbol: "MA", name: "Mastercard Inc." },
+    { symbol: "NFLX", name: "Netflix Inc." },
+    { symbol: "XOM", name: "Exxon Mobil" },
+    { symbol: "COST", name: "Costco Wholesale" },
+    { symbol: "ORCL", name: "Oracle Corp." },
+    { symbol: "PG", name: "Procter & Gamble" },
+    { symbol: "JNJ", name: "Johnson & Johnson" },
+    { symbol: "UNH", name: "UnitedHealth Group" },
+    { symbol: "HD", name: "Home Depot Inc." },
+    { symbol: "ABBV", name: "AbbVie Inc." },
+    { symbol: "KO", name: "Coca-Cola Co." },
+    { symbol: "CRM", name: "Salesforce Inc." },
+  ]
+
+  // Get real-time stock data with fallback to mock data
+  const topStocks = useMemo(() => {
+    return topStocksConfig.map(stock => {
+      const realTimeData = stockPrices[stock.symbol]
+      return {
+        symbol: stock.symbol,
+        name: stock.name,
+        change: realTimeData?.changePercent || ((Math.random() - 0.5) * 10), // fallback to random
+        price: realTimeData?.price || (50 + Math.random() * 450),
+        isRealTime: !!realTimeData
+      }
+    })
+  }, [stockPrices, topStocksConfig])
 
   const navItems = [
     { name: "Home", path: "/", icon: Home },
-    { name: "Predictions", path: "/predictions", icon: LineChart },
+    { name: "Stock Analysis", path: "/stocks/AAPL", icon: LineChart },
     { name: "News", path: "/news", icon: Newspaper },
     { name: "Watchlist", path: "/watchlist", icon: Star },
-    { name: "Portfolio", path: "/portfolio", icon: Briefcase },
-    { name: "Settings", path: "/settings", icon: Settings },
   ]
 
   return (
-    <ShadcnSidebar className="h-screen w-64 bg-black border-r border-zinc-800">
+    <ShadcnSidebar className="h-screen w-64 bg-black border-r border-zinc-800 overflow-hidden">
       <SidebarHeader className="p-4 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-2">
           <motion.div initial={{ rotate: -10 }} animate={{ rotate: 0 }} transition={{ duration: 0.5 }}>
@@ -79,7 +110,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
         </div>
       </div>
 
-      <SidebarContent>
+      <SidebarContent className="overflow-hidden">
         <SidebarMenu>
           {navItems.map((item) => (
             <SidebarMenuItem key={item.path}>
@@ -94,8 +125,10 @@ export default function Sidebar({ onClose }: SidebarProps) {
         </SidebarMenu>
 
         <div className="mt-6 px-3">
-          <h3 className="text-xs font-semibold text-zinc-400 mb-2">TOP STOCKS</h3>
-          <div className="space-y-1 max-h-[calc(100vh-350px)] overflow-y-auto pr-2 scrollbar-thin">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-semibold text-zinc-400">TOP STOCKS</h3>
+          </div>
+          <div className="space-y-1 max-h-[calc(100vh-350px)] overflow-y-scroll [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             {topStocks.map((stock) => (
               <Link
                 key={stock.symbol}
@@ -103,20 +136,34 @@ export default function Sidebar({ onClose }: SidebarProps) {
                 className="flex items-center justify-between p-2 rounded-md hover:bg-zinc-900 transition-colors"
               >
                 <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-6 rounded-sm bg-gradient-to-b from-zinc-700 to-zinc-800"></div>
-                  <span className="font-medium">{stock.symbol}</span>
+                  <div className={cn(
+                    "w-1.5 h-6 rounded-sm",
+                    stock.isRealTime 
+                      ? "bg-gradient-to-b from-emerald-500 to-emerald-600" 
+                      : "bg-gradient-to-b from-zinc-700 to-zinc-800"
+                  )}></div>
+                  <div className="flex flex-col">
+                    <span className="font-medium text-sm">{stock.symbol}</span>
+                    <span className="text-xs text-zinc-500">${stock.price.toFixed(2)}</span>
+                  </div>
                 </div>
-                <span className={cn("text-xs font-medium", stock.change > 0 ? "text-emerald-500" : "text-red-500")}>
-                  {stock.change > 0 ? (
-                    <TrendingUp className="h-3 w-3 inline mr-1" />
-                  ) : (
-                    <TrendingDown className="h-3 w-3 inline mr-1" />
+                <div className="flex items-center gap-1">
+                  <span className={cn("text-xs font-medium", stock.change > 0 ? "text-emerald-500" : "text-red-500")}>
+                    {stock.change > 0 ? (
+                      <TrendingUp className="h-3 w-3 inline mr-1" />
+                    ) : (
+                      <TrendingDown className="h-3 w-3 inline mr-1" />
+                    )}
+                    {stock.change > 0 ? "+" : ""}{stock.change.toFixed(2)}%
+                  </span>
+                  {stock.isRealTime && (
+                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
                   )}
-                  {Math.abs(stock.change)}%
-                </span>
+                </div>
               </Link>
             ))}
           </div>
+
         </div>
       </SidebarContent>
 

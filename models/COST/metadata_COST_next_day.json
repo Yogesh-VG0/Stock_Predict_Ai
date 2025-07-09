@@ -1,0 +1,13 @@
+{
+  "ticker": "COST",
+  "window": "next_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T17:11:22.482005",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

@@ -222,42 +222,167 @@ class SeekingAlphaAnalyzer:
         reraise=True
     )
     async def _navigate_to_comments(self, page, ticker: str) -> bool:
-        """Navigate to the comments page for a given ticker."""
+        """Navigate to the comments page for a given ticker with manual challenge handling."""
         try:
             # Navigate to the stock page
             url = f"https://seekingalpha.com/symbol/{ticker}/comments"
-            logger.info(f"Navigating to {url}")
+            logger.info(f"🔗 Navigating to {url}")
             
             # Set a longer timeout for navigation
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            
-            # Wait for the page to load
             try:
-                # First check if we're on a login page or blocked
-                if await page.query_selector('form[action*="login"]') or await page.query_selector('div.captcha'):
-                    logger.error("Access blocked by Seeking Alpha - login or captcha required")
-                    return False
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception as nav_error:
+                logger.error(f"❌ Navigation timeout for {ticker}: {nav_error}")
+                logger.info("🤖 This might be due to bot detection. Attempting manual challenge handling...")
                 
-                # Wait for comments to load
-                await page.wait_for_selector('div[data-test-id="comment-content"]', timeout=10000)
-                logger.info("Found comments section")
+                # Check if we need manual intervention
+                return await self._handle_challenge_detection(page, ticker, url)
+            
+            # Wait for the page to load and check for challenges
+            try:
+                # First check if we're on a challenge page or blocked
+                challenge_indicators = [
+                    'div.captcha',
+                    'div[class*="challenge"]',
+                    'div[class*="verification"]', 
+                    'form[action*="login"]',
+                    'div[class*="cloudflare"]',
+                    'div[id*="challenge"]',
+                    'div[class*="protection"]'
+                ]
                 
-                # Check if we have comments
-                no_comments = await page.query_selector('div.no-comments')
-                if no_comments:
-                    logger.info(f"No comments found for {ticker}")
+                for indicator in challenge_indicators:
+                    if await page.query_selector(indicator):
+                        logger.warning(f"🚫 Challenge detected ({indicator}) - requiring manual intervention")
+                        return await self._handle_challenge_detection(page, ticker, url)
+                
+                # Wait for comments to load with shorter timeout first
+                try:
+                    await page.wait_for_selector('div[data-test-id="comment-content"]', timeout=10000)
+                    logger.info("✅ Found comments section")
+                    
+                    # Check if we have comments
+                    no_comments = await page.query_selector('div.no-comments')
+                    if no_comments:
+                        logger.info(f"ℹ️ No comments found for {ticker}")
+                        return True
+                    
+                    return True
+                    
+                except Exception as wait_error:
+                    logger.warning(f"⏱️ Comments didn't load in time for {ticker}: {wait_error}")
+                    # Try alternative selectors
+                    alt_selectors = [
+                        'div[class*="comment"]',
+                        'article[data-test-id*="comment"]',
+                        'div[class*="user-comment"]',
+                        '.comments-section'
+                    ]
+                    
+                    for selector in alt_selectors:
+                        try:
+                            await page.wait_for_selector(selector, timeout=5000)
+                            logger.info(f"✅ Found comments using alternative selector: {selector}")
+                            return True
+                        except:
+                            continue
+                    
+                    # If no comments found but page loaded, might still be valid
+                    logger.warning(f"⚠️ No comment elements found, but page seems loaded for {ticker}")
                     return True
                 
-                return True
+            except Exception as load_error:
+                logger.error(f"❌ Error checking page load status for {ticker}: {load_error}")
+                return await self._handle_challenge_detection(page, ticker, url)
                 
-            except Exception as e:
-                logger.error(f"Error waiting for comments to load: {str(e)}")
+        except Exception as e:
+            logger.error(f"❌ Navigation to comments failed for {ticker}: {str(e)}")
+            return False
+
+    async def _handle_challenge_detection(self, page, ticker: str, url: str) -> bool:
+        """
+        Handle challenge detection with manual intervention option.
+        
+        Args:
+            page: Playwright page object
+            ticker: Stock ticker
+            url: Target URL
+            
+        Returns:
+            bool: True if challenge was resolved, False otherwise
+        """
+        try:
+            logger.warning(f"🤖 Bot detection/challenge detected for {ticker}")
+            logger.info(f"🔍 Current URL: {await page.url()}")
+            
+            # Take a screenshot for debugging
+            try:
+                screenshot_path = f"debug_seeking_alpha_{ticker}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                await page.screenshot(path=screenshot_path)
+                logger.info(f"📸 Screenshot saved: {screenshot_path}")
+            except:
+                pass
+            
+            # Check what type of challenge we're facing
+            page_content = await page.content()
+            challenge_type = "unknown"
+            
+            if "cloudflare" in page_content.lower():
+                challenge_type = "cloudflare"
+            elif "captcha" in page_content.lower():
+                challenge_type = "captcha"
+            elif "verification" in page_content.lower():
+                challenge_type = "verification"
+            elif "login" in page_content.lower():
+                challenge_type = "login_required"
+            
+            logger.warning(f"🔒 Challenge type detected: {challenge_type}")
+            
+            # Provide manual intervention instructions
+            logger.info("🛠️ MANUAL INTERVENTION REQUIRED:")
+            logger.info(f"   1. The browser window should be visible (headless=False)")
+            logger.info(f"   2. Navigate to: {url}")
+            logger.info(f"   3. Complete any challenges (CAPTCHA, verification, etc.)")
+            logger.info(f"   4. If prompted to log in, you may need to do so")
+            logger.info(f"   5. Once on the comments page, press ENTER in this terminal to continue...")
+            
+            # Wait for manual intervention
+            if not os.getenv('AUTOMATED_MODE', '').lower() in ['true', '1']:
+                try:
+                    # Give user 60 seconds to manually resolve
+                    logger.info("⏰ Waiting 60 seconds for manual resolution...")
+                    user_input = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(None, input, "Press ENTER when ready to continue: "),
+                        timeout=60.0
+                    )
+                    logger.info("✅ Manual intervention completed, proceeding...")
+                except asyncio.TimeoutError:
+                    logger.warning("⏰ Manual intervention timeout, proceeding automatically...")
+                except Exception as input_error:
+                    logger.warning(f"⚠️ Input error: {input_error}, proceeding...")
+            
+            # Verify the page is now accessible
+            try:
+                # Try to find comments or at least confirm we're on the right page
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                
+                # Check if we're now on the comments page
+                current_url = await page.url()
+                if ticker.lower() in current_url.lower() and "comments" in current_url.lower():
+                    logger.info("✅ Successfully navigated to comments page after manual intervention")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Current URL doesn't look like comments page: {current_url}")
+                    return False
+                    
+            except Exception as verify_error:
+                logger.error(f"❌ Failed to verify page after manual intervention: {verify_error}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Navigation to comments failed for {ticker}: {str(e)}")
+            logger.error(f"❌ Error in challenge handling for {ticker}: {e}")
             return False
-        
+
     async def _random_delay(self):
         """Add random delay to mimic human behavior."""
         delay = random.uniform(1.5, 3.0)

@@ -77,7 +77,6 @@ export default function TradingViewSymbolOverview({ symbol, height = 500 }: Trad
         <div ref={containerRef} className="tradingview-widget-container__widget" style={{ height: `${height - 40}px` }} />
         <div className="tradingview-widget-copyright" style={{ height: "40px", fontSize: "12px", lineHeight: "40px", textAlign: "center" }}>
           <a href="https://www.tradingview.com/" rel="noopener nofollow" target="_blank">
-            <span className="blue-text">Track all markets on TradingView</span>
           </a>
         </div>
       </div>

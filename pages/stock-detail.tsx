@@ -17,145 +17,265 @@ import {
   Globe,
   Users,
   Newspaper,
+  Search,
+  AlertCircle,
+  Clock,
+  Zap,
+  Wifi,
+  WifiOff,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import TradingViewAdvancedChart from "@/components/tradingview/trading-view-advanced-chart"
+import AIExplanationWidget from "@/components/market/AIExplanationWidget"
+import { 
+  getStockDetails, 
+  StockDetails, 
+  getPredictions, 
+  getStockPrice, 
+  getSymbolFromCompanyName,
+  PredictionTimeframes,
+  getComprehensiveAIExplanation,
+} from "@/lib/api"
+import { useToast } from "@/hooks/use-toast"
+import { useWebSocket, useStockPrice } from "@/hooks/use-websocket-context"
 
 type StockDetailProps = {}
 
 export default function StockDetail({}: StockDetailProps) {
-  const { symbol } = useParams<{ symbol: string }>()
+  const { symbol: urlSymbol } = useParams<{ symbol: string }>()
   const [isLoading, setIsLoading] = useState(true)
-  const [stockData, setStockData] = useState<any>(null)
+  const [stockData, setStockData] = useState<StockDetails | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [selectedStock, setSelectedStock] = useState<string>(urlSymbol || "AAPL")
+  const [predictionData, setPredictionData] = useState<PredictionTimeframes | null>(null)
+  const [stockNews, setStockNews] = useState<any[]>([])
+  const [currentPrice, setCurrentPrice] = useState<number>(0)
+  const [isUsingRealData, setIsUsingRealData] = useState(false)
+  const [availableStocks] = useState([
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", 
+    "JPM", "V", "JNJ", "WMT", "PG", "UNH", "HD", "MA", "BAC", "XOM", "LLY", "ABBV"
+  ])
+  const { toast } = useToast();
+  const [isFollowed, setIsFollowed] = useState(false);
+  const userId = 'default';
+
+  // Use centralized WebSocket service
+  const { isConnected: isWebSocketConnected } = useWebSocket()
+  const currentStockPrice = useStockPrice(selectedStock)
+  const [isClient, setIsClient] = useState(false)
+
+  // Ensure we're on the client side to prevent hydration mismatches
+  useEffect(() => {
+    setIsClient(true)
+  }, [])
 
   useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      // Mock data for the stock
-      const mockStockData = {
-        symbol: symbol,
-        name: getCompanyName(symbol || ""),
-        price: 187.68,
-        change: 4.23,
-        changePercent: 2.31,
-        marketCap: "2.94T",
-        peRatio: 31.2,
-        dividend: 0.92,
-        volume: "58.4M",
-        avgVolume: "62.1M",
-        high52w: 198.23,
-        low52w: 143.9,
-        open: 184.32,
-        previousClose: 183.45,
-        sector: "Technology",
-        industry: "Consumer Electronics",
-        description:
-          "Apple Inc. designs, manufactures, and markets smartphones, personal computers, tablets, wearables, and accessories worldwide. The company offers iPhone, a line of smartphones; Mac, a line of personal computers; iPad, a line of multi-purpose tablets; and wearables, home, and accessories comprising AirPods, Apple TV, Apple Watch, Beats products, and HomePod.",
-        headquarters: "Cupertino, California",
-        founded: 1976,
-        employees: 154000,
-        ceo: "Tim Cook",
-        website: "www.apple.com",
-        financials: {
-          revenue: [394.33, 365.82, 274.52, 260.17, 265.6],
-          netIncome: [94.32, 99.8, 57.41, 55.26, 59.53],
-          years: ["2023", "2022", "2021", "2020", "2019"],
+    if (urlSymbol) {
+      setSelectedStock(urlSymbol)
+    }
+  }, [urlSymbol])
+
+  useEffect(() => {
+    loadStockData(selectedStock)
+  }, [selectedStock])
+
+  // Update current price when real-time data is available
+  useEffect(() => {
+    if (currentStockPrice) {
+      setCurrentPrice(currentStockPrice.price)
+      
+      // Update prediction data with new real-time price for dynamic percentage calculation
+      setPredictionData(prev => prev ? {
+        ...prev,
+        next_day: {
+          ...prev.next_day,
+          current_price: currentStockPrice.price
         },
-        aiAnalysis: {
-          positiveFactors: [
-            "Strong brand loyalty and ecosystem integration",
-            "Consistent revenue growth from services segment",
-            "Robust cash position for investments and shareholder returns",
-            "Expanding into new markets like AR/VR",
-          ],
-          negativeFactors: [
-            "Increasing competition in smartphone market",
-            "Regulatory scrutiny over App Store practices",
-            "Supply chain dependencies and vulnerabilities",
-            "Slowing growth in mature markets",
-          ],
+        '7_day': {
+          ...prev['7_day'],
+          current_price: currentStockPrice.price
         },
-        dividendHistory: [
-          { year: "2023", amount: 0.92, yield: 0.54 },
-          { year: "2022", amount: 0.88, yield: 0.58 },
-          { year: "2021", amount: 0.85, yield: 0.62 },
-          { year: "2020", amount: 0.82, yield: 0.68 },
-          { year: "2019", amount: 0.77, yield: 0.72 },
-        ],
-        earnings: {
-          nextDate: "2023-07-27",
-          estimates: { eps: 1.32, revenue: "84.2B" },
-          history: [
-            {
-              date: "2023-04-30",
-              epsEstimate: 1.43,
-              epsActual: 1.52,
-              revenueEstimate: "93.5B",
-              revenueActual: "94.8B",
-              surprise: "+6.3%",
-            },
-            {
-              date: "2023-01-31",
-              epsEstimate: 1.94,
-              epsActual: 1.88,
-              revenueEstimate: "121.2B",
-              revenueActual: "117.2B",
-              surprise: "-3.1%",
-            },
-            {
-              date: "2022-10-31",
-              epsEstimate: 1.27,
-              epsActual: 1.29,
-              revenueEstimate: "88.9B",
-              revenueActual: "90.1B",
-              surprise: "+1.6%",
-            },
-            {
-              date: "2022-07-31",
-              epsEstimate: 1.16,
-              epsActual: 1.2,
-              revenueEstimate: "82.8B",
-              revenueActual: "83.0B",
-              surprise: "+3.4%",
-            },
-          ],
-        },
-        news: [
-          {
-            title: "Apple Unveils New AI Features for iPhone and iPad",
-            date: "2023-06-05",
-            source: "TechCrunch",
-            sentiment: "positive",
-            url: "#",
-          },
-          {
-            title: "Apple's Services Revenue Hits All-Time High",
-            date: "2023-05-28",
-            source: "Bloomberg",
-            sentiment: "positive",
-            url: "#",
-          },
-          {
-            title: "EU Fines Apple €500M Over Music Streaming Rules",
-            date: "2023-05-15",
-            source: "Financial Times",
-            sentiment: "negative",
-            url: "#",
-          },
-          {
-            title: "Apple Supplier Reports Production Delays",
-            date: "2023-05-10",
-            source: "Reuters",
-            sentiment: "negative",
-            url: "#",
-          },
-        ],
+        '30_day': {
+          ...prev['30_day'],
+          current_price: currentStockPrice.price
+        }
+      } : null)
+    }
+  }, [currentStockPrice?.price])
+
+  // Check if stock is in watchlist on load or when selectedStock changes
+  useEffect(() => {
+    async function checkWatchlist() {
+      try {
+        const { getWatchlist } = await import("@/lib/api");
+        const data = await getWatchlist(userId);
+        if (data && data.watchlist) {
+          setIsFollowed(data.watchlist.some((item: any) => item.symbol === selectedStock));
+        }
+      } catch (error) {
+        setIsFollowed(false);
+      }
+    }
+    checkWatchlist();
+  }, [selectedStock]);
+
+
+
+  const loadStockData = async (symbol: string) => {
+    setIsLoading(true)
+    try {
+      // Load stock details
+      const details = await getStockDetails(symbol)
+      if (details) {
+        const stockDataWithPrice = {
+          ...details,
+          price: currentPrice || 187.68,
+          change: 4.23,
+          changePercent: 2.31
+        }
+        setStockData(stockDataWithPrice)
       }
 
-      setStockData(mockStockData)
+      // Load prediction data from the same source as AIExplanationWidget
+      let aiExplanation = null
+      let priceData = null
+      
+      try {
+        // Use the same function that AIExplanationWidget uses to get real data from MongoDB
+        aiExplanation = await getComprehensiveAIExplanation(symbol)
+        console.log(`✅ Loaded AI explanation for ${symbol}:`, aiExplanation ? 'Real data from MongoDB' : 'No stored data')
+      } catch (error) {
+        console.log(`No AI explanation available for ${symbol}, will use enhanced mock`)
+        aiExplanation = null
+      }
+      
+      try {
+        priceData = await getStockPrice(symbol)
+        if (priceData) {
+          setCurrentPrice(priceData.price)
+        }
+      } catch (error) {
+        console.log(`Error fetching price for ${symbol}:`, error)
+        priceData = { price: Math.random() * 500 + 50, change: 0, changePercent: 0 }
+        setCurrentPrice(priceData.price)
+      }
+
+      // Fetch news
+      try {
+        await fetchStockNews(symbol)
+      } catch (error) {
+        console.log(`Error fetching news for ${symbol}:`, error)
+        setStockNews([])
+      }
+
+      // Set prediction data - use real data from AI explanation if available
+      if (aiExplanation && aiExplanation.prediction_summary) {
+        // Transform AI explanation prediction data to match the expected format
+        const realPredictionData = {
+          next_day: {
+            predicted_price: aiExplanation.prediction_summary.next_day.predicted_price,
+            predicted_change: aiExplanation.prediction_summary.next_day.price_change,
+            current_price: priceData?.price || 0,
+            confidence: aiExplanation.prediction_summary.next_day.confidence,
+            price_change: aiExplanation.prediction_summary.next_day.price_change
+          },
+          '7_day': {
+            predicted_price: aiExplanation.prediction_summary['7_day'].predicted_price,
+            predicted_change: aiExplanation.prediction_summary['7_day'].price_change,
+            current_price: priceData?.price || 0,
+            confidence: aiExplanation.prediction_summary['7_day'].confidence,
+            price_change: aiExplanation.prediction_summary['7_day'].price_change
+          },
+          '30_day': {
+            predicted_price: aiExplanation.prediction_summary['30_day'].predicted_price,
+            predicted_change: aiExplanation.prediction_summary['30_day'].price_change,
+            current_price: priceData?.price || 0,
+            confidence: aiExplanation.prediction_summary['30_day'].confidence,
+            price_change: aiExplanation.prediction_summary['30_day'].price_change
+          }
+        }
+        console.log(`✅ Using real prediction data for ${symbol} from MongoDB`)
+        setPredictionData(realPredictionData)
+        setIsUsingRealData(true)
+      } else {
+        console.log(`⚠️ No real prediction data available for ${symbol}, using enhanced mock`)
+        setPredictionData(generateEnhancedPrediction(symbol, priceData?.price || 0))
+        setIsUsingRealData(false)
+      }
+    } catch (error) {
+      console.error('Error loading stock data:', error)
+      setPredictionData(generateEnhancedPrediction(symbol, 100))
+      setStockNews([])
+    } finally {
       setIsLoading(false)
-    }, 1500)
-  }, [symbol])
+    }
+  }
+
+  const fetchStockNews = async (symbol: string) => {
+    try {
+      const rssRes = await fetch(`/api/news/rss?symbol=${symbol}`)
+      const rssData = await rssRes.json()
+      
+      if (rssData.data) {
+        const rssNews = rssData.data.map((item: any) => ({
+          ...item,
+          sentiment: item.sentiment || 'neutral',
+          provider: 'rss'
+        }))
+        
+        rssNews.sort((a: any, b: any) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime())
+        setStockNews(rssNews.slice(0, 6))
+      } else {
+        setStockNews([])
+      }
+    } catch (error) {
+      console.error('Error fetching RSS news:', error)
+      setStockNews([])
+    }
+  }
+
+  const generateEnhancedPrediction = (symbol: string, currentPrice: number): PredictionTimeframes => {
+    const volatility = Math.random() * 0.1 + 0.02
+    const getConfidence = () => volatility > 0.08 ? 0.6 : volatility > 0.05 ? 0.75 : 0.85
+    
+    return {
+      next_day: {
+        predicted_price: currentPrice * (1 + (Math.random() * 0.04 - 0.02)),
+        predicted_change: Math.random() * 4 - 2,
+        current_price: currentPrice,
+        confidence: getConfidence(),
+        price_change: Math.random() * 4 - 2
+      },
+      '7_day': {
+        predicted_price: currentPrice * (1 + (Math.random() * 0.08 - 0.04)),
+        predicted_change: Math.random() * 8 - 4,
+        current_price: currentPrice,
+        confidence: getConfidence() - 0.1,
+        price_change: Math.random() * 8 - 4
+      },
+      '30_day': {
+        predicted_price: currentPrice * (1 + (Math.random() * 0.15 - 0.075)),
+        predicted_change: Math.random() * 15 - 7.5,
+        current_price: currentPrice,
+        confidence: getConfidence() - 0.2,
+        price_change: Math.random() * 15 - 7.5
+      }
+    }
+  }
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!searchQuery) return
+
+    let symbol = getSymbolFromCompanyName(searchQuery) || searchQuery.toUpperCase()
+    
+    if (availableStocks.includes(symbol)) {
+      setSelectedStock(symbol)
+      setSearchQuery("")
+    } else {
+      alert(`No data available for ${searchQuery}. Available stocks: ${availableStocks.join(', ')}`)
+    }
+  }
 
   // Helper function to get company name from symbol
   const getCompanyName = (symbol: string): string => {
@@ -188,12 +308,53 @@ export default function StockDetail({}: StockDetailProps) {
     }
   }
 
-  if (isLoading) {
+  const getConfidenceColor = (confidence: string) => {
+    switch (confidence) {
+      case "high":
+        return "text-emerald-500"
+      case "medium":
+        return "text-amber-500"
+      case "low":
+        return "text-red-500"
+      default:
+        return "text-zinc-400"
+    }
+  }
+
+  // Follow/unfollow logic
+  const handleFollow = async () => {
+    try {
+      if (!isFollowed) {
+        const { addToWatchlist } = await import("@/lib/api");
+        const res = await addToWatchlist(userId, selectedStock);
+        if (res.success) {
+          setIsFollowed(true);
+          toast({ title: `Added to Watchlist`, description: `${selectedStock} is now in your watchlist.` });
+        } else {
+          toast({ title: `Error`, description: res.error || 'Failed to add to watchlist.' });
+        }
+      } else {
+        const { removeFromWatchlist } = await import("@/lib/api");
+        const res = await removeFromWatchlist(userId, selectedStock);
+        if (res.success) {
+          setIsFollowed(false);
+          toast({ title: `Removed from Watchlist`, description: `${selectedStock} was removed from your watchlist.` });
+        } else {
+          toast({ title: `Error`, description: res.error || 'Failed to remove from watchlist.' });
+        }
+      }
+    } catch (error) {
+      toast({ title: `Error`, description: 'Failed to update watchlist.' });
+    }
+  };
+
+  if (isLoading || !stockData) {
     return (
       <div className="flex flex-col gap-6">
-        <div className="h-16 bg-zinc-900 animate-pulse rounded-lg"></div>
+        <div className="h-20 bg-zinc-900 animate-pulse rounded-lg"></div>
         <div className="h-[500px] bg-zinc-900 animate-pulse rounded-lg"></div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="h-64 bg-zinc-900 animate-pulse rounded-lg"></div>
           <div className="h-64 bg-zinc-900 animate-pulse rounded-lg"></div>
           <div className="h-64 bg-zinc-900 animate-pulse rounded-lg"></div>
         </div>
@@ -203,19 +364,62 @@ export default function StockDetail({}: StockDetailProps) {
 
   return (
     <div className="space-y-6">
+      {/* Search Bar */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
+        className="bg-zinc-900 rounded-lg p-4 border border-zinc-800"
+      >
+        <form onSubmit={handleSearch} className="flex gap-2 mb-4">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+            <input
+              type="text"
+              placeholder="Enter stock symbol (e.g. AAPL, MSFT, TSLA)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!searchQuery}
+            className="bg-emerald-500 hover:bg-emerald-600 text-black font-medium rounded-md px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            Search
+          </button>
+        </form>
+
+        <div className="flex items-center gap-3 overflow-x-auto pb-2">
+          {availableStocks.slice(0, 8).map((symbol) => (
+            <button
+              key={symbol}
+              onClick={() => setSelectedStock(symbol)}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${
+                selectedStock === symbol ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"
+              }`}
+            >
+              {symbol}
+            </button>
+          ))}
+        </div>
+      </motion.div>
+
+      {/* Stock Header */}
+      <motion.div
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
         className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-zinc-900 to-black p-4 rounded-lg border border-zinc-800"
       >
         <div className="flex items-center gap-4">
           <div className="h-12 w-12 bg-gradient-to-br from-zinc-700 to-zinc-800 rounded-lg flex items-center justify-center text-xl font-bold">
-            {stockData.symbol.charAt(0)}
+            {selectedStock.charAt(0)}
           </div>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               {stockData.name}
-              <span className="text-lg text-zinc-400">({stockData.symbol})</span>
+              <span className="text-lg text-zinc-400">({selectedStock})</span>
             </h1>
             <div className="flex items-center gap-2 text-sm">
               <span className="text-zinc-400">{stockData.sector}</span>
@@ -226,30 +430,32 @@ export default function StockDetail({}: StockDetailProps) {
         </div>
 
         <div className="flex items-center gap-3">
-          <div
-            className={`flex items-center gap-1 px-3 py-1.5 rounded-md ${stockData.changePercent >= 0 ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"}`}
+          <button
+            onClick={handleFollow}
+            className={`px-4 py-2 rounded-md flex items-center gap-2 font-medium transition-colors border focus:outline-none focus:ring-2 focus:ring-emerald-500
+              ${isFollowed
+                ? 'bg-amber-100 border-amber-300 text-amber-700 hover:bg-amber-200'
+                : 'bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700'}`}
+            aria-pressed={isFollowed}
           >
-            {stockData.changePercent >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-            <span className="font-medium">
-              {stockData.changePercent >= 0 ? "+" : ""}
-              {stockData.changePercent.toFixed(2)}%
+            <Star className={`h-5 w-5 ${isFollowed ? 'fill-amber-400 text-amber-400' : 'text-amber-400'}`} />
+            <span className="text-sm font-semibold">
+              {isFollowed ? 'Followed' : 'Follow'}
             </span>
-          </div>
-
-          <button className="bg-zinc-800 hover:bg-zinc-700 text-white rounded-md px-3 py-1.5 flex items-center gap-1.5 transition-colors">
-            <Star className="h-4 w-4 text-amber-400" />
-            <span className="text-sm font-medium">Follow</span>
           </button>
         </div>
       </motion.div>
 
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-        <TradingViewAdvancedChart symbol={stockData.symbol} height={500} />
+      {/* TradingView Chart */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
+        <TradingViewAdvancedChart symbol={selectedStock} height={500} />
       </motion.div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-          <Card>
+      {/* Main Content Grid - Top Row (Company, Predictions, News) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        {/* Left Column - Company Overview */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+          <Card className="h-fit">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Info className="h-5 w-5 text-blue-500" />
@@ -259,7 +465,7 @@ export default function StockDetail({}: StockDetailProps) {
             <CardContent className="space-y-4">
               <p className="text-sm text-zinc-300 leading-relaxed">{stockData.description}</p>
 
-              <div className="grid grid-cols-2 gap-4 pt-2">
+              <div className="grid grid-cols-1 gap-4 pt-2">
                 <div className="flex items-start gap-2">
                   <Building className="h-4 w-4 text-zinc-400 mt-0.5" />
                   <div>
@@ -294,224 +500,250 @@ export default function StockDetail({}: StockDetailProps) {
               </div>
             </CardContent>
           </Card>
-
-          <div className="mt-6">
-            <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-emerald-500" />
-              Financial Highlights
-            </h2>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <Card className="bg-black/60 backdrop-blur-sm">
-                <CardContent className="p-4">
-                  <div className="text-xs text-zinc-400 mb-1">Market Cap</div>
-                  <div className="text-lg font-bold">${stockData.marketCap}</div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-black/60 backdrop-blur-sm">
-                <CardContent className="p-4">
-                  <div className="text-xs text-zinc-400 mb-1">P/E Ratio</div>
-                  <div className="text-lg font-bold">{stockData.peRatio}</div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-black/60 backdrop-blur-sm">
-                <CardContent className="p-4">
-                  <div className="text-xs text-zinc-400 mb-1">Dividend Yield</div>
-                  <div className="text-lg font-bold">{stockData.dividend}%</div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-black/60 backdrop-blur-sm">
-                <CardContent className="p-4">
-                  <div className="text-xs text-zinc-400 mb-1">Volume</div>
-                  <div className="text-lg font-bold">{stockData.volume}</div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="h-5 w-5 text-purple-500" />
-                  Revenue Growth
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64 flex items-end gap-2">
-                  {stockData.financials.revenue.map((value: number, index: number) => (
-                    <div key={index} className="flex-1 flex flex-col items-center gap-1">
-                      <div className="text-xs text-zinc-400">${(value / 1000).toFixed(1)}B</div>
-                      <div
-                        className="w-full bg-gradient-to-t from-emerald-600 to-emerald-400 rounded-t-sm"
-                        style={{
-                          height: `${(value / Math.max(...stockData.financials.revenue)) * 180}px`,
-                        }}
-                      ></div>
-                      <div className="text-xs font-medium">{stockData.financials.years[index]}</div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
         </motion.div>
 
+        {/* Middle Column - AI Predictions */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="space-y-6"
+          transition={{ delay: 0.4 }}
         >
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TrendingUp className="h-5 w-5 text-emerald-500" />
-                AI Stock Analysis
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                <div>
-                  <h3 className="text-sm font-medium text-emerald-500 flex items-center gap-1.5 mb-2">
-                    <CheckCircle className="h-4 w-4" />
-                    Positive Factors
-                  </h3>
-                  <ul className="space-y-2">
-                    {stockData.aiAnalysis.positiveFactors.map((factor: string, index: number) => (
-                      <li key={index} className="text-sm flex items-start gap-2">
-                        <span className="text-emerald-500 mt-0.5">•</span>
-                        <span>{factor}</span>
-                      </li>
-                    ))}
-                  </ul>
+          {predictionData && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2">
+                  <TrendingUp className="h-5 w-5 text-emerald-500" />
+                  AI Predictions
+                  {isUsingRealData && (
+                    <span className="text-xs bg-emerald-500/20 text-emerald-400 px-2 py-1 rounded-full border border-emerald-500/30">
+                      💾 Real Data
+                    </span>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 gap-4">
+                  {/* 1 Day Prediction */}
+                  {(() => {
+                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData.next_day.current_price || 0
+                    const predictedPrice = predictionData.next_day.predicted_price
+                    const calculatedChange = currentPriceForCalc > 0 
+                      ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
+                      : 0
+                    
+                    return (
+                      <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 rounded-lg p-4 border border-emerald-500/20">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="text-sm font-medium text-emerald-400">Next Day</div>
+                          <div className="text-xs text-zinc-400">1 Day</div>
+                        </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="text-lg font-bold">
+                            ${predictedPrice.toFixed(2)}
+                          </div>
+                          <div
+                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${
+                              calculatedChange >= 0
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "bg-red-500/20 text-red-400"
+                            }`}
+                          >
+                            {calculatedChange >= 0 ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            <span>
+                              {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* 7 Day Prediction */}
+                  {(() => {
+                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['7_day'].current_price || 0
+                    const predictedPrice = predictionData['7_day'].predicted_price
+                    const calculatedChange = currentPriceForCalc > 0 
+                      ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
+                      : 0
+                    
+                    return (
+                      <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 rounded-lg p-4 border border-blue-500/20">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="text-sm font-medium text-blue-400">1 Week</div>
+                          <div className="text-xs text-zinc-400">7 Days</div>
+                        </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="text-lg font-bold">
+                            ${predictedPrice.toFixed(2)}
+                          </div>
+                          <div
+                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${
+                              calculatedChange >= 0
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "bg-red-500/20 text-red-400"
+                            }`}
+                          >
+                            {calculatedChange >= 0 ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            <span>
+                              {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* 30 Day Prediction */}
+                  {(() => {
+                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['30_day'].current_price || 0
+                    const predictedPrice = predictionData['30_day'].predicted_price
+                    const calculatedChange = currentPriceForCalc > 0 
+                      ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
+                      : 0
+                    
+                    return (
+                      <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 rounded-lg p-4 border border-purple-500/20">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="text-sm font-medium text-purple-400">1 Month</div>
+                          <div className="text-xs text-zinc-400">30 Days</div>
+                        </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="text-lg font-bold">
+                            ${predictedPrice.toFixed(2)}
+                          </div>
+                          <div
+                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${
+                              calculatedChange >= 0
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "bg-red-500/20 text-red-400"
+                            }`}
+                          >
+                            {calculatedChange >= 0 ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            <span>
+                              {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
+              </CardContent>
+            </Card>
+          )}
+        </motion.div>
 
-                <div>
-                  <h3 className="text-sm font-medium text-red-500 flex items-center gap-1.5 mb-2">
-                    <XCircle className="h-4 w-4" />
-                    Negative Factors
-                  </h3>
-                  <ul className="space-y-2">
-                    {stockData.aiAnalysis.negativeFactors.map((factor: string, index: number) => (
-                      <li key={index} className="text-sm flex items-start gap-2">
-                        <span className="text-red-500 mt-0.5">•</span>
-                        <span>{factor}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Calendar className="h-5 w-5 text-blue-500" />
-                Earnings
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="bg-zinc-900 rounded-md p-3 mb-4 border border-zinc-800">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <div className="text-xs text-zinc-400">Next Earnings Date</div>
-                    <div className="text-sm font-medium">
-                      {new Date(stockData.earnings.nextDate).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-zinc-400">EPS Estimate</div>
-                    <div className="text-sm font-medium">${stockData.earnings.estimates.eps}</div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-zinc-400">Revenue Estimate</div>
-                    <div className="text-sm font-medium">${stockData.earnings.estimates.revenue}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="text-sm font-medium mb-2">Past Earnings</div>
-              <div className="space-y-3">
-                {stockData.earnings.history.map((earning: any, index: number) => (
-                  <div key={index} className="bg-zinc-900/50 rounded-md p-3 border border-zinc-800/50">
-                    <div className="flex justify-between items-center mb-2">
-                      <div className="text-xs font-medium">
-                        {new Date(earning.date).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                          year: "numeric",
-                        })}
-                      </div>
-                      <div
-                        className={`text-xs px-2 py-0.5 rounded-full ${earning.surprise.startsWith("+") ? "bg-emerald-500/10 text-emerald-500" : "bg-red-500/10 text-red-500"}`}
-                      >
-                        {earning.surprise}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <div>
-                        <span className="text-zinc-400">EPS Est: </span>
-                        <span>${earning.epsEstimate}</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-400">EPS Act: </span>
-                        <span>${earning.epsActual}</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-400">Rev Est: </span>
-                        <span>${earning.revenueEstimate}</span>
-                      </div>
-                      <div>
-                        <span className="text-zinc-400">Rev Act: </span>
-                        <span>${earning.revenueActual}</span>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
+        {/* Right Column - News */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
+          <Card className="h-fit">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Newspaper className="h-5 w-5 text-amber-500" />
-                Latest News
+                Latest News & Sentiment
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="space-y-3">
-                {stockData.news.map((item: any, index: number) => (
-                  <a
-                    key={index}
-                    href={item.url}
-                    className="block bg-zinc-900/50 rounded-md p-3 border border-zinc-800/50 hover:bg-zinc-900 transition-colors"
-                  >
-                    <div className="flex justify-between items-start mb-1">
-                      <h3 className="text-sm font-medium">{item.title}</h3>
-                      {getSentimentIcon(item.sentiment)}
+              <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                {stockNews.map((item: any, index: number) => {
+                  const sentiment = item.sentiment || "neutral"
+                  
+                  return (
+                    <div
+                      key={`${item.provider}-${item.uuid || item.id || index}`}
+                      className="bg-zinc-900/50 rounded-md p-3 border border-zinc-800/50 hover:bg-zinc-900 transition-colors cursor-pointer"
+                      onClick={() => item.url && window.open(item.url, '_blank')}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <h3 className="text-sm font-medium pr-2 flex-1 line-clamp-2">{item.title}</h3>
+                        <div className="flex items-center gap-1 ml-2">
+                          {getSentimentIcon(sentiment)}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-zinc-400 mb-2">
+                        <span>
+                          {new Date(item.published_at || item.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </span>
+                        <span>•</span>
+                        <span>{item.source}</span>
+                      </div>
+                      {item.snippet && (
+                        <p className="text-xs text-zinc-300 line-clamp-2">
+                          {item.snippet.length > 120 ? item.snippet.slice(0, 120) + "..." : item.snippet}
+                        </p>
+                      )}
                     </div>
-                    <div className="flex items-center gap-2 text-xs text-zinc-400">
-                      <span>{item.source}</span>
-                      <span>•</span>
-                      <span>{new Date(item.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                    </div>
-                  </a>
-                ))}
+                  )
+                })}
+              </div>
+
+              {/* Sentiment Analysis */}
+              <div className="mt-4 pt-4 border-t border-zinc-800">
+                <h3 className="text-sm font-medium mb-3">News Sentiment</h3>
+
+                {(() => {
+                  const positiveSentiment = stockNews.filter(n => n.sentiment === 'positive').length
+                  const negativeSentiment = stockNews.filter(n => n.sentiment === 'negative').length
+                  const totalSentiment = stockNews.length || 1
+                  const sentimentScore = ((positiveSentiment - negativeSentiment) / totalSentiment + 1) * 50
+                  
+                  return (
+                    <>
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="h-2 flex-1 bg-zinc-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-red-500 via-amber-500 to-emerald-500 rounded-full"
+                            style={{ width: `${sentimentScore}%` }}
+                          ></div>
+                        </div>
+                        <div className="text-xs font-medium">{Math.round(sentimentScore)}%</div>
+                      </div>
+
+                      <div className="flex justify-between text-xs text-zinc-400 mb-2">
+                        <div>Bearish</div>
+                        <div>Neutral</div>
+                        <div>Bullish</div>
+                      </div>
+
+                      <p className="text-xs text-zinc-300">
+                        Sentiment is {
+                          sentimentScore > 60 ? 'bullish' : 
+                          sentimentScore > 40 ? 'neutral' : 'bearish'
+                        } with {positiveSentiment} positive, {negativeSentiment} negative articles.
+                      </p>
+                    </>
+                  )
+                })()}
               </div>
             </CardContent>
           </Card>
         </motion.div>
       </div>
+
+      {/* Full-Width AI Analysis Section */}
+      {predictionData && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+        >
+          <AIExplanationWidget 
+            ticker={selectedStock} 
+            currentPrice={currentPrice}
+          />
+        </motion.div>
+      )}
     </div>
   )
 }

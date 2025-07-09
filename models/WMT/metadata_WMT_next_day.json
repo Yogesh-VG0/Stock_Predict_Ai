@@ -1,0 +1,13 @@
+{
+  "ticker": "WMT",
+  "window": "next_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T16:45:51.551431",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

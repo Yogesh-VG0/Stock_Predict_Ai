@@ -16,7 +16,7 @@ TOP_100_TICKERS = [
     "AMZN",   # Amazon.com, Inc.
     "GOOGL",  # Alphabet Inc. (Class A)
     "META",   # Meta Platforms, Inc.
-    "BRK.B",  # Berkshire Hathaway Inc. (Class B)
+    "BRK-B",  # Berkshire Hathaway Inc. (Class B)
     "TSLA",   # Tesla, Inc.
     "AVGO",   # Broadcom Inc.
     "LLY",    # Eli Lilly and Company
