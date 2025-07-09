@@ -395,6 +395,19 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
 export function useWebSocket() {
   const context = useContext(WebSocketContext)
+  
+  // During SSR, return safe defaults instead of throwing
+  if (typeof window === 'undefined') {
+    return {
+      stockPrices: {},
+      isConnected: false,
+      lastUpdate: '',
+      subscribeToStock: () => {},
+      unsubscribeFromStock: () => {},
+      getStockPrice: () => null,
+    }
+  }
+  
   if (context === undefined) {
     throw new Error('useWebSocket must be used within a WebSocketProvider')
   }
@@ -406,7 +419,8 @@ export function useStockPrice(symbol: string) {
   const { getStockPrice, subscribeToStock, unsubscribeFromStock } = useWebSocket()
   
   useEffect(() => {
-    if (symbol) {
+    // Only run on client side
+    if (typeof window !== 'undefined' && symbol) {
       subscribeToStock(symbol)
       return () => unsubscribeFromStock(symbol)
     }
@@ -420,9 +434,12 @@ export function useStockPrices(symbols: string[]) {
   const { stockPrices, subscribeToStock, unsubscribeFromStock } = useWebSocket()
   
   useEffect(() => {
-    symbols.forEach(symbol => subscribeToStock(symbol))
-    return () => {
-      symbols.forEach(symbol => unsubscribeFromStock(symbol))
+    // Only run on client side
+    if (typeof window !== 'undefined') {
+      symbols.forEach(symbol => subscribeToStock(symbol))
+      return () => {
+        symbols.forEach(symbol => unsubscribeFromStock(symbol))
+      }
     }
   }, [symbols, subscribeToStock, unsubscribeFromStock])
   
