@@ -151,6 +151,49 @@ pnpm dev
 - 🔧 **Backend API**: http://localhost:3001
 - 📚 **ML API Docs**: http://localhost:8000/docs
 
+## 🚀 **Deployment for Recruiters**
+
+### **Quick Deploy Options:**
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/deploy)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/stockpredict-ai)
+
+### **Live Demo** (Update with your URLs):
+- 🌐 **Frontend**: https://stockpredict-ai.railway.app
+- 📊 **API Documentation**: https://stockpredict-ml.railway.app/docs
+- 💻 **GitHub Repository**: https://github.com/yourusername/stockpredict-ai
+
+### **Automated Setup:**
+```bash
+# Run the deployment setup script
+chmod +x scripts/deploy-setup.sh
+./scripts/deploy-setup.sh
+
+# Follow the interactive menu to:
+# 1. Setup environment files
+# 2. Install dependencies  
+# 3. Check API keys
+# 4. Build project
+# 5. Generate deployment instructions
+```
+
+### **Free API Keys Setup** (5 minutes):
+1. **Finnhub**: [finnhub.io/register](https://finnhub.io/register) - 60 calls/min free
+2. **Alpha Vantage**: [alphavantage.co](https://www.alphavantage.co/support/#api-key) - 5 calls/min free
+3. **FMP**: [financialmodelingprep.com](https://financialmodelingprep.com/developer/docs) - 250 calls/day free
+4. **Google Gemini**: [ai.google.dev](https://ai.google.dev) - Generous free tier
+5. **MongoDB Atlas**: [cloud.mongodb.com](https://cloud.mongodb.com) - 512MB free cluster
+
+### **Railway Deployment** (Recommended - 30 minutes):
+1. Push your code to GitHub
+2. Sign up for Railway: [railway.app](https://railway.app)
+3. Connect GitHub repository
+4. Add environment variables from `env.template`
+5. Deploy 3 services: Frontend, Backend, ML Backend
+6. Update URLs in environment variables
+
+**📋 Detailed Instructions**: See [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)
+
 ## 🤖 **ML Backend (`/ml_backend`)**
 
 The **core intelligence** of the platform - Python-based machine learning pipeline.

@@ -1,0 +1,13 @@
+{
+  "ticker": "KO",
+  "window": "7_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T17:45:05.369496",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

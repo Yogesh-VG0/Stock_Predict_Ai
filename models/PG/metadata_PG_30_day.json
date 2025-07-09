@@ -1,0 +1,13 @@
+{
+  "ticker": "PG",
+  "window": "30_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T17:22:26.578180",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

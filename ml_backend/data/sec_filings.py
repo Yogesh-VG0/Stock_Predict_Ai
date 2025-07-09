@@ -15,6 +15,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from transformers import pipeline
 import aiohttp
 import statistics
+import torch
 
 # Load environment variables from various possible locations
 import os.path
@@ -446,6 +447,8 @@ class SECFilingsAnalyzer:
                 framework="pt",
                 device=-1
             )
+            self.finbert_tokenizer = self.finbert.tokenizer
+            self.finbert_model = self.finbert.model
             logger.info("Loaded FinBERT model for sentiment analysis")
         except Exception as e:
             logger.error(f"Error initializing FinBERT: {str(e)}")
@@ -521,31 +524,101 @@ class SECFilingsAnalyzer:
         Returns:
             Compound sentiment score between -1 and 1
         """
-        if not text:
+        if not text or len(text.strip()) < 10:
+            logger.debug("Text too short for sentiment analysis")
             return 0.0
             
         try:
-            if self.finbert:
-                # Limit text length to prevent OOM
-                if len(text) > 1024:
-                    text = text[:1024]
-                    
-                # Use FinBERT for financial text
-                result = self.finbert(text[:512])[0]  # FinBERT has 512 token limit
-                label = result['label']
-                if label == 'positive':
-                    return 0.8
-                elif label == 'negative':
-                    return -0.8
+            # Clean text for analysis
+            text = text.strip()
+            
+            # If text is too long, take key sections
+            if len(text) > 2048:
+                # Try to extract key sections (business description, risks, etc.)
+                sections = text.split('\n\n')
+                important_sections = []
+                
+                for section in sections:
+                    if any(keyword in section.lower() for keyword in [
+                        'business', 'operations', 'revenue', 'profit', 'loss', 'risk',
+                        'competition', 'market', 'outlook', 'guidance', 'forward', 'results'
+                    ]):
+                        important_sections.append(section[:500])  # Limit section size
+                
+                if important_sections:
+                    text = ' '.join(important_sections)[:2048]
                 else:
-                    return 0.0
-            else:
-                # Fallback to VADER
-                return self.vader.polarity_scores(text)['compound']
+                    # Take first and last parts if no keywords found
+                    text = (text[:1024] + ' ' + text[-1024:])[:2048]
+            
+            # Method 1: Try FinBERT (if available)
+            try:
+                if hasattr(self, 'finbert_tokenizer') and hasattr(self, 'finbert_model'):
+                    inputs = self.finbert_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+                    with torch.no_grad():
+                        outputs = self.finbert_model(**inputs)
+                        predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+                        
+                    # Convert FinBERT output to sentiment score
+                    # predictions: [negative, neutral, positive]
+                    negative, neutral, positive = predictions[0].tolist()
+                    
+                    # Calculate compound score similar to VADER
+                    if positive > negative:
+                        score = positive * 0.8  # Scale down to be more conservative
+                    else:
+                        score = -negative * 0.8
+                    
+                    # Adjust for neutrality
+                    if neutral > 0.6:
+                        score *= 0.3  # Reduce impact if highly neutral
+                    
+                    logger.debug(f"FinBERT sentiment: {score:.3f} (pos:{positive:.3f}, neg:{negative:.3f}, neu:{neutral:.3f})")
+                    return float(score)
+                    
+            except Exception as e:
+                logger.debug(f"FinBERT analysis failed: {e}")
+            
+            # Method 2: VADER fallback
+            try:
+                analyzer = SentimentIntensityAnalyzer()
+                vader_scores = analyzer.polarity_scores(text)
+                score = vader_scores['compound']
+                logger.debug(f"VADER sentiment: {score:.3f}")
+                return float(score)
+                
+            except Exception as e:
+                logger.debug(f"VADER analysis failed: {e}")
+            
+            # Method 3: Keyword-based fallback
+            positive_words = [
+                'growth', 'increase', 'profit', 'revenue', 'strong', 'positive', 
+                'successful', 'improvement', 'gain', 'benefit', 'opportunity',
+                'optimistic', 'expansion', 'exceeded', 'outperform', 'robust'
+            ]
+            negative_words = [
+                'loss', 'decline', 'decrease', 'risk', 'challenge', 'uncertainty',
+                'negative', 'concern', 'problem', 'difficult', 'weak', 'poor',
+                'disappointing', 'below', 'underperform', 'volatility'
+            ]
+            
+            text_lower = text.lower()
+            pos_count = sum(1 for word in positive_words if word in text_lower)
+            neg_count = sum(1 for word in negative_words if word in text_lower)
+            
+            if pos_count > 0 or neg_count > 0:
+                total_words = len(text.split())
+                score = (pos_count - neg_count) / max(total_words / 100, 1)  # Normalize by text length
+                score = max(-1, min(1, score))  # Clamp to [-1, 1]
+                logger.debug(f"Keyword sentiment: {score:.3f} (pos:{pos_count}, neg:{neg_count})")
+                return float(score)
+            
+            logger.debug("No sentiment indicators found, returning 0")
+            return 0.0
+            
         except Exception as e:
-            logger.error(f"Error in sentiment analysis: {str(e)}")
-            # Fallback to VADER if FinBERT fails
-            return self.vader.polarity_scores(text)['compound']
+            logger.error(f"Sentiment analysis failed completely: {e}")
+            return 0.0
 
     def _store_filings_in_mongodb(self, ticker: str, filings_data: Dict):
         """
@@ -704,10 +777,14 @@ class SECFilingsAnalyzer:
                     avg_sentiment = sum(sentiments) / len(sentiments)
                     sentiment_std = statistics.stdev(sentiments) if len(sentiments) > 1 else 0
                     
-                    # Calculate confidence based on volume and consistency
-                    volume_factor = min(len(sentiments) / 10, 1.0)  # Cap at 10 filings
-                    consistency_factor = 1 - min(sentiment_std, 1.0)
-                    confidence = (volume_factor + consistency_factor) / 2
+                    # Improved confidence calculation
+                    confidence = self._calculate_filing_confidence(
+                        analyzed_count=len(sentiments),
+                        total_filings=total_filings,
+                        sentiment_std=sentiment_std,
+                        avg_sentiment=abs(avg_sentiment),
+                        processed_filings=processed_filings
+                    )
             
                     result = {
                         "status": "success",
@@ -1001,10 +1078,14 @@ class SECFilingsAnalyzer:
                     avg_sentiment = sum(sentiments) / len(sentiments)
                     sentiment_std = statistics.stdev(sentiments) if len(sentiments) > 1 else 0
                     
-                    # Calculate confidence based on volume and consistency
-                    volume_factor = min(len(sentiments) / 10, 1.0)  # Cap at 10 filings
-                    consistency_factor = 1 - min(sentiment_std, 1.0)
-                    confidence = (volume_factor + consistency_factor) / 2
+                    # Improved confidence calculation
+                    confidence = self._calculate_filing_confidence(
+                        analyzed_count=len(sentiments),
+                        total_filings=total_filings,
+                        sentiment_std=sentiment_std,
+                        avg_sentiment=abs(avg_sentiment),
+                        processed_filings=processed_filings
+                    )
                     
                     logger.info(f"✓ Kaleidoscope SEC sentiment analysis complete for {ticker}: {avg_sentiment:.3f} (volume: {total_filings}, analyzed: {len(sentiments)}, confidence: {confidence:.2f})")
                     
@@ -1437,3 +1518,85 @@ class SECFilingsAnalyzer:
                 "sec_filings_analyzed": 0,
                 "sec_filings_error": str(e)
             } 
+
+    def _calculate_filing_confidence(self, analyzed_count: int, total_filings: int, 
+                                   sentiment_std: float, avg_sentiment: float, 
+                                   processed_filings: List[Dict]) -> float:
+        """
+        Calculate confidence score for SEC filing sentiment analysis.
+        
+        Args:
+            analyzed_count: Number of filings successfully analyzed
+            total_filings: Total number of filings found
+            sentiment_std: Standard deviation of sentiment scores
+            avg_sentiment: Average absolute sentiment score
+            processed_filings: List of processed filing data
+            
+        Returns:
+            Confidence score between 0 and 1
+        """
+        try:
+            # Volume factor: More analyzed filings = higher confidence
+            volume_factor = min(analyzed_count / 8, 1.0)  # Optimal at 8+ filings
+            
+            # Coverage factor: How many of available filings were analyzed
+            coverage_factor = analyzed_count / max(total_filings, 1) if total_filings > 0 else 0
+            
+            # Consistency factor: Lower standard deviation = higher confidence  
+            consistency_factor = max(0, 1 - (sentiment_std / 0.5))  # Normalize by 0.5 std
+            
+            # Content quality factor: Based on filing types and text length
+            quality_scores = []
+            for filing in processed_filings:
+                form_type = filing.get('form_type', '')
+                text_content = filing.get('text_content', '')
+                
+                # Assign quality scores based on filing type
+                type_scores = {
+                    '10-K': 1.0,  # Annual reports - highest quality
+                    '10-Q': 0.9,  # Quarterly reports - high quality
+                    '8-K': 0.7,   # Current reports - medium quality
+                    'DEF 14A': 0.6,  # Proxy statements - medium quality
+                    'SD': 0.4,    # Specialized disclosure - lower quality
+                    '4': 0.3,     # Insider trading - minimal sentiment value
+                    '144': 0.2    # Intent to sell - minimal sentiment value
+                }
+                
+                type_score = type_scores.get(form_type, 0.5)  # Default medium quality
+                
+                # Text length factor: More text usually = better analysis
+                text_length = len(text_content) if text_content else 0
+                length_score = min(text_length / 1000, 1.0)  # Normalize by 1000 chars
+                
+                filing_quality = (type_score + length_score) / 2
+                quality_scores.append(filing_quality)
+            
+            quality_factor = sum(quality_scores) / len(quality_scores) if quality_scores else 0.5
+            
+            # Signal strength factor: Stronger sentiment signals = higher confidence
+            signal_strength = min(avg_sentiment / 0.3, 1.0)  # Normalize by 0.3 sentiment
+            
+            # Weighted confidence calculation
+            confidence = (
+                volume_factor * 0.25 +      # 25% weight on volume
+                coverage_factor * 0.20 +    # 20% weight on coverage  
+                consistency_factor * 0.25 + # 25% weight on consistency
+                quality_factor * 0.20 +     # 20% weight on content quality
+                signal_strength * 0.10      # 10% weight on signal strength
+            )
+            
+            # Ensure confidence is between 0 and 1
+            confidence = max(0.0, min(1.0, confidence))
+            
+            logger.debug(f"SEC confidence factors: volume={volume_factor:.2f}, coverage={coverage_factor:.2f}, "
+                        f"consistency={consistency_factor:.2f}, quality={quality_factor:.2f}, "
+                        f"signal={signal_strength:.2f}, final={confidence:.2f}")
+            
+            return confidence
+            
+        except Exception as e:
+            logger.error(f"Error calculating filing confidence: {e}")
+            # Fallback to simple confidence calculation
+            volume_factor = min(analyzed_count / 5, 1.0)
+            consistency_factor = max(0, 1 - sentiment_std) if sentiment_std else 0.5
+            return (volume_factor + consistency_factor) / 2 

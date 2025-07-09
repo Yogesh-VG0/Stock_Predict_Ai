@@ -213,16 +213,48 @@ class ShortInterestAnalyzer:
 
     async def fetch_short_interest(self, ticker: str) -> List[Dict]:
         """
-        Fetch short interest data using the new Nasdaq API approach.
+        Fetch short interest data using the new Nasdaq API approach with NYSE fallback.
         This is the main method that should be used.
         """
         try:
-            # Use the direct API method as primary approach
+            # Check if this is an NYSE stock that needs Finviz backup
+            nyse_stocks = [
+                'BRK-B', 'LLY', 'WMT', 'JPM', 'V', 'MA', 'XOM', 'ORCL', 'PG', 'JNJ', 
+                'UNH', 'HD', 'ABBV', 'KO', 'CRM', 'BAC', 'CVX', 'DIS', 'MRK', 'ADBE',
+                'NFLX', 'TMO', 'ACN', 'COST', 'VZ', 'DHR', 'TXN', 'NEE', 'LIN', 'HON',
+                'UPS', 'QCOM', 'PM', 'LOW', 'SPGI', 'UNP', 'T', 'RTX', 'IBM', 'INTU',
+                'CAT', 'GS', 'DE', 'BKNG', 'AXP', 'ELV', 'LMT', 'SYK', 'GILD', 'MMM',
+                'MDLZ', 'CI', 'NOW', 'ISRG', 'TJX', 'CB', 'BLK', 'AMT', 'VRTX', 'ZTS',
+                'PLD', 'SCHW', 'MO', 'BSX', 'ADP', 'SHW', 'DUK', 'SO', 'CCI', 'ITW',
+                'FI', 'WM', 'MMC', 'AON', 'GD', 'ICE', 'EQIX', 'PNC', 'CL', 'APH',
+                'CSX', 'MCK', 'USB', 'TFC', 'NSC', 'EMR', 'COF', 'HUM', 'D', 'PSA',
+                'KMB', 'NOC', 'ECL', 'GE', 'WELL', 'SLB', 'EOG', 'TRV', 'HCA', 'AIG'
+            ]
+            
+            if ticker.upper() in nyse_stocks:
+                logger.info(f"📊 {ticker} is NYSE-listed, using Finviz for short interest data")
+                return await self.fetch_finviz_short_interest(ticker)
+            
+            # Use the direct Nasdaq API method for NASDAQ stocks
             logger.info(f"Fetching short interest for {ticker} using Nasdaq API")
-            return await self.fetch_short_interest_direct_api(ticker)
+            nasdaq_data = await self.fetch_short_interest_direct_api(ticker)
+            
+            if nasdaq_data:
+                logger.info(f"✅ Successfully got {len(nasdaq_data)} records from Nasdaq API")
+                return nasdaq_data
+            else:
+                logger.warning(f"❌ No data from Nasdaq API for {ticker}, trying Finviz fallback")
+                return await self.fetch_finviz_short_interest(ticker)
+                
         except Exception as e:
             logger.error(f"Error fetching short interest for {ticker}: {e}")
-            return []
+            # Try Finviz as final fallback
+            try:
+                logger.info(f"🔄 Attempting Finviz fallback for {ticker}")
+                return await self.fetch_finviz_short_interest(ticker)
+            except Exception as fallback_error:
+                logger.error(f"Finviz fallback also failed for {ticker}: {fallback_error}")
+                return []
 
     def _parse_nasdaq_short_interest(self, html_content: str, ticker: str) -> List[Dict]:
         """
@@ -617,23 +649,23 @@ class ShortInterestAnalyzer:
             logger.error(f"Error in fallback parser: {e}")
             return []
 
-    # DEPRECATED METHOD REMOVED
-    async def fetch_finviz_short_interest_DEPRECATED(self, ticker: str) -> List[Dict]:
+    async def fetch_finviz_short_interest(self, ticker: str) -> List[Dict]:
         """
-        Enhanced alternative short interest data fetching using Finviz (more reliable).
+        Fetch enhanced short interest data from Finviz with historical data.
         """
         try:
-            url = f"https://finviz.com/quote.ashx?t={ticker}"
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
                 'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1'
+                'Upgrade-Insecure-Requests': '1',
             }
             
-            logger.info(f"Fetching Finviz data for {ticker}...")
+            # Try the short interest specific page first
+            url = f"https://finviz.com/quote.ashx?t={ticker}&p=d&ty=si"
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers, timeout=30) as response:
@@ -642,135 +674,166 @@ class ShortInterestAnalyzer:
                         soup = BeautifulSoup(html, 'html.parser')
                         
                         short_data = []
-                        found_data = {}
+                        logger.info(f"📊 Parsing Finviz short interest data for {ticker}")
                         
-                        logger.info("Parsing Finviz data...")
-                        
-                        # Strategy 1: Look for the main statistics table
-                        tables = soup.find_all('table', class_='snapshot-table2')
-                        
-                        for table in tables:
-                            rows = table.find_all('tr')
-                            for row in rows:
-                                cells = row.find_all('td')
-                                
-                                # Process pairs of cells (label, value)
-                                for i in range(0, len(cells) - 1, 2):
-                                    label = cells[i].get_text(strip=True)
-                                    value = cells[i + 1].get_text(strip=True)
-                                    
-                                    if 'Short Float' in label:
-                                        try:
-                                            short_float = float(value.replace('%', ''))
-                                            found_data['short_float'] = short_float
-                                            logger.info(f"Found Short Float: {short_float}%")
-                                        except ValueError:
-                                            continue
-                                    
-                                    elif 'Short Interest' in label:
-                                        try:
-                                            short_interest_text = value.replace(',', '')
-                                            if 'M' in short_interest_text:
-                                                short_interest = float(short_interest_text.replace('M', '')) * 1000000
-                                            elif 'K' in short_interest_text:
-                                                short_interest = float(short_interest_text.replace('K', '')) * 1000
-                                            else:
-                                                short_interest = float(short_interest_text)
-                                            found_data['short_interest'] = short_interest
-                                            logger.info(f"Found Short Interest: {short_interest:,.0f} shares")
-                                        except ValueError:
-                                            continue
-                                    
-                                    elif 'Short Ratio' in label or 'Short Interest Ratio' in label:
-                                        try:
-                                            short_ratio = float(value)
-                                            found_data['short_ratio'] = short_ratio
-                                            logger.info(f"Found Short Ratio: {short_ratio}")
-                                        except ValueError:
-                                            continue
-                                    
-                                    elif 'Shares Outstanding' in label:
-                                        try:
-                                            shares_text = value.replace(',', '')
-                                            if 'B' in shares_text:
-                                                shares_outstanding = float(shares_text.replace('B', '')) * 1000000000
-                                            elif 'M' in shares_text:
-                                                shares_outstanding = float(shares_text.replace('M', '')) * 1000000
-                                            else:
-                                                shares_outstanding = float(shares_text)
-                                            found_data['shares_outstanding'] = shares_outstanding
-                                            logger.info(f"Found Shares Outstanding: {shares_outstanding:,.0f}")
-                                        except ValueError:
-                                            continue
-                        
-                        # Strategy 2: If main table didn't work, try alternative selectors
-                        if not found_data:
-                            logger.info("Trying alternative Finviz parsing...")
+                        # First, try to parse the Short Interest History table
+                        table = soup.find('table', class_='financials-table')
+                        if table:
+                            logger.info("✅ Found Short Interest History table")
                             
-                            # Look for any table cells containing short-related data
-                            all_cells = soup.find_all('td')
-                            for i, cell in enumerate(all_cells):
-                                cell_text = cell.get_text(strip=True)
+                            tbody = table.find('tbody')
+                            if tbody:
+                                rows = tbody.find_all('tr')
+                                logger.info(f"📈 Found {len(rows)} historical records")
                                 
-                                if 'Short Float' in cell_text and i + 1 < len(all_cells):
-                                    next_cell = all_cells[i + 1]
-                                    short_float_text = next_cell.get_text(strip=True)
+                                for i, row in enumerate(rows[:10]):  # Limit to 10 most recent
                                     try:
-                                        short_float = float(short_float_text.replace('%', ''))
-                                        found_data['short_float'] = short_float
-                                        logger.info(f"Found Short Float (alt): {short_float}%")
-                                    except ValueError:
+                                        cells = row.find_all('td')
+                                        if len(cells) >= 6:
+                                            # Extract data from table columns
+                                            settlement_date = cells[0].get_text(strip=True)
+                                            short_interest_str = cells[1].get_text(strip=True)
+                                            shares_float_str = cells[2].get_text(strip=True)
+                                            avg_volume_str = cells[3].get_text(strip=True)
+                                            short_float_str = cells[4].get_text(strip=True)
+                                            short_ratio_str = cells[5].get_text(strip=True)
+                                            
+                                            # Clean and convert data
+                                            short_interest = self._parse_finviz_number(short_interest_str)
+                                            shares_float = self._parse_finviz_number(shares_float_str)
+                                            avg_volume = self._parse_finviz_number(avg_volume_str)
+                                            short_float = float(short_float_str.replace('%', '')) if '%' in short_float_str else 0.0
+                                            short_ratio = float(short_ratio_str) if short_ratio_str.replace('.', '').isdigit() else 0.0
+                                            
+                                            data_point = {
+                                                'settlementDate': settlement_date,
+                                                'shortInterest': int(short_interest),
+                                                'sharesFloat': int(shares_float),
+                                                'avgDailyShareVolumeInThousands': int(avg_volume / 1000) if avg_volume > 1000 else int(avg_volume),
+                                                'daysToCoVerShortInterest': short_ratio,
+                                                'shortFloatPercentage': short_float,
+                                                'source': 'finviz_history',
+                                                'ticker': ticker,
+                                                'recordIndex': i
+                                            }
+                                            
+                                            short_data.append(data_point)
+                                            logger.info(f"✅ Parsed historical record {i+1}: {settlement_date} - {short_interest:,.0f} shares ({short_float:.2f}%)")
+                                            
+                                    except Exception as e:
+                                        logger.debug(f"Error parsing historical row {i}: {e}")
                                         continue
-                                
-                                elif 'Short Interest' in cell_text and i + 1 < len(all_cells):
-                                    next_cell = all_cells[i + 1]
-                                    short_interest_text = next_cell.get_text(strip=True)
-                                    try:
-                                        if 'M' in short_interest_text:
-                                            short_interest = float(short_interest_text.replace('M', '')) * 1000000
-                                        elif 'K' in short_interest_text:
-                                            short_interest = float(short_interest_text.replace('K', '')) * 1000
-                                        else:
-                                            short_interest = float(short_interest_text.replace(',', ''))
+                        
+                        # If no historical table found, try the main snapshot table
+                        if not short_data:
+                            logger.info("🔄 No historical table found, trying snapshot data")
+                            
+                            # Look for snapshot data in the main table
+                            tables = soup.find_all('table', class_='snapshot-table2')
+                            found_data = {}
+                            
+                            for table in tables:
+                                rows = table.find_all('tr')
+                                for row in rows:
+                                    cells = row.find_all('td')
+                                    
+                                    # Process pairs of cells (label, value)
+                                    for i in range(0, len(cells) - 1, 2):
+                                        label = cells[i].get_text(strip=True)
+                                        value = cells[i + 1].get_text(strip=True)
+                                        
+                                        if 'Short Float' in label:
+                                            try:
+                                                short_float = float(value.replace('%', ''))
+                                                found_data['short_float'] = short_float
+                                                logger.info(f"📊 Found Short Float: {short_float}%")
+                                            except ValueError:
+                                                continue
+                                        
+                                        elif 'Short Interest' in label:
+                                            try:
+                                                short_interest = self._parse_finviz_number(value)
+                                                found_data['short_interest'] = short_interest
+                                                logger.info(f"📊 Found Short Interest: {short_interest:,.0f} shares")
+                                            except ValueError:
+                                                continue
+                                        
+                                        elif 'Short Ratio' in label or 'Short Interest Ratio' in label:
+                                            try:
+                                                short_ratio = float(value)
+                                                found_data['short_ratio'] = short_ratio
+                                                logger.info(f"📊 Found Short Ratio: {short_ratio}")
+                                            except ValueError:
+                                                continue
+                                        
+                                        elif 'Shares Outstanding' in label:
+                                            try:
+                                                shares_outstanding = self._parse_finviz_number(value)
+                                                found_data['shares_outstanding'] = shares_outstanding
+                                                logger.info(f"📊 Found Shares Outstanding: {shares_outstanding:,.0f}")
+                                            except ValueError:
+                                                continue
+                                        
+                                        elif 'Shs Float' in label:
+                                            try:
+                                                shares_float = self._parse_finviz_number(value)
+                                                found_data['shares_float'] = shares_float
+                                                logger.info(f"📊 Found Shares Float: {shares_float:,.0f}")
+                                            except ValueError:
+                                                continue
+                            
+                            # Create data point if we found anything
+                            if found_data:
+                                # Calculate short interest if we have short float and shares outstanding/float
+                                if 'short_float' in found_data and 'short_interest' not in found_data:
+                                    shares_for_calc = found_data.get('shares_float', found_data.get('shares_outstanding', 0))
+                                    if shares_for_calc > 0:
+                                        short_interest = (found_data['short_float'] / 100) * shares_for_calc
                                         found_data['short_interest'] = short_interest
-                                        logger.info(f"Found Short Interest (alt): {short_interest:,.0f} shares")
-                                    except ValueError:
-                                        continue
-                        
-                        # Create data point if we found anything
-                        if found_data:
-                            # Calculate short interest if we have short float and shares outstanding
-                            if 'short_float' in found_data and 'shares_outstanding' in found_data and 'short_interest' not in found_data:
-                                short_interest = (found_data['short_float'] / 100) * found_data['shares_outstanding']
-                                found_data['short_interest'] = short_interest
-                                logger.info(f"Calculated Short Interest: {short_interest:,.0f} shares")
-                            
-                            short_data.append({
-                                'settlementDate': datetime.utcnow().strftime('%Y-%m-%d'),
-                                'shortInterest': int(found_data.get('short_interest', 0)),
-                                'avgDailyShareVolumeInThousands': 0,  # Not available from Finviz
-                                'daysToCoVerShortInterest': found_data.get('short_ratio', 0),
-                                'shortFloatPercentage': found_data.get('short_float', 0),
-                                'sharesOutstanding': int(found_data.get('shares_outstanding', 0)),
-                                'source': 'finviz',
-                                'ticker': ticker
-                            })
-                            
-                            logger.info(f"Successfully extracted enhanced short interest data for {ticker} from Finviz")
-                            logger.info(f"Short Float: {found_data.get('short_float', 0):.2f}%")
-                            logger.info(f"Short Interest: {found_data.get('short_interest', 0):,.0f} shares")
-                            logger.info(f"Short Ratio: {found_data.get('short_ratio', 0):.2f}")
+                                        logger.info(f"📊 Calculated Short Interest: {short_interest:,.0f} shares")
+                                
+                                short_data.append({
+                                    'settlementDate': datetime.utcnow().strftime('%Y-%m-%d'),
+                                    'shortInterest': int(found_data.get('short_interest', 0)),
+                                    'sharesFloat': int(found_data.get('shares_float', 0)),
+                                    'avgDailyShareVolumeInThousands': 0,  # Not available from snapshot
+                                    'daysToCoVerShortInterest': found_data.get('short_ratio', 0),
+                                    'shortFloatPercentage': found_data.get('short_float', 0),
+                                    'sharesOutstanding': int(found_data.get('shares_outstanding', 0)),
+                                    'source': 'finviz_snapshot',
+                                    'ticker': ticker
+                                })
+                                
+                                logger.info(f"✅ Successfully extracted snapshot data for {ticker} from Finviz")
+                            else:
+                                logger.warning(f"❌ No short interest data found on Finviz for {ticker}")
                         else:
-                            logger.warning(f"No short interest data found on Finviz for {ticker}")
+                            logger.info(f"🎉 Successfully extracted {len(short_data)} historical records for {ticker}")
                         
                         return short_data
                     else:
-                        logger.warning(f"Finviz returned status {response.status} for {ticker}")
+                        logger.warning(f"❌ Finviz returned status {response.status} for {ticker}")
                         return []
                         
         except Exception as e:
-            logger.error(f"Error fetching short interest from Finviz for {ticker}: {e}")
+            logger.error(f"❌ Error fetching short interest from Finviz for {ticker}: {e}")
             return []
+
+    def _parse_finviz_number(self, value_str: str) -> float:
+        """Parse number from Finviz with M/B/K suffixes."""
+        try:
+            value_str = value_str.replace(',', '').strip()
+            
+            if 'B' in value_str:
+                return float(value_str.replace('B', '')) * 1_000_000_000
+            elif 'M' in value_str:
+                return float(value_str.replace('M', '')) * 1_000_000
+            elif 'K' in value_str:
+                return float(value_str.replace('K', '')) * 1_000
+            else:
+                return float(value_str)
+        except (ValueError, AttributeError):
+            return 0.0
 
     def get_short_interest_data(self, ticker: str, date) -> Optional[Dict]:
         """

@@ -1,0 +1,13 @@
+{
+  "ticker": "NVDA",
+  "window": "next_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T16:13:37.601561",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

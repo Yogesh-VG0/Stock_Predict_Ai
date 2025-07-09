@@ -1,0 +1,13 @@
+{
+  "ticker": "JNJ",
+  "window": "30_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T17:26:06.633842",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

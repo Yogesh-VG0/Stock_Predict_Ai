@@ -1,0 +1,13 @@
+{
+  "ticker": "ABBV",
+  "window": "next_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T17:37:49.656818",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

@@ -1,0 +1,13 @@
+{
+  "ticker": "AVGO",
+  "window": "30_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T16:41:11.527140",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

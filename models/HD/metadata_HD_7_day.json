@@ -1,0 +1,13 @@
+{
+  "ticker": "HD",
+  "window": "7_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T17:34:14.260081",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

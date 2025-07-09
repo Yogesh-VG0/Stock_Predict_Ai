@@ -1,0 +1,13 @@
+{
+  "ticker": "GOOGL",
+  "window": "30_day",
+  "models": [
+    "lstm",
+    "xgboost",
+    "lightgbm"
+  ],
+  "saved_at": "2025-06-22T16:21:29.488188",
+  "hyperparameters": {},
+  "metrics": {},
+  "target_stats": {}
+}

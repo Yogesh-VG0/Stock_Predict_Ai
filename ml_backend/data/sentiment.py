@@ -514,8 +514,13 @@ class SentimentAnalyzer:
             elif isinstance(data, (int, float)):
                 score = float(data)
             else:
-                logger.warning(f"Unexpected data type for {source}: {type(data)}")
-                continue
+                # Handle other data types gracefully
+                logger.debug(f"Converting {source} data type {type(data)} to float")
+                try:
+                    score = float(data)
+                except (ValueError, TypeError):
+                    logger.debug(f"Could not convert {source} data to float, using 0.0")
+                    score = 0.0
 
             # Validate score is within [-1, 1]
             try:

@@ -30,9 +30,22 @@ export default function TradingViewAdvancedChart({
       "JPM", "WMT", "DIS", "V", "PG", "JNJ", "XOM",
       "BAC", "PFE", "KO", "VZ", "T", "CVX", "MRK",
       "WFC", "C", "PEP", "HD", "MCD", "IBM",
+      // Adding the missing NYSE symbols from your list
+      "LLY", "MA", "UNH", "ABBV", "CRM", "BRK.B", "ORCL"
     ]
+    
+    const nasdaqSymbols = [
+      "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", 
+      "TSLA", "AVGO", "COST", "NFLX"
+    ]
+    
     if (symbol.includes(":")) return symbol
-    return nyseSymbols.includes(symbol) ? `NYSE:${symbol}` : `NASDAQ:${symbol}`
+    
+    if (nyseSymbols.includes(symbol)) return `NYSE:${symbol}`
+    if (nasdaqSymbols.includes(symbol)) return `NASDAQ:${symbol}`
+    
+    // Default fallback - try NASDAQ first, then NYSE
+    return `NASDAQ:${symbol}`
   }
 
   useEffect(() => {
