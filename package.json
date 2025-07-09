@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "ts-node --project tsconfig.server.json server.ts",
+    "dev": "next dev",
     "build": "next build",
-    "start": "NODE_ENV=production ts-node --project tsconfig.server.json server.ts",
+    "start": "next start",
     "lint": "next lint",
     "dev:simple": "npm run dev",
     "dev:backend": "cd backend && npm run dev",
