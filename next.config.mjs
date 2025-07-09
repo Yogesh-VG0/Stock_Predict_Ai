@@ -10,9 +10,7 @@ const nextConfig = {
     unoptimized: true,
   },
   output: 'standalone', // Enable standalone output for Docker deployment
-  experimental: {
-    outputFileTracingRoot: process.cwd(),
-  },
+  outputFileTracingRoot: process.cwd(),
   async rewrites() {
     // Use environment variables for production deployments
     const backendUrl = process.env.NODE_BACKEND_URL || process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:5000';

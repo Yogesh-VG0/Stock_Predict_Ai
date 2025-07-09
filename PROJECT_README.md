@@ -483,6 +483,4 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 ---
 
-**Built with ❤️ by the StockPredict AI Team**
-
 *Making financial predictions accessible, transparent, and intelligent.* 
