@@ -20,7 +20,6 @@ import {
   Sidebar as ShadcnSidebar,
   SidebarContent,
   SidebarHeader,
-  SidebarFooter,
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
@@ -167,17 +166,6 @@ export default function Sidebar({ onClose }: SidebarProps) {
         </div>
       </SidebarContent>
 
-      <SidebarFooter className="p-4 border-t border-zinc-800">
-        <div className="flex items-center gap-3">
-          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-emerald-500 to-blue-600 flex items-center justify-center">
-            <span className="text-xs font-bold">SP</span>
-          </div>
-          <div>
-            <p className="text-sm font-medium">StockPredict AI</p>
-            <p className="text-xs text-zinc-400">Pro Plan</p>
-          </div>
-        </div>
-      </SidebarFooter>
     </ShadcnSidebar>
   )
 }
