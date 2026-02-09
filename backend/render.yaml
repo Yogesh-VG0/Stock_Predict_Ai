@@ -1,0 +1,19 @@
+# Render.com deployment configuration
+services:
+  - type: web
+    name: stockpredict-backend
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false  # Set manually in Render dashboard
+      - key: REDIS_URL
+        sync: false  # Set manually or use Render Redis addon
+      - key: FINNHUB_API_KEY
+        sync: false
+      - key: RAPIDAPI_KEY
+        sync: false
+    healthCheckPath: /health

@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
+require('dotenv').config();
 
-// MongoDB connection string (same as ML backend)
-const MONGODB_URI = 'mongodb+srv://yogesh:StockProject45@stockpredict-ai.m8tzhmj.mongodb.net/stock_predictor?retryWrites=true&w=majority';
+// MongoDB connection string from environment variable
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/stock_predictor';
 
 class MongoDBConnection {
   constructor() {
