@@ -9,8 +9,28 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  
+  // Performance optimizations
+  compiler: {
+    removeConsole: process.env.NODE_ENV === 'production',
+  },
+  
+  // Optimize package imports
+  modularizeImports: {
+    'lucide-react': {
+      transform: 'lucide-react/dist/esm/icons/{{member}}',
+    },
+    'framer-motion': {
+      transform: 'framer-motion/dist/es/{{member}}',
+    },
+  },
+  
+  // Experimental optimizations
+  experimental: {
+    optimizePackageImports: ['lucide-react', 'framer-motion', 'recharts', 'date-fns'],
+  },
+
   async rewrites() {
-    // Use environment variables for production deployments
     const backendUrl = process.env.NODE_BACKEND_URL || process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:5000';
     
     return [
@@ -29,6 +49,30 @@ const nextConfig = {
       {
         source: '/api/market/:path*',
         destination: `${backendUrl}/api/market/:path*`,
+      },
+    ];
+  },
+
+  // Headers for caching static assets
+  async headers() {
+    return [
+      {
+        source: '/:all*(svg|jpg|png|webp|gif|ico)',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
+      },
+      {
+        source: '/_next/static/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable',
+          },
+        ],
       },
     ];
   },

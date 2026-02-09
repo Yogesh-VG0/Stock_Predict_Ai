@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useState, useEffect } from "react"
-import { usePathname } from "next/navigation"
+import { useLocation } from "react-router-dom"
 import { motion, AnimatePresence } from "framer-motion"
 import Sidebar from "./sidebar"
 import Navbar from "./navbar"
@@ -17,7 +17,8 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [isMobile, setIsMobile] = useState(false)
-  const pathname = usePathname()
+  const location = useLocation()
+  const pathname = location.pathname
 
   useEffect(() => {
     const checkMobile = () => {

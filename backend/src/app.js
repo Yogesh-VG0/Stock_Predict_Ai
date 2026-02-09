@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const dotenv = require('dotenv');
 const mongoConnection = require('./config/mongodb');
 const newsRoutes = require('./routes/newsRoutes');
@@ -16,8 +17,19 @@ mongoConnection.connect().catch(err => {
   console.error('Failed to connect to MongoDB:', err);
 });
 
+// Performance optimizations
+app.use(compression()); // Enable gzip compression for responses
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' })); // Limit JSON body size
+
+// Cache control headers for API responses
+app.use((req, res, next) => {
+  // Set cache headers for GET requests
+  if (req.method === 'GET') {
+    res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=60');
+  }
+  next();
+});
 
 app.use('/api/news', newsRoutes);
 app.use('/api/market', marketRoutes);
