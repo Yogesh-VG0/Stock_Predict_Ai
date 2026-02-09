@@ -1,5 +1,7 @@
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
-export const NODE_BACKEND_URL = process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:5000';
+// Use relative URLs - they'll be handled by Next.js rewrites (dev) or Vercel rewrites (prod)
+const isProduction = typeof window !== 'undefined' && window.location.hostname !== 'localhost';
+export const API_BASE_URL = isProduction ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000');
+export const NODE_BACKEND_URL = isProduction ? '' : (process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:5000');
 
 export interface Prediction {
   predicted_price: number;
@@ -341,7 +343,9 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
     const targetDate = date || new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
     
     // PRIORITY 1: Check if we have stored explanation in MongoDB (fastest)
-    try {
+    // Only try ML backend in development
+    const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+    if (isLocalDev) try {
       const storedResponse = await fetch(`http://127.0.0.1:8000/api/v1/explanation/stored/${ticker}?window=comprehensive`);
       if (storedResponse.ok) {
         const storedData = await storedResponse.json();
@@ -644,6 +648,13 @@ export async function generateBatchAIExplanations(date?: string): Promise<BatchG
   try {
     const targetDate = date || new Date().toISOString().split('T')[0];
     
+    // Only try ML backend in development (localhost)
+    const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+    if (!isLocalDev) {
+      console.log('Batch generation only available in development mode');
+      return null;
+    }
+    
     // Try ML backend directly first
     const mlResponse = await fetch(`http://127.0.0.1:8000/api/v1/explain/batch`, {
       method: 'POST',
@@ -683,15 +694,19 @@ export async function getBatchExplanationStatus(): Promise<BatchExplanationStatu
       };
     }
     
-    // Fallback to ML backend if Node.js backend fails
-    const mlResponse = await fetch(`http://127.0.0.1:8000/api/v1/explain/batch/status`);
-    
-    if (mlResponse.ok) {
-      const result = await mlResponse.json();
-      return result;
+    // Fallback to ML backend if Node.js backend fails (only in development)
+    const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+    if (isLocalDev) {
+      const mlResponse = await fetch(`http://127.0.0.1:8000/api/v1/explain/batch/status`);
+      
+      if (mlResponse.ok) {
+        const result = await mlResponse.json();
+        return result;
+      }
     }
     
-    throw new Error(`Both backends failed: ${backendResponse.statusText}`);
+    console.log('Batch status unavailable');
+    return null;
   } catch (error) {
     console.error('Error checking batch explanation status:', error);
     return null;
