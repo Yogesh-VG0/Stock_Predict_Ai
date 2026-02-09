@@ -93,6 +93,14 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     try {
       console.log(`🔥 Generating fresh AI explanation for ${ticker} using Gemini 2.5 Pro...`)
       
+      // Only available in development mode (ML backend runs locally)
+      const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost'
+      if (!isLocalDev) {
+        setError('AI explanation generation is only available in development mode')
+        setIsGenerating(false)
+        return
+      }
+      
       // Call the GENERATION endpoint (not the stored retrieval endpoint)
       const targetDate = new Date().toISOString().split('T')[0]
       const response = await fetch(`http://127.0.0.1:8000/api/v1/explain/${ticker}/${targetDate}`)

@@ -2,6 +2,12 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 
+// Use relative URLs in production, localhost in development
+const getApiBaseUrl = () => {
+  if (typeof window === 'undefined') return '';
+  return window.location.hostname === 'localhost' ? 'http://localhost:5000' : '';
+};
+
 interface StockPrice {
   symbol: string
   price: number
@@ -103,7 +109,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   // Check WebSocket backend status
   const checkWebSocketStatus = useCallback(async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/watchlist/status/websocket')
+      const response = await fetch(`${getApiBaseUrl()}/api/watchlist/status/websocket`)
       
       if (!response.ok) {
         setIsConnected(false)
@@ -130,7 +136,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   // Subscribe to stocks via backend
   const subscribeToStocks = useCallback(async (symbols: string[]) => {
     try {
-      const response = await fetch('http://localhost:5000/api/watchlist/subscribe', {
+      const response = await fetch(`${getApiBaseUrl()}/api/watchlist/subscribe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbols })
@@ -184,7 +190,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
     try {
       const symbolsParam = symbolsToFetch.join(',')
-      const response = await fetch(`http://localhost:5000/api/watchlist/updates/realtime?symbols=${symbolsParam}`)
+      const response = await fetch(`${getApiBaseUrl()}/api/watchlist/updates/realtime?symbols=${symbolsParam}`)
       
       if (!response.ok) return
       
@@ -268,7 +274,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const fetchInitialPrices = useCallback(async () => {
     try {
       // Try to fetch real prices from the API
-      const response = await fetch(`http://localhost:5000/api/watchlist/updates/realtime?symbols=${ALL_TRACKED_STOCKS.join(',')}`)
+      const response = await fetch(`${getApiBaseUrl()}/api/watchlist/updates/realtime?symbols=${ALL_TRACKED_STOCKS.join(',')}`)
       
       if (response.ok) {
         const contentType = response.headers.get('content-type')
