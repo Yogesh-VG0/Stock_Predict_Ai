@@ -1,161 +1,117 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, memo, useState } from "react"
 
-export default function FinlogixEarningsCalendar() {
+function FinlogixEarningsCalendar() {
   const containerRef = useRef<HTMLDivElement>(null)
+  const [isClient, setIsClient] = useState(false)
+  const initializedRef = useRef(false)
 
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
+    setIsClient(true)
+  }, [])
 
-    // Clear any existing content and widgets
-    container.innerHTML = ""
+  useEffect(() => {
+    if (!isClient) return
     
-    // Remove any existing finlogix containers globally to prevent duplicates
-    const existingContainers = document.querySelectorAll('.finlogix-container')
-    existingContainers.forEach(elem => {
-      if (elem !== container) {
-        elem.remove()
+    const container = containerRef.current
+    if (!container || initializedRef.current) return
+
+    // Check if widget already exists
+    if (container.querySelector('iframe')) {
+      return
+    }
+
+    initializedRef.current = true
+
+    function initializeWidget() {
+      if (!window.Widget) {
+        console.warn('Finlogix Widget not loaded')
+        initializedRef.current = false
+        return
       }
-    })
 
-    // Create a unique finlogix container div
-    const finlogixDiv = document.createElement("div")
-    finlogixDiv.className = "finlogix-container"
-    finlogixDiv.id = `finlogix-${Date.now()}` // Unique ID to prevent conflicts
-    container.appendChild(finlogixDiv)
+      try {
+        // Match the original widget config exactly - NO container property
+        window.Widget.init({
+          widgetId: "caffc210-a0bd-4502-943f-5078aa5ea13c",
+          type: "EarningCalendar",
+          language: "en",
+          importanceOptions: ["low", "medium", "high"],
+          dateRangeOptions: ["recentAndNext", "today", "tomorrow", "thisWeek", "nextWeek", "thisMonth"],
+          isAdaptive: true
+        })
+      } catch (error) {
+        console.error('Error initializing Finlogix widget:', error)
+        initializedRef.current = false
+      }
+    }
 
-    // Check if Widget script is already loaded
+    // Check if script already loaded
+    const existingScript = document.querySelector('script[src="https://widget.finlogix.com/Widget.js"]')
+    
     if (window.Widget) {
-      // Script already loaded, initialize immediately
       initializeWidget()
-    } else {
-      // Load the Finlogix widget script
+    } else if (!existingScript) {
       const script = document.createElement("script")
       script.src = "https://widget.finlogix.com/Widget.js"
       script.type = "text/javascript"
       script.onload = initializeWidget
       document.head.appendChild(script)
-    }
-
-    function initializeWidget() {
-      if (window.Widget && finlogixDiv) {
-        try {
-          window.Widget.init({
-            widgetId: "caffc210-a0bd-4502-943f-5078aa5ea13c",
-            type: "EarningCalendar",
-            language: "en",
-            showBrand: false, // Hide brand to reduce clutter
-            isShowTradeButton: false, // Hide trade button for cleaner look
-            isShowBeneathLink: false, // Hide beneath link
-            isShowDataFromACYInfo: false, // Hide ACY info
-            importanceOptions: [
-              "low",
-              "medium", 
-              "high"
-            ],
-            dateRangeOptions: [
-              "recentAndNext",
-              "today",
-              "tomorrow",
-              "thisWeek",
-              "nextWeek"
-            ],
-            isAdaptive: true,
-            colorScheme: "dark",
-            darkMode: true,
-            container: finlogixDiv.id,
-            width: "100%", // Full width of container
-            height: "500", // Fixed height for sidebar
-            compact: true, // Enable compact mode for better sidebar fit
-            fontSize: "12px" // Smaller font for sidebar space
-          })
-        } catch (error) {
-          console.error('Error initializing Finlogix widget:', error)
+    } else {
+      // Script is loading, wait for it
+      const checkWidget = setInterval(() => {
+        if (window.Widget) {
+          clearInterval(checkWidget)
+          initializeWidget()
         }
-      }
+      }, 100)
+      setTimeout(() => clearInterval(checkWidget), 10000)
     }
 
-    // Cleanup function
     return () => {
-      if (container) {
-        container.innerHTML = ""
-      }
+      initializedRef.current = false
     }
-  }, [])
+  }, [isClient])
+
+  if (!isClient) {
+    return (
+      <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden">
+        <div 
+          className="w-full flex items-center justify-center" 
+          style={{ minHeight: 500, backgroundColor: '#18181b' }}
+        >
+          <div className="text-zinc-500 text-sm">Loading earnings calendar...</div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden">
-      <div ref={containerRef} className="min-h-[500px] w-full finlogix-dark-theme" />
-      <style jsx>{`
-        .finlogix-dark-theme {
-          background-color: #18181b !important;
-          color: #ffffff !important;
-          width: 100% !important;
-          height: 500px !important;
-          overflow: hidden !important;
-        }
-        .finlogix-dark-theme * {
-          background-color: #18181b !important;
-          color: #ffffff !important;
-          border-color: #27272a !important;
-        }
-        .finlogix-container {
-          background-color: #18181b !important;
-          color: #ffffff !important;
-          width: 100% !important;
-          height: 500px !important;
-          overflow: visible !important;
-        }
-        .finlogix-container table {
-          background-color: #18181b !important;
-          color: #ffffff !important;
-          width: 100% !important;
-          font-size: 12px !important;
-        }
-        .finlogix-container td, .finlogix-container th {
-          background-color: #18181b !important;
-          color: #ffffff !important;
-          border-color: #27272a !important;
-          padding: 4px 6px !important;
-          font-size: 12px !important;
-        }
-        .finlogix-container iframe {
-          width: 100% !important;
-          height: 500px !important;
-          overflow: hidden !important;
-        }
-        /* Hide any outer container scrollbars */
-        .finlogix-dark-theme::-webkit-scrollbar {
-          display: none !important;
-        }
-        .finlogix-dark-theme {
-          -ms-overflow-style: none !important;
-          scrollbar-width: none !important;
-        }
-        /* Responsive adjustments for smaller screens */
-        @media (max-width: 1024px) {
-          .finlogix-container {
-            height: 400px !important;
-          }
-          .finlogix-dark-theme {
-            height: 400px !important;
-          }
-          .finlogix-container iframe {
-            height: 400px !important;
-          }
-        }
-      `}</style>
+      {/* Use the exact class name the widget expects */}
+      <div 
+        ref={containerRef}
+        className="finlogix-container w-full" 
+        style={{ minHeight: 500, backgroundColor: '#18181b' }} 
+      />
     </div>
   )
 }
 
-// Extend the Window interface to include Widget
+export default memo(FinlogixEarningsCalendar)
+
 declare global {
   interface Window {
     Widget: {
-      init: (config: any) => void
+      init: (config: {
+        widgetId: string
+        type: string
+        language: string
+        importanceOptions: string[]
+        dateRangeOptions: string[]
+        isAdaptive: boolean
+      }) => void
     }
   }
-} 
+}

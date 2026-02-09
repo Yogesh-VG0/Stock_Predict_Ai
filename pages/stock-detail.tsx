@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense, lazy, memo } from "react"
 import { useParams } from "react-router-dom"
 import { motion } from "framer-motion"
 import {
@@ -25,8 +25,19 @@ import {
   WifiOff,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import TradingViewAdvancedChart from "@/components/tradingview/trading-view-advanced-chart"
-import AIExplanationWidget from "@/components/market/AIExplanationWidget"
+import { Skeleton } from "@/components/ui/skeleton"
+
+// Lazy load heavy components
+const TradingViewAdvancedChart = lazy(() => import("@/components/tradingview/trading-view-advanced-chart"))
+const AIExplanationWidget = lazy(() => import("@/components/market/AIExplanationWidget"))
+
+// Chart loading skeleton
+const ChartSkeleton = memo(() => (
+  <div className="w-full h-[500px] bg-zinc-900/50 rounded-lg animate-pulse flex items-center justify-center">
+    <div className="text-zinc-600">Loading chart...</div>
+  </div>
+))
+ChartSkeleton.displayName = "ChartSkeleton"
 import { 
   getStockDetails, 
   StockDetails, 
@@ -448,7 +459,9 @@ export default function StockDetail({}: StockDetailProps) {
 
       {/* TradingView Chart */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
-        <TradingViewAdvancedChart symbol={selectedStock} height={500} />
+        <Suspense fallback={<ChartSkeleton />}>
+          <TradingViewAdvancedChart symbol={selectedStock} height={500} />
+        </Suspense>
       </motion.div>
 
       {/* Main Content Grid - Top Row (Company, Predictions, News) */}
@@ -738,10 +751,20 @@ export default function StockDetail({}: StockDetailProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.6 }}
         >
-          <AIExplanationWidget 
-            ticker={selectedStock} 
-            currentPrice={currentPrice}
-          />
+          <Suspense fallback={
+            <Card className="p-6">
+              <div className="animate-pulse space-y-4">
+                <div className="h-6 bg-zinc-800 rounded w-1/3"></div>
+                <div className="h-4 bg-zinc-800 rounded w-full"></div>
+                <div className="h-4 bg-zinc-800 rounded w-2/3"></div>
+              </div>
+            </Card>
+          }>
+            <AIExplanationWidget 
+              ticker={selectedStock} 
+              currentPrice={currentPrice}
+            />
+          </Suspense>
         </motion.div>
       )}
     </div>

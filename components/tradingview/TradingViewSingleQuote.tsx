@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, memo } from 'react'
 
 interface TradingViewSingleQuoteProps {
   symbol: string
@@ -11,7 +11,7 @@ interface TradingViewSingleQuoteProps {
   locale?: string
 }
 
-export default function TradingViewSingleQuote({
+function TradingViewSingleQuote({
   symbol,
   width = "100%",
   height = 80,
@@ -20,62 +20,51 @@ export default function TradingViewSingleQuote({
   locale = "en"
 }: TradingViewSingleQuoteProps) {
   const containerRef = useRef<HTMLDivElement>(null)
-  const [isMounted, setIsMounted] = useState(false)
+  const scriptLoadedRef = useRef(false)
+  const currentSymbolRef = useRef(symbol)
 
   useEffect(() => {
-    setIsMounted(true)
-  }, [])
-
-  useEffect(() => {
-    if (!isMounted) return
-    
     const container = containerRef.current
     if (!container) return
     
-    container.innerHTML = ''
+    // Only reload if symbol changed or first load
+    if (scriptLoadedRef.current && currentSymbolRef.current === symbol) return
     
-    const timeoutId = setTimeout(() => {
-      try {
-        const script = document.createElement('script')
-        script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js'
-        script.type = 'text/javascript'
-        script.async = true
-        script.onerror = () => {
-          console.warn(`Failed to load TradingView Single Quote widget for ${symbol}`)
-        }
-        script.innerHTML = JSON.stringify({
-          symbol,
-          width,
-          height,
-          colorTheme,
-          isTransparent,
-          locale
-        })
-        container.appendChild(script)
-      } catch (error) {
-        console.warn(`Error loading TradingView Single Quote widget for ${symbol}:`, error)
-      }
-    }, Math.random() * 100 + 300) // Random delay to stagger loading
+    scriptLoadedRef.current = true
+    currentSymbolRef.current = symbol
+    container.innerHTML = ""
+    
+    try {
+      const script = document.createElement('script')
+      script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-single-quote.js'
+      script.type = 'text/javascript'
+      script.async = true
+      script.innerHTML = JSON.stringify({
+        symbol,
+        width,
+        height,
+        colorTheme,
+        isTransparent,
+        locale
+      })
+      container.appendChild(script)
+    } catch (error) {
+      console.warn(`Error loading TradingView Single Quote widget for ${symbol}:`, error)
+    }
     
     return () => {
-      clearTimeout(timeoutId)
-      if (container) container.innerHTML = ''
+      if (container) container.innerHTML = ""
+      scriptLoadedRef.current = false
     }
-  }, [isMounted, symbol, width, height, colorTheme, isTransparent, locale])
-
-  if (!isMounted) {
-    return (
-      <div style={{ height: height }}>
-        <div className="flex items-center justify-center h-full">
-          <div className="text-zinc-400 text-xs">Loading {symbol}...</div>
-        </div>
-      </div>
-    )
-  }
+  }, [symbol, width, height, colorTheme, isTransparent, locale])
 
   return (
-    <div style={{ height: height }}>
-      <div ref={containerRef} className="tradingview-widget-container__widget" />
-    </div>
+    <div 
+      ref={containerRef} 
+      className="tradingview-widget-container"
+      style={{ height, width }}
+    />
   )
-} 
+}
+
+export default memo(TradingViewSingleQuote)

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react'
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react'
 
 interface StockPrice {
   symbol: string
@@ -377,14 +377,15 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     return () => clearInterval(connectionCheckInterval)
   }, [checkWebSocketStatus])
 
-  const value: WebSocketContextType = {
+  // Memoize context value to prevent unnecessary re-renders
+  const value = useMemo<WebSocketContextType>(() => ({
     stockPrices,
     isConnected,
     lastUpdate,
     subscribeToStock,
     unsubscribeFromStock,
     getStockPrice
-  }
+  }), [stockPrices, isConnected, lastUpdate, subscribeToStock, unsubscribeFromStock, getStockPrice])
 
   return (
     <WebSocketContext.Provider value={value}>
