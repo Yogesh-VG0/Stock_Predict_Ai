@@ -9,11 +9,11 @@ services:
       - key: NODE_ENV
         value: production
       - key: MONGODB_URI
-        sync: false  # Set manually in Render dashboard
-      - key: REDIS_URL
-        sync: false  # Set manually or use Render Redis addon
+        sync: false  # Required - set in Render dashboard
       - key: FINNHUB_API_KEY
-        sync: false
-      - key: RAPIDAPI_KEY
-        sync: false
+        sync: false  # Required for real-time stock prices
+      - key: MARKETAUX_API_KEY
+        sync: false  # Optional - for premium news
+      - key: CALENDARIFIC_API_KEY
+        sync: false  # Optional - has static fallback for holidays
     healthCheckPath: /health

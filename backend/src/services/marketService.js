@@ -165,20 +165,4 @@ async function fetchMarketStatus() {
   };
 }
 
-async function fetchFearGreedIndex() {
-  try {
-    const response = await axios.get('https://fear-and-greed-index.p.rapidapi.com/v1/fgi', {
-      headers: {
-        'x-rapidapi-key': process.env.RAPIDAPI_KEY,
-        'x-rapidapi-host': 'fear-and-greed-index.p.rapidapi.com',
-      },
-    });
-    // Return the relevant data
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching Fear & Greed Index:', error?.response?.data || error.message);
-    return null;
-  }
-}
-
-module.exports = { fetchMarketStatus, fetchFearGreedIndex }; 
+module.exports = { fetchMarketStatus }; 
