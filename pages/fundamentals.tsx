@@ -173,7 +173,7 @@ export default function FundamentalsPage() {
                 src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=false&textColor=E5E7EB&backgroundColor=0B0F1A&fontFamily=Nunito&`}
               />
             </div>
-          </CardContent}
+          </CardContent>
         </Card>
 
         {/* Press releases */}
