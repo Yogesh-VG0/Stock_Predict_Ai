@@ -87,11 +87,9 @@ export default function Sidebar({ onClose }: SidebarProps) {
 
   const handleNavigate = () => {
     if (isMobile) {
-      // Close mobile sheet sidebar
+      // Close ONLY the mobile sheet sidebar.
+      // Desktop sidebar should remain open when navigating.
       setOpenMobile(false)
-    } else {
-      // Close animated desktop sidebar
-      onClose()
     }
   }
 
