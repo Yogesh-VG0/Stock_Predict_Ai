@@ -7,19 +7,30 @@ const wsService = new WebSocketService();
 // Connect to WebSocket on startup
 wsService.connect();
 
-// Auto-subscribe to all tracked stocks for real-time updates
-const ALL_TRACKED_SYMBOLS = [
-  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX',
-  'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'XOM',
-  'LLY', 'ABBV', 'COST', 'ORCL', 'CRM', 'AVGO', 'BRK.B', 'KO'
+// Auto-subscribe to all tracked stocks - PRIORITY stocks first (match sidebar order)
+const PRIORITY_SYMBOLS = [
+  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'BRK.B', 'TSLA', 'AVGO', 'LLY'
 ];
+const SECONDARY_SYMBOLS = [
+  'WMT', 'JPM', 'V', 'MA', 'NFLX', 'XOM', 'COST', 'ORCL', 'PG', 'JNJ',
+  'UNH', 'HD', 'ABBV', 'KO', 'CRM', 'BAC'
+];
+const ALL_TRACKED_SYMBOLS = [...PRIORITY_SYMBOLS, ...SECONDARY_SYMBOLS];
 
-// Subscribe to all stocks after WebSocket connects (delayed to ensure connection)
+// Subscribe to stocks after WebSocket connects - PRIORITY stocks first
 setTimeout(() => {
-  console.log('📊 Auto-subscribing to all tracked stocks...');
-  ALL_TRACKED_SYMBOLS.forEach(symbol => {
+  console.log('📊 Auto-subscribing to PRIORITY stocks first...');
+  PRIORITY_SYMBOLS.forEach(symbol => {
     wsService.subscribe(symbol, () => {}); // Empty callback - just need the subscription
   });
+  
+  // Subscribe to secondary stocks after a delay
+  setTimeout(() => {
+    console.log('📊 Auto-subscribing to secondary stocks...');
+    SECONDARY_SYMBOLS.forEach(symbol => {
+      wsService.subscribe(symbol, () => {}); // Empty callback - just need the subscription
+    });
+  }, 5000); // 5 second delay for secondary stocks
 }, 3000);
 
 // Company data mapping
@@ -48,7 +59,8 @@ const COMPANY_DATA = {
   'ORCL': { name: 'Oracle Corporation', sector: 'Technology' },
   'CRM': { name: 'Salesforce, Inc.', sector: 'Technology' },
   'AVGO': { name: 'Broadcom Inc.', sector: 'Technology' },
-  'BRK.B': { name: 'Berkshire Hathaway Inc.', sector: 'Financial Services' }
+  'BRK.B': { name: 'Berkshire Hathaway Inc.', sector: 'Financial Services' },
+  'KO': { name: 'The Coca-Cola Company', sector: 'Consumer Staples' }
 };
 
 // In-memory watchlist storage (in production, use MongoDB)

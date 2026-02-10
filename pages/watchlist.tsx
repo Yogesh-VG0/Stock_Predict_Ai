@@ -308,8 +308,8 @@ export default function WatchlistPage() {
               </div>
             ) : (
               <div className="flex items-center gap-1 text-amber-500 text-sm">
-                <WifiOff className="h-4 w-4" />
-                <span>Rate Limited</span>
+                <Clock className="h-4 w-4 animate-pulse" />
+                <span>Syncing</span>
               </div>
             )}
           </div>
@@ -491,7 +491,7 @@ export default function WatchlistPage() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-6">
                     <Sparkline
                       data={stock.sparklineData}
                       height={30}
@@ -500,21 +500,30 @@ export default function WatchlistPage() {
                     />
 
                     <div className="flex flex-col items-end">
-                      <span className="font-medium">${stock.price.toFixed(2)}</span>
-                      <span
-                        className={cn(
-                          "text-xs flex items-center gap-1",
-                          stock.changePercent >= 0 ? "text-emerald-500" : "text-red-500",
-                        )}
-                      >
-                        {stock.changePercent >= 0 ? (
-                          <TrendingUp className="h-3 w-3" />
-                        ) : (
-                          <TrendingDown className="h-3 w-3" />
-                        )}
-                        {stock.changePercent >= 0 ? "+" : ""}
-                        {stock.changePercent.toFixed(2)}%
-                      </span>
+                      {stock.price > 0 ? (
+                        <>
+                          <span className="font-medium">${stock.price.toFixed(2)}</span>
+                          <span
+                            className={cn(
+                              "text-xs flex items-center gap-1",
+                              stock.changePercent >= 0 ? "text-emerald-500" : "text-red-500",
+                            )}
+                          >
+                            {stock.changePercent >= 0 ? (
+                              <TrendingUp className="h-3 w-3" />
+                            ) : (
+                              <TrendingDown className="h-3 w-3" />
+                            )}
+                            {stock.changePercent >= 0 ? "+" : ""}
+                            {stock.changePercent.toFixed(2)}%
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <div className="h-4 w-16 bg-zinc-800 rounded animate-pulse"></div>
+                          <div className="h-3 w-12 bg-zinc-800 rounded animate-pulse mt-1"></div>
+                        </>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1">

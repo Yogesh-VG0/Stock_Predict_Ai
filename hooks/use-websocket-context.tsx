@@ -29,12 +29,16 @@ interface WebSocketContextType {
 
 const WebSocketContext = createContext<WebSocketContextType | undefined>(undefined)
 
-// All stocks to track across the application
-const ALL_TRACKED_STOCKS = [
-  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
-  'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'XOM', 
-  'LLY', 'ABBV', 'BRK.B', 'AVGO', 'COST', 'ORCL', 'CRM', 'KO'
+// All stocks to track across the application - ORDERED to match sidebar
+// First 10 are PRIORITY stocks that load first
+const PRIORITY_STOCKS = [
+  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'BRK.B', 'TSLA', 'AVGO', 'LLY'
 ]
+const SECONDARY_STOCKS = [
+  'WMT', 'JPM', 'V', 'MA', 'NFLX', 'XOM', 'COST', 'ORCL', 'PG', 'JNJ', 
+  'UNH', 'HD', 'ABBV', 'KO', 'CRM', 'BAC'
+]
+const ALL_TRACKED_STOCKS = [...PRIORITY_STOCKS, ...SECONDARY_STOCKS]
 
 interface WebSocketProviderProps {
   children: React.ReactNode
@@ -270,45 +274,72 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     return stockPrices[symbol.toUpperCase()] || null
   }, [stockPrices])
 
-  // Fetch real initial prices
+  // Fetch real initial prices - PRIORITY stocks first, then secondary
   const fetchInitialPrices = useCallback(async () => {
-    try {
-      // Try to fetch real prices from the API
-      const response = await fetch(`${getApiBaseUrl()}/api/watchlist/updates/realtime?symbols=${ALL_TRACKED_STOCKS.join(',')}`)
-      
-      if (response.ok) {
-        const contentType = response.headers.get('content-type')
-        if (contentType && contentType.includes('application/json')) {
-          const data = await response.json()
-          
-          if (data.success && data.updates) {
-            const realPrices: Record<string, StockPrice> = {}
-            const updateTime = new Date().toLocaleTimeString()
+    const updateTime = new Date().toLocaleTimeString()
+    
+    // Helper function to fetch a batch of stocks
+    const fetchBatch = async (symbols: string[]): Promise<Record<string, StockPrice>> => {
+      try {
+        const response = await fetch(`${getApiBaseUrl()}/api/watchlist/updates/realtime?symbols=${symbols.join(',')}`)
+        
+        if (response.ok) {
+          const contentType = response.headers.get('content-type')
+          if (contentType && contentType.includes('application/json')) {
+            const data = await response.json()
             
-            Object.entries(data.updates).forEach(([symbol, update]: [string, any]) => {
-              realPrices[symbol] = {
-                symbol,
-                price: update.price || 0,
-                change: update.change || 0,
-                changePercent: update.changePercent || 0,
-                volume: update.volume || 0,
-                timestamp: update.timestamp || Date.now(),
-                lastUpdated: updateTime
-              }
-            })
-            
-            // Only update stocks that have real data
-            if (Object.keys(realPrices).length > 0) {
-              setStockPrices(prev => ({ ...prev, ...realPrices }))
-              setIsConnected(true)
-              console.log(`✅ Loaded real prices for ${Object.keys(realPrices).length} stocks`)
-              return true
+            if (data.success && data.updates) {
+              const prices: Record<string, StockPrice> = {}
+              
+              Object.entries(data.updates).forEach(([symbol, update]: [string, any]) => {
+                if (update.price && update.price > 0) {
+                  prices[symbol] = {
+                    symbol,
+                    price: update.price,
+                    change: update.change || 0,
+                    changePercent: update.changePercent || 0,
+                    volume: update.volume || 0,
+                    timestamp: update.timestamp || Date.now(),
+                    lastUpdated: updateTime
+                  }
+                }
+              })
+              
+              return prices
             }
           }
         }
+      } catch (error) {
+        console.warn(`Failed to fetch batch: ${symbols.slice(0, 3).join(', ')}...`, error)
       }
+      return {}
+    }
+    
+    try {
+      // STEP 1: Fetch PRIORITY stocks first (first 10 in sidebar)
+      console.log('📊 Fetching priority stocks first...')
+      const priorityPrices = await fetchBatch(PRIORITY_STOCKS)
+      
+      if (Object.keys(priorityPrices).length > 0) {
+        setStockPrices(prev => ({ ...prev, ...priorityPrices }))
+        setIsConnected(true)
+        console.log(`✅ Loaded ${Object.keys(priorityPrices).length} priority stocks`)
+      }
+      
+      // STEP 2: Fetch SECONDARY stocks after a small delay to avoid rate limits
+      setTimeout(async () => {
+        console.log('📊 Fetching secondary stocks...')
+        const secondaryPrices = await fetchBatch(SECONDARY_STOCKS)
+        
+        if (Object.keys(secondaryPrices).length > 0) {
+          setStockPrices(prev => ({ ...prev, ...secondaryPrices }))
+          console.log(`✅ Loaded ${Object.keys(secondaryPrices).length} secondary stocks`)
+        }
+      }, 2000) // 2 second delay
+      
+      return Object.keys(priorityPrices).length > 0
     } catch (error) {
-      console.warn('Could not fetch initial real prices, using mock data:', error)
+      console.warn('Could not fetch initial real prices:', error)
     }
     
     return false

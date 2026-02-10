@@ -6,20 +6,12 @@ import {
   Brain,
   TrendingUp,
   TrendingDown,
-  BarChart3,
   AlertTriangle,
-  Target,
-  Calendar,
-  Database,
-  Clock,
   Sparkles,
   ChevronDown,
   ChevronUp,
   Loader2,
   RefreshCw,
-  Star,
-  CheckCircle,
-  XCircle,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -315,107 +307,6 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
               <div className="text-xs text-emerald-400 mb-1">Data Sources</div>
               <div className="text-sm font-bold text-white">
                 {explanation.metadata.data_sources.length}
-              </div>
-            </div>
-          </div>
-
-          {/* Advanced Technical Analysis */}
-          <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-            <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-amber-500" />
-              Technical Analysis
-            </h4>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Core Indicators */}
-              <div className="space-y-3">
-                <div className="bg-zinc-800 rounded-lg p-3">
-                  <div className="text-xs text-zinc-400 mb-1">RSI (14)</div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-white font-medium">{explanation.technical_summary.rsi.toFixed(1)}</span>
-                    <span className={`text-xs px-2 py-1 rounded ${
-                      explanation.technical_summary.rsi > 70 ? 'bg-red-500/20 text-red-400' :
-                      explanation.technical_summary.rsi < 30 ? 'bg-emerald-500/20 text-emerald-400' :
-                      'bg-amber-500/20 text-amber-400'
-                    }`}>
-                      {explanation.technical_summary.rsi > 70 ? 'Overbought' :
-                       explanation.technical_summary.rsi < 30 ? 'Oversold' : 'Neutral'}
-                    </span>
-                  </div>
-                </div>
-                
-                <div className="bg-zinc-800 rounded-lg p-3">
-                  <div className="text-xs text-zinc-400 mb-1">MACD Signal</div>
-                  <div className="flex items-center justify-between">
-                    <span className={`font-medium ${explanation.technical_summary.macd_signal === 'Bullish' ? 'text-emerald-500' : 'text-red-500'}`}>
-                      {explanation.technical_summary.macd_signal}
-                    </span>
-                    {explanation.technical_summary.macd && (
-                      <span className="text-xs text-zinc-400">
-                        {explanation.technical_summary.macd.toFixed(2)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="bg-zinc-800 rounded-lg p-3">
-                  <div className="text-xs text-zinc-400 mb-1">Volume Trend</div>
-                  <div className="flex items-center justify-between">
-                    <span className={`font-medium ${
-                      explanation.technical_summary.volume_trend === 'High' ? 'text-emerald-500' :
-                      explanation.technical_summary.volume_trend === 'Low' ? 'text-red-500' : 'text-amber-500'
-                    }`}>
-                      {explanation.technical_summary.volume_trend}
-                    </span>
-                    {explanation.technical_summary.volume && explanation.technical_summary.volume_sma && (
-                      <span className="text-xs text-zinc-400">
-                        {((explanation.technical_summary.volume / explanation.technical_summary.volume_sma - 1) * 100).toFixed(0)}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              
-              {/* Moving Averages & Bollinger */}
-              <div className="space-y-3">
-                {explanation.technical_summary.sma_20 && explanation.technical_summary.sma_50 && (
-                  <div className="bg-zinc-800 rounded-lg p-3">
-                    <div className="text-xs text-zinc-400 mb-1">Moving Averages</div>
-                    <div className="space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span>SMA 20</span>
-                        <span className="text-white">${explanation.technical_summary.sma_20.toFixed(2)}</span>
-                      </div>
-                      <div className="flex justify-between text-xs">
-                        <span>SMA 50</span>
-                        <span className="text-white">${explanation.technical_summary.sma_50.toFixed(2)}</span>
-                      </div>
-                      <div className="text-xs mt-1">
-                        <span className={`${explanation.technical_summary.sma_20 > explanation.technical_summary.sma_50 ? 'text-emerald-500' : 'text-red-500'}`}>
-                          {explanation.technical_summary.sma_20 > explanation.technical_summary.sma_50 ? '📈 Bullish Cross' : '📉 Bearish Cross'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                
-                <div className="bg-zinc-800 rounded-lg p-3">
-                  <div className="text-xs text-zinc-400 mb-1">Bollinger Position</div>
-                  <div className="flex items-center justify-between">
-                    <span className={`font-medium ${
-                      explanation.technical_summary.bollinger_position === 'Upper Band' ? 'text-red-500' :
-                      explanation.technical_summary.bollinger_position === 'Lower Band' ? 'text-emerald-500' :
-                      'text-amber-500'
-                    }`}>
-                      {explanation.technical_summary.bollinger_position}
-                    </span>
-                  </div>
-                  {explanation.technical_summary.bollinger_upper && explanation.technical_summary.bollinger_lower && (
-                    <div className="text-xs text-zinc-400 mt-1">
-                      Range: ${explanation.technical_summary.bollinger_lower.toFixed(0)} - ${explanation.technical_summary.bollinger_upper.toFixed(0)}
-                    </div>
-                  )}
-                </div>
               </div>
             </div>
           </div>

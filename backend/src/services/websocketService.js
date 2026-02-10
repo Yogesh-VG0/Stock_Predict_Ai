@@ -499,6 +499,55 @@ class WebSocketService {
     }
   }
 
+  // Fallback realistic prices when rate limited and no cache
+  getFallbackPrice(symbol) {
+    const fallbackPrices = {
+      'AAPL': { price: 191.50, previousClose: 190.80 },
+      'MSFT': { price: 415.20, previousClose: 413.50 },
+      'NVDA': { price: 875.30, previousClose: 872.00 },
+      'AMZN': { price: 178.90, previousClose: 177.50 },
+      'GOOGL': { price: 175.80, previousClose: 174.90 },
+      'META': { price: 505.60, previousClose: 502.30 },
+      'BRK.B': { price: 412.50, previousClose: 410.00 },
+      'TSLA': { price: 245.80, previousClose: 243.50 },
+      'AVGO': { price: 1350.00, previousClose: 1345.00 },
+      'LLY': { price: 780.50, previousClose: 775.00 },
+      'WMT': { price: 172.30, previousClose: 171.50 },
+      'JPM': { price: 198.50, previousClose: 197.20 },
+      'V': { price: 275.80, previousClose: 274.50 },
+      'MA': { price: 485.60, previousClose: 483.00 },
+      'NFLX': { price: 625.40, previousClose: 622.00 },
+      'XOM': { price: 115.80, previousClose: 115.00 },
+      'COST': { price: 890.50, previousClose: 885.00 },
+      'ORCL': { price: 125.30, previousClose: 124.50 },
+      'PG': { price: 165.40, previousClose: 164.80 },
+      'JNJ': { price: 158.90, previousClose: 158.20 },
+      'UNH': { price: 525.80, previousClose: 522.00 },
+      'HD': { price: 375.60, previousClose: 373.00 },
+      'ABBV': { price: 168.40, previousClose: 167.50 },
+      'KO': { price: 62.80, previousClose: 62.50 },
+      'CRM': { price: 298.50, previousClose: 296.00 },
+      'BAC': { price: 38.90, previousClose: 38.50 }
+    };
+    
+    const fallback = fallbackPrices[symbol] || { price: 100.00, previousClose: 99.50 };
+    const change = fallback.price - fallback.previousClose;
+    const changePercent = (change / fallback.previousClose) * 100;
+    
+    return {
+      symbol,
+      price: fallback.price,
+      change: change,
+      changePercent: changePercent,
+      high: fallback.price * 1.01,
+      low: fallback.price * 0.99,
+      open: fallback.previousClose,
+      previousClose: fallback.previousClose,
+      timestamp: Date.now(),
+      isFallback: true
+    };
+  }
+
   // Get current prices for multiple symbols (with smart caching)
   async getCurrentPrices(symbols) {
     const prices = {};
@@ -524,6 +573,14 @@ class WebSocketService {
       } else if (now >= this.rateLimitedUntil) {
         // No cache at all - prioritize fetching
         symbolsToFetch.unshift(symbol); // Add to front (priority)
+      } else {
+        // Rate limited with no cache - use fallback prices
+        const volumeInfo = this.volumeData.get(symbol);
+        prices[symbol] = {
+          ...this.getFallbackPrice(symbol),
+          volume: volumeInfo?.totalVolume || 0,
+          tradeCount: volumeInfo?.tradeCount || 0
+        };
       }
     }
     
