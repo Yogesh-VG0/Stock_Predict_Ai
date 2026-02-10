@@ -77,11 +77,11 @@ export default function FundamentalsPage() {
                   value={customSymbol}
                   onChange={(e) => setCustomSymbol(e.target.value)}
                   placeholder={symbol || "AAPL"}
-                  className="w-28 md:w-32 bg-zinc-900 border border-zinc-700 text-xs md:text-sm rounded-md px-2 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full md:w-32 bg-zinc-900 border border-zinc-700 text-xs md:text-sm rounded-md px-3 py-2 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-black shadow hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-900"
+                  className="inline-flex items-center rounded-md bg-emerald-500 px-3 py-2 text-xs font-medium text-black shadow hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-900"
                 >
                   Apply
                 </button>
@@ -90,7 +90,7 @@ export default function FundamentalsPage() {
           </form>
 
           {/* Quick-pick popular symbols */}
-          <div className="mt-1 flex max-w-xs flex-wrap gap-1 justify-start md:justify-end">
+          <div className="mt-1 flex w-full flex-wrap gap-1 justify-start md:justify-end">
             {AVAILABLE_SYMBOLS.slice(0, 8).map((s) => (
               <button
                 key={s}
@@ -120,14 +120,15 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-white h-[520px] md:h-[460px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="460"
+                height="100%"
                 style={{
                   background: "#FFFFFF",
                   padding: "10px",
+                  height: "100%",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
@@ -147,14 +148,15 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-white h-[740px] md:h-[680px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="680"
+                height="100%"
                 style={{
                   background: "#FFFFFF",
                   padding: "10px",
+                  height: "100%",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
@@ -174,14 +176,15 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-white h-[260px] md:h-[230px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="230"
+                height="100%"
                 style={{
                   background: "#FFFFFF",
                   padding: "10px",
+                  height: "100%",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
@@ -201,14 +204,15 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-white h-[300px] md:h-[260px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="260"
+                height="100%"
                 style={{
                   background: "#FFFFFF",
                   padding: "10px",
+                  height: "100%",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
@@ -228,14 +232,15 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-white h-[520px] md:h-[460px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="460"
+                height="100%"
                 style={{
                   background: "#FFFFFF",
                   padding: "10px",
+                  height: "100%",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
