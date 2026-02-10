@@ -1,5 +1,8 @@
 const mongoose = require('mongoose');
-require('dotenv').config();
+const path = require('path');
+
+// Load .env from the backend directory
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
 // MongoDB connection string from environment variable
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/stock_predictor';
@@ -8,20 +11,56 @@ class MongoDBConnection {
   constructor() {
     this.connection = null;
     this.db = null;
+    this.isConnected = false;
   }
 
   async connect() {
     try {
+      // Log connection attempt (mask credentials in URI)
+      const maskedUri = MONGODB_URI.replace(/:\/\/[^:]+:[^@]+@/, '://*****:*****@');
+      console.log(`📡 Connecting to MongoDB: ${maskedUri}`);
+      
       this.connection = await mongoose.connect(MONGODB_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
+        serverSelectionTimeoutMS: 10000, // 10 second timeout
+        connectTimeoutMS: 10000,
       });
       
       this.db = this.connection.connection.db;
-      console.log('✅ Connected to MongoDB Atlas (Node.js Backend)');
+      this.isConnected = true;
+      
+      // Set up connection event handlers
+      mongoose.connection.on('disconnected', () => {
+        console.warn('⚠️ MongoDB disconnected');
+        this.isConnected = false;
+      });
+      
+      mongoose.connection.on('reconnected', () => {
+        console.log('✅ MongoDB reconnected');
+        this.isConnected = true;
+      });
+      
+      mongoose.connection.on('error', (err) => {
+        console.error('❌ MongoDB connection error:', err.message);
+        this.isConnected = false;
+      });
+      
+      console.log('✅ Connected to MongoDB (Node.js Backend)');
       return this.connection;
     } catch (error) {
-      console.error('❌ MongoDB connection error:', error);
+      this.isConnected = false;
+      console.error('❌ MongoDB connection error:', error.message);
+      
+      // Provide helpful error messages
+      if (error.message.includes('ECONNREFUSED')) {
+        console.error('   💡 Is MongoDB running? Try: mongod --dbpath /path/to/data');
+      } else if (error.message.includes('Authentication failed')) {
+        console.error('   💡 Check your MONGODB_URI credentials in .env file');
+      } else if (error.message.includes('getaddrinfo ENOTFOUND')) {
+        console.error('   💡 Cannot resolve MongoDB host - check your MONGODB_URI');
+      }
+      
       throw error;
     }
   }
@@ -35,7 +74,8 @@ class MongoDBConnection {
 
   async getStoredExplanation(ticker, window = 'comprehensive') {
     try {
-      if (!this.db) {
+      if (!this.isConnected || !this.db) {
+        console.warn(`⚠️ MongoDB not connected - cannot retrieve explanation for ${ticker}`);
         throw new Error('MongoDB not connected');
       }
 
@@ -48,15 +88,16 @@ class MongoDBConnection {
 
       return explanation;
     } catch (error) {
-      console.error(`Error getting stored explanation for ${ticker}:`, error);
+      console.error(`Error getting stored explanation for ${ticker}:`, error.message);
       return null;
     }
   }
 
   async getAvailableStocks() {
     try {
-      if (!this.db) {
-        throw new Error('MongoDB not connected');
+      if (!this.isConnected || !this.db) {
+        console.warn('⚠️ MongoDB not connected - cannot retrieve available stocks');
+        return [];
       }
 
       const collection = this.db.collection('prediction_explanations');
@@ -65,15 +106,23 @@ class MongoDBConnection {
       
       return stocks;
     } catch (error) {
-      console.error('Error getting available stocks:', error);
+      console.error('Error getting available stocks:', error.message);
       return [];
     }
   }
 
   async getBatchStatus() {
     try {
-      if (!this.db) {
-        throw new Error('MongoDB not connected');
+      if (!this.isConnected || !this.db) {
+        console.warn('⚠️ MongoDB not connected - cannot retrieve batch status');
+        return {
+          with_explanations: 0,
+          without_explanations: 0,
+          total_tickers: 0,
+          coverage_percentage: 0,
+          available_tickers: [],
+          error: 'MongoDB not connected'
+        };
       }
 
       const collection = this.db.collection('prediction_explanations');

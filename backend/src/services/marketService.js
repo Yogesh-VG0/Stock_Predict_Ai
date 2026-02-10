@@ -1,6 +1,10 @@
 const axios = require('axios');
 const { DateTime } = require('luxon');
+const path = require('path');
 const redisClient = require('./redisClient');
+
+// Ensure dotenv is loaded
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
 // US market sessions (Eastern Time)
 const SESSIONS = [
@@ -14,58 +18,113 @@ const EXCHANGE = 'US';
 // In-memory fallback cache
 const holidaysMemoryCache = {};
 
+// Static NYSE market holidays (fallback when API is unavailable)
+const STATIC_NYSE_HOLIDAYS = {
+  2025: [
+    '2025-01-01', // New Year's Day (Wednesday)
+    '2025-01-20', // Martin Luther King, Jr. Day (Monday)
+    '2025-02-17', // Washington's Birthday / Presidents' Day (Monday)
+    '2025-04-18', // Good Friday (Friday)
+    '2025-05-26', // Memorial Day (Monday)
+    '2025-06-19', // Juneteenth National Independence Day (Thursday)
+    '2025-07-04', // Independence Day (Friday)
+    '2025-09-01', // Labor Day (Monday)
+    '2025-11-27', // Thanksgiving Day (Thursday)
+    '2025-12-25', // Christmas Day (Thursday)
+  ],
+  2026: [
+    '2026-01-01', // New Year's Day (Thursday)
+    '2026-01-19', // Martin Luther King, Jr. Day (Monday)
+    '2026-02-16', // Washington's Birthday / Presidents' Day (Monday)
+    '2026-04-03', // Good Friday (Friday)
+    '2026-05-25', // Memorial Day (Monday)
+    '2026-06-19', // Juneteenth National Independence Day (Friday)
+    '2026-07-03', // Independence Day observed (Friday)
+    '2026-09-07', // Labor Day (Monday)
+    '2026-11-26', // Thanksgiving Day (Thursday)
+    '2026-12-25', // Christmas Day (Friday)
+  ],
+};
+
+// Helper with timeout for async operations
+async function withTimeout(promise, ms, fallback) {
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve(fallback), ms);
+  });
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    clearTimeout(timeoutId);
+    return result;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    return fallback;
+  }
+}
+
 // Helper to fetch US market holidays from a public API (e.g., NYSE holidays from Calendarific)
 async function fetchUSHolidays(year) {
-  // Try Redis cache first
-  const redisKey = `us_holidays_${year}`;
-  try {
-    if (redisClient.isOpen) {
-      const cached = await redisClient.get(redisKey);
-      if (cached) {
-        return JSON.parse(cached);
-      }
-    }
-  } catch (err) {
-    console.error('Redis error (get):', err);
-  }
-  // Try in-memory cache
+  // Try in-memory cache first (fastest)
   if (holidaysMemoryCache[year]) {
     return holidaysMemoryCache[year];
   }
+  
+  // Try Redis cache with timeout (don't hang if Redis is slow)
+  const redisKey = `us_holidays_${year}`;
+  try {
+    if (redisClient && redisClient.isOpen) {
+      const cached = await withTimeout(redisClient.get(redisKey), 2000, null);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        holidaysMemoryCache[year] = parsed; // Also cache in memory
+        return parsed;
+      }
+    }
+  } catch (err) {
+    // Silently ignore Redis errors - it's optional
+  }
+  
+  // Check if Calendarific API key is configured
+  const apiKey = process.env.CALENDARIFIC_API_KEY;
+  if (!apiKey || apiKey === 'undefined' || apiKey === 'your_calendarific_api_key_here' || apiKey === '') {
+    // Use static fallback - no need to make API call
+    const staticHolidays = STATIC_NYSE_HOLIDAYS[year] || STATIC_NYSE_HOLIDAYS[2026] || [];
+    holidaysMemoryCache[year] = staticHolidays;
+    return staticHolidays;
+  }
+  
   // Fetch from API
   try {
-    const apiKey = process.env.CALENDARIFIC_API_KEY;
     const url = `https://calendarific.com/api/v2/holidays?&api_key=${apiKey}&country=US&year=${year}&type=national`;
-    const { data } = await axios.get(url);
+    const { data } = await axios.get(url, { timeout: 5000 });
     const holidays = data.response.holidays
       .filter(h => h.locations === 'All' || h.locations.includes('New York Stock Exchange'))
       .map(h => h.date.iso);
+    
     // Cache in Redis (1 year TTL)
     try {
       if (redisClient.isOpen) {
         await redisClient.set(redisKey, JSON.stringify(holidays), { EX: 60 * 60 * 24 * 365 });
       }
     } catch (err) {
-      console.error('Redis error (set):', err);
+      // Silently ignore Redis errors
     }
+    
     // Cache in memory
     holidaysMemoryCache[year] = holidays;
     return holidays;
   } catch (error) {
-    console.error('Error fetching US holidays:', error?.response?.data || error.message);
-    // Fallback to a static list for 2025 if API fails
-    return [
-      '2025-01-01', // New Year's Day (Wednesday)
-      '2025-01-20', // Martin Luther King, Jr. Day (Monday)
-      '2025-02-17', // Washington's Birthday / Presidents' Day (Monday)
-      '2025-04-18', // Good Friday (Friday)
-      '2025-05-26', // Memorial Day (Monday)
-      '2025-06-19', // Juneteenth National Independence Day (Thursday)
-      '2025-07-04', // Independence Day (Friday)
-      '2025-09-01', // Labor Day (Monday)
-      '2025-11-27', // Thanksgiving Day (Thursday)
-      '2025-12-25', // Christmas Day (Thursday)
-    ];
+    // Log specific error type
+    if (error.response?.status === 401) {
+      console.warn('⚠️ Calendarific API 401 Unauthorized - using static holiday list');
+    } else {
+      console.warn('⚠️ Calendarific API unavailable - using static holiday list:', error.message);
+    }
+    
+    // Use static fallback
+    const staticHolidays = STATIC_NYSE_HOLIDAYS[year] || STATIC_NYSE_HOLIDAYS[2026] || [];
+    holidaysMemoryCache[year] = staticHolidays;
+    return staticHolidays;
   }
 }
 
@@ -165,4 +224,28 @@ async function fetchMarketStatus() {
   };
 }
 
-module.exports = { fetchMarketStatus }; 
+// Fetch Fear & Greed Index from RapidAPI
+async function fetchFearGreedIndex() {
+  try {
+    const rapidApiKey = process.env.RAPIDAPI_KEY;
+    if (!rapidApiKey) {
+      console.warn('⚠️ RAPIDAPI_KEY not configured - using fallback Fear & Greed data');
+      return null;
+    }
+
+    const response = await axios.get('https://fear-and-greed-index.p.rapidapi.com/v1/fgi', {
+      headers: {
+        'x-rapidapi-key': rapidApiKey,
+        'x-rapidapi-host': 'fear-and-greed-index.p.rapidapi.com',
+      },
+      timeout: 10000
+    });
+    
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching Fear & Greed Index:', error?.response?.data || error.message);
+    return null;
+  }
+}
+
+module.exports = { fetchMarketStatus, fetchFearGreedIndex }; 
