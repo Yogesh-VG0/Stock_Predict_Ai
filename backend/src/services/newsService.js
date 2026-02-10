@@ -82,7 +82,10 @@ async function getAggregateNews(params) {
 
 async function getNewsApiSectorNews(sector) {
   const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
-  if (!NEWSAPI_KEY) throw new Error('Missing NEWSAPI_KEY');
+  if (!NEWSAPI_KEY) {
+    console.warn('⚠️ NEWSAPI_KEY not configured - skipping NewsAPI for sector news');
+    return [];
+  }
   const query = encodeURIComponent(
     `${sector} sector OR ${sector} industry OR ${sector} stocks OR ${sector}`
   );

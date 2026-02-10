@@ -1,5 +1,9 @@
 const WebSocket = require('ws');
 const axios = require('axios');
+const path = require('path');
+
+// Ensure dotenv is loaded (safeguard if this module is required early)
+require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
 class WebSocketService {
   constructor() {
@@ -21,8 +25,15 @@ class WebSocketService {
     // Volume tracking
     this.volumeData = new Map(); // Map of symbol -> volume data
     
-    if (!this.finnhubToken) {
-      console.error('FINNHUB_API_KEY not found in environment variables');
+    // Track if API key is valid
+    this.isApiKeyValid = !!this.finnhubToken && this.finnhubToken !== 'undefined' && this.finnhubToken !== 'your_finnhub_api_key_here';
+    
+    if (!this.isApiKeyValid) {
+      console.error('❌ FINNHUB_API_KEY not found or invalid in environment variables');
+      console.error('   Get your free API key at https://finnhub.io/register');
+      console.error('   Add it to your .env file: FINNHUB_API_KEY=your_key_here');
+    } else {
+      console.log('✅ Finnhub API key configured');
     }
   }
 
@@ -71,8 +82,9 @@ class WebSocketService {
   }
 
   connect() {
-    if (!this.finnhubToken) {
-      console.error('Cannot connect to Finnhub WebSocket without API key');
+    if (!this.isApiKeyValid) {
+      console.error('❌ Cannot connect to Finnhub WebSocket - API key missing or invalid');
+      console.error('   Set FINNHUB_API_KEY in your .env file');
       return;
     }
 
@@ -272,9 +284,21 @@ class WebSocketService {
 
   // Get current price for a symbol (fallback to REST API)
   async getCurrentPrice(symbol) {
+    // Don't attempt API call if key is missing/invalid
+    if (!this.isApiKeyValid) {
+      console.warn(`⚠️ Skipping Finnhub API call for ${symbol} - API key not configured`);
+      return null;
+    }
+
     try {
       const url = `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${this.finnhubToken}`;
       const response = await this.makeRateLimitedRequest(url);
+      
+      // Check for API error response
+      if (response.data && response.data.error) {
+        console.error(`Finnhub API error for ${symbol}:`, response.data.error);
+        return null;
+      }
       
       return {
         symbol: symbol,
@@ -288,7 +312,15 @@ class WebSocketService {
         timestamp: Date.now()
       };
     } catch (error) {
-      console.error(`Error fetching current price for ${symbol}:`, error);
+      // More specific error logging
+      if (error.response?.status === 401) {
+        console.error(`❌ Finnhub API 401 Unauthorized for ${symbol} - check your FINNHUB_API_KEY`);
+        this.isApiKeyValid = false; // Prevent future calls with invalid key
+      } else if (error.response?.status === 429) {
+        console.warn(`⚠️ Finnhub rate limit hit for ${symbol} - will retry after cooldown`);
+      } else {
+        console.error(`Error fetching current price for ${symbol}:`, error.message);
+      }
       return null;
     }
   }
