@@ -466,14 +466,16 @@ export default function StockDetail({}: StockDetailProps) {
       </motion.div>
 
       {/* Main Content Grid - Top Row (Company, Predictions, News) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Use items-stretch + h-full cards so all three align at the bottom */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
         {/* Left Column - Company Overview */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
+          className="h-full"
         >
-          <Card className="flex flex-col">
+          <Card className="h-full flex flex-col">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Info className="h-5 w-5 text-blue-500" />
@@ -525,9 +527,10 @@ export default function StockDetail({}: StockDetailProps) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
+          className="h-full"
         >
           {predictionData && (
-            <Card className="flex flex-col">
+            <Card className="h-full flex flex-col">
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2">
                   <TrendingUp className="h-5 w-5 text-emerald-500" />
@@ -668,17 +671,18 @@ export default function StockDetail({}: StockDetailProps) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
+          className="h-full"
         >
-          <Card className="flex flex-col">
+          <Card className="h-full flex flex-col">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Newspaper className="h-5 w-5 text-amber-500" />
                 Latest News & Sentiment
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              {/* Compact news list - show ~2 items then scroll */}
-              <div className="space-y-3 max-h-40 overflow-y-auto pr-2">
+            <CardContent className="flex-1 flex flex-col">
+              {/* Compact news list - show ~2 items, scroll if more, but fill available height */}
+              <div className="space-y-3 flex-1 overflow-y-auto pr-2">
                 {stockNews.map((item: any, index: number) => {
                   const sentiment = item.sentiment || "neutral"
                   
