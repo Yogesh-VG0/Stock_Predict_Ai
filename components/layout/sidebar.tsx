@@ -61,7 +61,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
   const location = useLocation()
   const { stockPrices } = useWebSocket()
 
-  // Get real-time stock data with fallback to mock data
+  // Get real-time stock data - show loading state if no data yet
   // Only depends on stockPrices since TOP_STOCKS_CONFIG is constant
   const topStocks = useMemo(() => {
     return TOP_STOCKS_CONFIG.map(stock => {
@@ -69,9 +69,9 @@ export default function Sidebar({ onClose }: SidebarProps) {
       return {
         symbol: stock.symbol,
         name: stock.name,
-        change: realTimeData?.changePercent ?? ((Math.random() - 0.5) * 10), // fallback to random
-        price: realTimeData?.price ?? (50 + Math.random() * 450),
-        isRealTime: !!realTimeData?.price
+        change: realTimeData?.changePercent ?? null, // null = loading
+        price: realTimeData?.price ?? null, // null = loading
+        isLoading: !realTimeData?.price
       }
     })
   }, [stockPrices])
@@ -136,26 +136,34 @@ export default function Sidebar({ onClose }: SidebarProps) {
                 <div className="flex items-center gap-2">
                   <div className={cn(
                     "w-1.5 h-6 rounded-sm",
-                    stock.isRealTime 
-                      ? "bg-gradient-to-b from-emerald-500 to-emerald-600" 
-                      : "bg-gradient-to-b from-zinc-700 to-zinc-800"
+                    stock.isLoading 
+                      ? "bg-gradient-to-b from-zinc-700 to-zinc-800 animate-pulse" 
+                      : "bg-gradient-to-b from-emerald-500 to-emerald-600"
                   )}></div>
                   <div className="flex flex-col">
                     <span className="font-medium text-sm">{stock.symbol}</span>
-                    <span className="text-xs text-zinc-500">${stock.price.toFixed(2)}</span>
+                    {stock.isLoading ? (
+                      <div className="h-3 w-12 bg-zinc-800 rounded animate-pulse"></div>
+                    ) : (
+                      <span className="text-xs text-zinc-500">${stock.price?.toFixed(2)}</span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <span className={cn("text-xs font-medium", stock.change > 0 ? "text-emerald-500" : "text-red-500")}>
-                    {stock.change > 0 ? (
-                      <TrendingUp className="h-3 w-3 inline mr-1" />
-                    ) : (
-                      <TrendingDown className="h-3 w-3 inline mr-1" />
-                    )}
-                    {stock.change > 0 ? "+" : ""}{stock.change.toFixed(2)}%
-                  </span>
-                  {stock.isRealTime && (
-                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                  {stock.isLoading ? (
+                    <div className="h-3 w-14 bg-zinc-800 rounded animate-pulse"></div>
+                  ) : (
+                    <>
+                      <span className={cn("text-xs font-medium", (stock.change ?? 0) > 0 ? "text-emerald-500" : "text-red-500")}>
+                        {(stock.change ?? 0) > 0 ? (
+                          <TrendingUp className="h-3 w-3 inline mr-1" />
+                        ) : (
+                          <TrendingDown className="h-3 w-3 inline mr-1" />
+                        )}
+                        {(stock.change ?? 0) > 0 ? "+" : ""}{stock.change?.toFixed(2)}%
+                      </span>
+                      <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div>
+                    </>
                   )}
                 </div>
               </Link>
