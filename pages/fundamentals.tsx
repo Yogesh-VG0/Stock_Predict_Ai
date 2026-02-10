@@ -81,19 +81,18 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-[#020617]">
+            <div className="rounded-lg overflow-hidden">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="470"
                 style={{
-                  background: "#020617",
-                  padding: "10px",
+                  background: "#0B0F1A",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/area-chart?symbol=${symbol}&selection=one_year&closeKey=close&boxShadow=true&graphColor=22c55e&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/area-chart?symbol=${symbol}&selection=one_year&closeKey=close&boxShadow=false&graphColor=3B82F6&textColor=E5E7EB&backgroundColor=0B0F1A&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -108,19 +107,18 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-[#020617]">
+            <div className="rounded-lg overflow-hidden">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="700"
                 style={{
-                  background: "#020617",
-                  padding: "10px",
+                  background: "#0B0F1A",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/fundamentals-chart?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&boxShadow=true&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/fundamentals-chart?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&boxShadow=false&textColor=E5E7EB&backgroundColor=0B0F1A&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -135,19 +133,18 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="240"
+                height="260"
                 style={{
-                  background: "#FFFFFF",
-                  padding: "10px",
+                  background: "#0B0F1A",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/fundamentals-table?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&sortMethod=companies&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/fundamentals-table?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&sortMethod=companies&boxShadow=false&textColor=E5E7EB&backgroundColor=0B0F1A&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -162,22 +159,21 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="280"
+                height="300"
                 style={{
-                  background: "#FFFFFF",
-                  padding: "10px",
+                  background: "#0B0F1A",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=false&textColor=E5E7EB&backgroundColor=0B0F1A&fontFamily=Nunito&`}
               />
             </div>
-          </CardContent>
+          </CardContent}
         </Card>
 
         {/* Press releases */}
@@ -189,19 +185,18 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="520"
                 style={{
-                  background: "#FFFFFF",
-                  padding: "10px",
+                  background: "#0B0F1A",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/press-releases?symbol=${symbol}&limit=3&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/press-releases?symbol=${symbol}&limit=3&boxShadow=false&textColor=E5E7EB&backgroundColor=0B0F1A&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
