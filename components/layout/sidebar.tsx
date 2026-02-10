@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useMemo } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { motion } from "framer-motion"
 import {
@@ -8,8 +8,6 @@ import {
   LineChart,
   Newspaper,
   Star,
-  Briefcase,
-  Settings,
   X,
   TrendingUp,
   TrendingDown,
@@ -26,6 +24,35 @@ import {
 } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket-context"
 
+// Define top stocks with company names - OUTSIDE component to avoid recreation
+const TOP_STOCKS_CONFIG = [
+  { symbol: "AAPL", name: "Apple Inc." },
+  { symbol: "MSFT", name: "Microsoft Corp." },
+  { symbol: "NVDA", name: "NVIDIA Corp." },
+  { symbol: "AMZN", name: "Amazon.com Inc." },
+  { symbol: "GOOGL", name: "Alphabet Inc." },
+  { symbol: "META", name: "Meta Platforms Inc." },
+  { symbol: "BRK.B", name: "Berkshire Hathaway" },
+  { symbol: "TSLA", name: "Tesla Inc." },
+  { symbol: "AVGO", name: "Broadcom Inc." },
+  { symbol: "LLY", name: "Eli Lilly & Co." },
+  { symbol: "WMT", name: "Walmart Inc." },
+  { symbol: "JPM", name: "JPMorgan Chase" },
+  { symbol: "V", name: "Visa Inc." },
+  { symbol: "MA", name: "Mastercard Inc." },
+  { symbol: "NFLX", name: "Netflix Inc." },
+  { symbol: "XOM", name: "Exxon Mobil" },
+  { symbol: "COST", name: "Costco Wholesale" },
+  { symbol: "ORCL", name: "Oracle Corp." },
+  { symbol: "PG", name: "Procter & Gamble" },
+  { symbol: "JNJ", name: "Johnson & Johnson" },
+  { symbol: "UNH", name: "UnitedHealth Group" },
+  { symbol: "HD", name: "Home Depot Inc." },
+  { symbol: "ABBV", name: "AbbVie Inc." },
+  { symbol: "KO", name: "Coca-Cola Co." },
+  { symbol: "CRM", name: "Salesforce Inc." },
+] as const
+
 interface SidebarProps {
   onClose: () => void
 }
@@ -34,48 +61,20 @@ export default function Sidebar({ onClose }: SidebarProps) {
   const location = useLocation()
   const { stockPrices } = useWebSocket()
 
-  // Define top stocks with company names
-  const topStocksConfig = [
-    { symbol: "AAPL", name: "Apple Inc." },
-    { symbol: "MSFT", name: "Microsoft Corp." },
-    { symbol: "NVDA", name: "NVIDIA Corp." },
-    { symbol: "AMZN", name: "Amazon.com Inc." },
-    { symbol: "GOOGL", name: "Alphabet Inc." },
-    { symbol: "META", name: "Meta Platforms Inc." },
-    { symbol: "BRK.B", name: "Berkshire Hathaway" },
-    { symbol: "TSLA", name: "Tesla Inc." },
-    { symbol: "AVGO", name: "Broadcom Inc." },
-    { symbol: "LLY", name: "Eli Lilly & Co." },
-    { symbol: "WMT", name: "Walmart Inc." },
-    { symbol: "JPM", name: "JPMorgan Chase" },
-    { symbol: "V", name: "Visa Inc." },
-    { symbol: "MA", name: "Mastercard Inc." },
-    { symbol: "NFLX", name: "Netflix Inc." },
-    { symbol: "XOM", name: "Exxon Mobil" },
-    { symbol: "COST", name: "Costco Wholesale" },
-    { symbol: "ORCL", name: "Oracle Corp." },
-    { symbol: "PG", name: "Procter & Gamble" },
-    { symbol: "JNJ", name: "Johnson & Johnson" },
-    { symbol: "UNH", name: "UnitedHealth Group" },
-    { symbol: "HD", name: "Home Depot Inc." },
-    { symbol: "ABBV", name: "AbbVie Inc." },
-    { symbol: "KO", name: "Coca-Cola Co." },
-    { symbol: "CRM", name: "Salesforce Inc." },
-  ]
-
   // Get real-time stock data with fallback to mock data
+  // Only depends on stockPrices since TOP_STOCKS_CONFIG is constant
   const topStocks = useMemo(() => {
-    return topStocksConfig.map(stock => {
+    return TOP_STOCKS_CONFIG.map(stock => {
       const realTimeData = stockPrices[stock.symbol]
       return {
         symbol: stock.symbol,
         name: stock.name,
-        change: realTimeData?.changePercent || ((Math.random() - 0.5) * 10), // fallback to random
-        price: realTimeData?.price || (50 + Math.random() * 450),
-        isRealTime: !!realTimeData
+        change: realTimeData?.changePercent ?? ((Math.random() - 0.5) * 10), // fallback to random
+        price: realTimeData?.price ?? (50 + Math.random() * 450),
+        isRealTime: !!realTimeData?.price
       }
     })
-  }, [stockPrices, topStocksConfig])
+  }, [stockPrices])
 
   const navItems = [
     { name: "Home", path: "/", icon: Home },
