@@ -5,8 +5,20 @@ const path = require('path');
 // Ensure dotenv is loaded (safeguard if this module is required early)
 require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
+// Singleton instance - ensures only ONE WebSocket connection per API key
+let instance = null;
+
 class WebSocketService {
   constructor() {
+    // Singleton pattern - return existing instance if already created
+    if (instance) {
+      console.log('📡 Returning existing WebSocketService singleton');
+      return instance;
+    }
+    
+    console.log('📡 Creating new WebSocketService singleton');
+    instance = this;
+    
     this.ws = null;
     this.isConnected = false;
     this.subscribers = new Map(); // Map of symbol -> callback functions
