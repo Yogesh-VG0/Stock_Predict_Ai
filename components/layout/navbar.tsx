@@ -6,6 +6,7 @@ import { getMarketStatus, MarketStatus } from "@/lib/api"
 import NotificationWidget from "@/components/market/NotificationWidget"
 import SearchWidget from "@/components/market/SearchWidget"
 import { useSidebar } from "@/components/ui/sidebar"
+import { useIsMobile } from "@/hooks/use-mobile"
 
 // Helper functions
 function getSessionLabel(session: string | null) {
@@ -88,6 +89,7 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
   const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null)
   const [fallbackStatus, setFallbackStatus] = useState<string>("Market Closed")
   const { toggleSidebar: toggleSidebarContext } = useSidebar()
+  const isMobile = useIsMobile()
 
   useEffect(() => {
     // Set initial values on client only
@@ -128,10 +130,13 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
         <div className="flex items-center gap-4">
           <button
             onClick={() => {
-              // Keep existing desktop behavior
-              toggleSidebar()
-              // Also toggle Shadcn sidebar context so mobile sheet opens/closes
-              toggleSidebarContext()
+              if (isMobile) {
+                // Mobile: let Shadcn sheet handle sidebar state
+                toggleSidebarContext()
+              } else {
+                // Desktop: keep existing animated behavior
+                toggleSidebar()
+              }
             }}
             className="p-2 rounded-md hover:bg-zinc-800 transition-colors"
           >

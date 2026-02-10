@@ -40,19 +40,29 @@ export default function Layout({ children }: LayoutProps) {
       <div className="flex h-screen w-full bg-black text-white overflow-hidden">
         <TradingViewScriptLoader />
 
-        <AnimatePresence>
-          {sidebarOpen && (
-            <motion.div
-              initial={{ x: -300 }}
-              animate={{ x: 0 }}
-              exit={{ x: -300 }}
-              transition={{ duration: 0.3, ease: "easeInOut" }}
-              className="fixed md:relative z-30"
-            >
-              <Sidebar onClose={() => setSidebarOpen(false)} />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {/* Desktop sidebar: animated slide-in/out */}
+        {!isMobile && (
+          <AnimatePresence>
+            {sidebarOpen && (
+              <motion.div
+                initial={{ x: -300 }}
+                animate={{ x: 0 }}
+                exit={{ x: -300 }}
+                transition={{ duration: 0.3, ease: "easeInOut" }}
+                className="fixed md:relative z-30"
+              >
+                <Sidebar onClose={() => setSidebarOpen(false)} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        )}
+
+        {/* Mobile sidebar: always mounted, Shadcn sheet handles open/close */}
+        {isMobile && (
+          <div className="z-30 md:hidden">
+            <Sidebar onClose={() => setSidebarOpen(false)} />
+          </div>
+        )}
 
         <div className="flex flex-col flex-1 h-screen overflow-hidden">
           <div className="sticky top-0 z-20">
