@@ -48,7 +48,7 @@ export default function NotificationWidget() {
       const data = await response.json()
       
       if (data.success && data.notifications) {
-        const newNotifications: Notification[] = data.notifications.map((n: ApiNotification) => ({
+        const fetchedNotifications: Notification[] = data.notifications.map((n: ApiNotification) => ({
           id: n.id,
           type: n.type as Notification['type'],
           title: n.title,
@@ -57,24 +57,27 @@ export default function NotificationWidget() {
           symbol: n.symbol,
           read: readNotificationIds.current.has(n.id)
         }))
-        
-        if (isInitial) {
-          setNotifications(newNotifications)
-        } else {
-          // Merge new notifications with existing, avoiding duplicates
-          setNotifications(prev => {
+
+        setNotifications(prev => {
+          let merged: Notification[]
+
+          if (isInitial) {
+            // On initial load just use fetched notifications
+            merged = fetchedNotifications
+          } else {
+            // Merge new notifications with existing, avoiding duplicates
             const existingIds = new Set(prev.map(n => n.id))
-            const uniqueNew = newNotifications.filter(n => !existingIds.has(n.id))
-            return [...uniqueNew, ...prev].slice(0, 20) // Keep max 20
-          })
-        }
-        
-        // Calculate unread count
-        const unread = data.notifications.filter(
-          (n: ApiNotification) => !readNotificationIds.current.has(n.id)
-        ).length
-        setUnreadCount(isInitial ? unread : prev => prev + unread)
-        
+            const uniqueNew = fetchedNotifications.filter(n => !existingIds.has(n.id))
+            merged = [...uniqueNew, ...prev].slice(0, 20) // Keep max 20
+          }
+
+          // Recalculate unread count from the merged list so it can't drift
+          const unread = merged.filter(n => !n.read).length
+          setUnreadCount(unread)
+
+          return merged
+        })
+
         setLastFetch(new Date().toISOString())
       }
     } catch (error) {

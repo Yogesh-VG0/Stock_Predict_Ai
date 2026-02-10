@@ -292,7 +292,8 @@ export default function WatchlistPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header - stack on mobile, row on larger screens */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <motion.h1
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -339,7 +340,7 @@ export default function WatchlistPage() {
           exit={{ opacity: 0, height: 0 }}
           className="bg-zinc-900 rounded-lg p-4 border border-zinc-800"
         >
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <input
               type="text"
               placeholder="Enter stock symbol (e.g., AAPL)"
@@ -470,7 +471,7 @@ export default function WatchlistPage() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
-                  className="bg-zinc-900 rounded-md border border-zinc-800 p-3 flex items-center justify-between group hover:border-zinc-700 transition-colors"
+                  className="bg-zinc-900 rounded-md border border-zinc-800 p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between group hover:border-zinc-700 transition-colors"
                 >
                   <div className="flex items-center gap-3">
                     <div className="cursor-move opacity-0 group-hover:opacity-100 transition-opacity">
@@ -491,7 +492,7 @@ export default function WatchlistPage() {
                     </div>
                   </div>
 
-                    <div className="flex items-center gap-6">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end sm:gap-6 w-full sm:w-auto">
                     <Sparkline
                       data={stock.sparklineData}
                       height={30}
