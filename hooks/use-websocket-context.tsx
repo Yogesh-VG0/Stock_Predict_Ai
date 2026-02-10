@@ -53,8 +53,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const lastFetchRef = useRef<number>(0)
   
   const CACHE_DURATION = 60 * 1000 // 1 minute cache
-  const POLL_INTERVAL = 2000 // Poll every 2 seconds
-  const MIN_FETCH_INTERVAL = 1000 // Minimum 1 second between API calls
+  const POLL_INTERVAL = 5000 // Poll every 5 seconds (reduced to avoid rate limits)
+  const MIN_FETCH_INTERVAL = 2000 // Minimum 2 seconds between API calls
 
   // Initialize with realistic mock data based on actual stock price ranges
   const initializeMockData = useCallback(() => {
@@ -316,8 +316,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
 
   // Initialize on mount - immediately start connecting and fetching data
   useEffect(() => {
-    // Start with realistic mock data immediately
-    initializeMockData()
+    // Start with EMPTY data to show loading state - don't use mock data initially
+    // setStockPrices({}) - already empty by default
     
     // Auto-subscribe to all tracked stocks immediately
     setSubscribedStocks(new Set(ALL_TRACKED_STOCKS))
@@ -336,10 +336,34 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
           await subscribeToStocks(ALL_TRACKED_STOCKS)
           console.log('✅ WebSocket connected and subscribed to all stocks')
         } else {
-          console.log('⚠️ WebSocket not available, using polling with mock data')
+          console.log('⚠️ WebSocket not available, using polling')
+        }
+        
+        // Only use mock data if we couldn't get real data after timeout
+        if (!hasRealData) {
+          // Wait a bit more before falling back to mock
+          setTimeout(() => {
+            setStockPrices(prev => {
+              // Only initialize mock if we still have no real data
+              if (Object.keys(prev).length === 0) {
+                console.log('⚠️ Using mock data - real API unavailable')
+                initializeMockData()
+              }
+              return prev
+            })
+          }, 5000) // Wait 5 seconds before fallback
         }
       } catch (error) {
         console.warn('Error during initial connection:', error)
+        // Fallback to mock data after error
+        setTimeout(() => {
+          setStockPrices(prev => {
+            if (Object.keys(prev).length === 0) {
+              initializeMockData()
+            }
+            return prev
+          })
+        }, 3000)
       }
     }
     

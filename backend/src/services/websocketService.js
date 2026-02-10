@@ -57,6 +57,10 @@ class WebSocketService {
     // Price baseline tracking for alerts
     this.priceBaselines = new Map(); // Map of symbol -> { baselinePrice, lastCheckedPrice }
     
+    // Price cache to reduce API calls (30 second TTL)
+    this.priceCache = new Map(); // Map of symbol -> { price, expiry }
+    this.CACHE_TTL = 30000; // 30 seconds cache
+    
     // Track if API key is valid
     this.isApiKeyValid = !!this.finnhubToken && this.finnhubToken !== 'undefined' && this.finnhubToken !== 'your_finnhub_api_key_here';
     
@@ -269,6 +273,9 @@ class WebSocketService {
         volumeInfo.lastUpdate = Date.now();
         volumeInfo.tradeCount += 1;
         
+        // Update price cache with live WebSocket data
+        this.updatePriceFromTrade(symbol, trade.p);
+        
         // Check for price alerts (non-blocking)
         this.checkPriceAlertForSymbol(symbol, trade.p);
         
@@ -427,12 +434,25 @@ class WebSocketService {
     console.log('WebSocket service disconnected');
   }
 
-  // Get current price for a symbol (fallback to REST API)
+  // Get current price for a symbol (with caching to reduce API calls)
   async getCurrentPrice(symbol) {
+    const now = Date.now();
+    
+    // Check cache first
+    const cached = this.priceCache.get(symbol);
+    if (cached && now < cached.expiry) {
+      return cached.data;
+    }
+    
     // Don't attempt API call if key is missing/invalid
     if (!this.isApiKeyValid) {
       console.warn(`⚠️ Skipping Finnhub API call for ${symbol} - API key not configured`);
-      return null;
+      return cached?.data || null; // Return stale cache if available
+    }
+    
+    // Check if we're rate limited
+    if (now < this.rateLimitedUntil) {
+      return cached?.data || null; // Return stale cache if available
     }
 
     try {
@@ -442,10 +462,10 @@ class WebSocketService {
       // Check for API error response
       if (response.data && response.data.error) {
         console.error(`Finnhub API error for ${symbol}:`, response.data.error);
-        return null;
+        return cached?.data || null;
       }
       
-      return {
+      const priceData = {
         symbol: symbol,
         price: response.data.c,
         change: response.data.d,
@@ -454,8 +474,16 @@ class WebSocketService {
         low: response.data.l,
         open: response.data.o,
         previousClose: response.data.pc,
-        timestamp: Date.now()
+        timestamp: now
       };
+      
+      // Cache the result
+      this.priceCache.set(symbol, {
+        data: priceData,
+        expiry: now + this.CACHE_TTL
+      });
+      
+      return priceData;
     } catch (error) {
       // More specific error logging
       if (error.response?.status === 401) {
@@ -463,34 +491,79 @@ class WebSocketService {
         this.isApiKeyValid = false; // Prevent future calls with invalid key
       } else if (error.response?.status === 429) {
         console.warn(`⚠️ Finnhub rate limit hit for ${symbol} - will retry after cooldown`);
+        this.rateLimitedUntil = now + 60000; // Wait 60 seconds
       } else {
         console.error(`Error fetching current price for ${symbol}:`, error.message);
       }
-      return null;
+      return cached?.data || null; // Return stale cache if available
     }
   }
 
-  // Get current prices for multiple symbols
+  // Get current prices for multiple symbols (with smart caching)
   async getCurrentPrices(symbols) {
     const prices = {};
+    const now = Date.now();
+    const symbolsToFetch = [];
     
+    // First, get all cached prices
     for (const symbol of symbols) {
+      const cached = this.priceCache.get(symbol);
+      if (cached && (now < cached.expiry || now < this.rateLimitedUntil)) {
+        // Use cached data (or stale cache if rate limited)
+        const volumeInfo = this.volumeData.get(symbol);
+        prices[symbol] = {
+          ...cached.data,
+          volume: volumeInfo?.totalVolume || 0,
+          tradeCount: volumeInfo?.tradeCount || 0
+        };
+      } else {
+        symbolsToFetch.push(symbol);
+      }
+    }
+    
+    // Limit how many symbols we fetch at once to avoid rate limits
+    // Finnhub free tier: 60 calls/minute, so fetch max 5 at a time
+    const maxFetch = Math.min(symbolsToFetch.length, 5);
+    const toFetch = symbolsToFetch.slice(0, maxFetch);
+    
+    // Fetch missing symbols (limited batch)
+    for (const symbol of toFetch) {
       const price = await this.getCurrentPrice(symbol);
       if (price) {
-        // Add volume data if available
         const volumeInfo = this.volumeData.get(symbol);
-        if (volumeInfo) {
-          price.volume = volumeInfo.totalVolume;
-          price.tradeCount = volumeInfo.tradeCount;
-        } else {
-          price.volume = 0;
-          price.tradeCount = 0;
-        }
-        prices[symbol] = price;
+        prices[symbol] = {
+          ...price,
+          volume: volumeInfo?.totalVolume || 0,
+          tradeCount: volumeInfo?.tradeCount || 0
+        };
       }
     }
     
     return prices;
+  }
+  
+  // Update cache from WebSocket trade data (called from handleMessage)
+  updatePriceFromTrade(symbol, price, changePercent) {
+    if (!symbol || !price) return;
+    
+    const now = Date.now();
+    const cached = this.priceCache.get(symbol);
+    
+    // Update or create cache entry with live data
+    this.priceCache.set(symbol, {
+      data: {
+        symbol,
+        price,
+        change: cached?.data?.change || 0,
+        changePercent: changePercent || cached?.data?.changePercent || 0,
+        high: Math.max(price, cached?.data?.high || 0),
+        low: cached?.data?.low ? Math.min(price, cached.data.low) : price,
+        open: cached?.data?.open || price,
+        previousClose: cached?.data?.previousClose || price,
+        timestamp: now
+      },
+      expiry: now + this.CACHE_TTL
+    });
   }
 
   // Get volume data for a symbol
