@@ -12,15 +12,19 @@ class WebSocketService {
     this.subscribers = new Map(); // Map of symbol -> callback functions
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 5;
-    this.reconnectDelay = 5000; // 5 seconds
+    this.baseReconnectDelay = 5000; // Start with 5 seconds
+    this.currentReconnectDelay = 5000;
     this.finnhubToken = process.env.FINNHUB_API_KEY;
     this.wsUrl = 'wss://ws.finnhub.io';
+    this.reconnectTimer = null;
+    this.isShuttingDown = false; // Track if server is shutting down
     
     // Rate limiting
     this.requestQueue = [];
     this.isProcessingQueue = false;
     this.lastRequestTime = 0;
     this.minRequestInterval = 1000; // 1 second between requests
+    this.rateLimitedUntil = 0; // Timestamp when rate limit expires
     
     // Volume tracking
     this.volumeData = new Map(); // Map of symbol -> volume data
@@ -34,6 +38,28 @@ class WebSocketService {
       console.error('   Add it to your .env file: FINNHUB_API_KEY=your_key_here');
     } else {
       console.log('✅ Finnhub API key configured');
+    }
+
+    // Handle graceful shutdown - don't reconnect if server is stopping
+    process.on('SIGTERM', () => {
+      console.log('📴 Received SIGTERM - stopping WebSocket reconnection');
+      this.isShuttingDown = true;
+      this.stopReconnecting();
+      this.disconnect();
+    });
+
+    process.on('SIGINT', () => {
+      console.log('📴 Received SIGINT - stopping WebSocket reconnection');
+      this.isShuttingDown = true;
+      this.stopReconnecting();
+      this.disconnect();
+    });
+  }
+
+  stopReconnecting() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
   }
 
@@ -82,9 +108,24 @@ class WebSocketService {
   }
 
   connect() {
+    // Don't connect if shutting down
+    if (this.isShuttingDown) {
+      console.log('📴 Server shutting down - skipping WebSocket connection');
+      return;
+    }
+
     if (!this.isApiKeyValid) {
       console.error('❌ Cannot connect to Finnhub WebSocket - API key missing or invalid');
       console.error('   Set FINNHUB_API_KEY in your .env file');
+      return;
+    }
+
+    // Check if we're rate limited
+    const now = Date.now();
+    if (now < this.rateLimitedUntil) {
+      const waitTime = Math.ceil((this.rateLimitedUntil - now) / 1000);
+      console.log(`⏳ Rate limited - waiting ${waitTime}s before connecting`);
+      this.reconnectTimer = setTimeout(() => this.connect(), this.rateLimitedUntil - now);
       return;
     }
 
@@ -95,6 +136,7 @@ class WebSocketService {
         console.log('✅ Connected to Finnhub WebSocket');
         this.isConnected = true;
         this.reconnectAttempts = 0;
+        this.currentReconnectDelay = this.baseReconnectDelay; // Reset delay on success
         
         // Subscribe to all symbols that have subscribers
         const symbols = Array.from(this.subscribers.keys());
@@ -113,32 +155,69 @@ class WebSocketService {
       });
 
       this.ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        // Check for rate limit (429) error
+        if (error.message && error.message.includes('429')) {
+          console.warn('⚠️ Finnhub rate limit hit (429) - backing off for 60 seconds');
+          this.rateLimitedUntil = Date.now() + 60000; // Wait 60 seconds
+          this.currentReconnectDelay = 60000; // Set next reconnect to 60s
+        } else {
+          console.error('WebSocket error:', error.message || error);
+        }
         this.isConnected = false;
       });
 
       this.ws.on('close', () => {
         console.log('WebSocket connection closed');
         this.isConnected = false;
-        this.scheduleReconnect();
+        // Only reconnect if not shutting down
+        if (!this.isShuttingDown) {
+          this.scheduleReconnect();
+        }
       });
 
     } catch (error) {
       console.error('Error creating WebSocket connection:', error);
-      this.scheduleReconnect();
+      if (!this.isShuttingDown) {
+        this.scheduleReconnect();
+      }
     }
   }
 
   scheduleReconnect() {
+    // Don't reconnect if shutting down
+    if (this.isShuttingDown) {
+      console.log('📴 Server shutting down - not scheduling reconnect');
+      return;
+    }
+
+    // Clear any existing timer
+    this.stopReconnecting();
+
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      console.log(`Scheduling WebSocket reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${this.reconnectDelay}ms`);
       
-      setTimeout(() => {
-        this.connect();
-      }, this.reconnectDelay);
+      // Exponential backoff: 5s, 10s, 20s, 40s, 60s (capped at 60s)
+      this.currentReconnectDelay = Math.min(
+        this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+        60000 // Max 60 seconds
+      );
+      
+      console.log(`⏳ Scheduling WebSocket reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${this.currentReconnectDelay / 1000}s`);
+      
+      this.reconnectTimer = setTimeout(() => {
+        if (!this.isShuttingDown) {
+          this.connect();
+        }
+      }, this.currentReconnectDelay);
     } else {
-      console.error('Max WebSocket reconnect attempts reached');
+      console.log('⚠️ Max WebSocket reconnect attempts reached - will retry on next API request');
+      // Reset attempts after a longer cooldown so it can try again later
+      setTimeout(() => {
+        if (!this.isShuttingDown) {
+          this.reconnectAttempts = 0;
+          console.log('🔄 Resetting WebSocket reconnect attempts after cooldown');
+        }
+      }, 300000); // Reset after 5 minutes
     }
   }
 
