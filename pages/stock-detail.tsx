@@ -375,7 +375,7 @@ export default function StockDetail({}: StockDetailProps) {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 md:space-y-6">
       {/* Search Bar */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}
@@ -466,7 +466,7 @@ export default function StockDetail({}: StockDetailProps) {
       </motion.div>
 
       {/* Main Content Grid - Top Row (Company, Predictions, News) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column - Company Overview */}
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
           <Card className="h-fit">
@@ -743,6 +743,18 @@ export default function StockDetail({}: StockDetailProps) {
             </CardContent>
           </Card>
         </motion.div>
+      </div>
+
+      {/* Advanced Technical & AI Analysis Header */}
+      <div className="flex items-center justify-between pt-2">
+        <h2 className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
+          <BarChart3 className="h-4 w-4 text-emerald-500" />
+          Advanced Technical & AI Analysis
+        </h2>
+        <div className="hidden sm:flex items-center gap-2 text-xs text-zinc-500">
+          <Zap className="h-3 w-3 text-amber-400" />
+          <span>Real-time data • AI insights</span>
+        </div>
       </div>
 
       {/* Technical Indicators & AI Analysis Section */}
