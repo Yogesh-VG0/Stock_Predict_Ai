@@ -86,7 +86,7 @@ export default function WatchlistPage() {
       setIsLoading(true)
       setError(null)
       
-      const response = await fetch('http://localhost:5000/api/watchlist/default')
+      const response = await fetch('/api/watchlist/default')
       const data: WatchlistData = await response.json()
       
       if (data.success) {
@@ -132,7 +132,7 @@ export default function WatchlistPage() {
   // Subscribe to real-time updates
   const subscribeToUpdates = useCallback(async (symbols: string[]) => {
     try {
-      const response = await fetch('http://localhost:5000/api/watchlist/subscribe', {
+      const response = await fetch('/api/watchlist/subscribe', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -152,7 +152,7 @@ export default function WatchlistPage() {
   // Add stock to watchlist
   const addToWatchlist = async (symbol: string) => {
     try {
-      const response = await fetch('http://localhost:5000/api/watchlist/default/add', {
+      const response = await fetch('/api/watchlist/default/add', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -179,7 +179,7 @@ export default function WatchlistPage() {
   // Remove stock from watchlist
   const removeFromWatchlist = async (symbol: string) => {
     try {
-      const response = await fetch(`http://localhost:5000/api/watchlist/default/${symbol}`, {
+      const response = await fetch(`/api/watchlist/default/${symbol}`, {
         method: 'DELETE'
       })
       
