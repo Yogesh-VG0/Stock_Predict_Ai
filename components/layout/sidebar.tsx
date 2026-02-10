@@ -21,6 +21,7 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { useWebSocket } from "@/hooks/use-websocket-context"
 
@@ -60,6 +61,7 @@ interface SidebarProps {
 export default function Sidebar({ onClose }: SidebarProps) {
   const location = useLocation()
   const { stockPrices } = useWebSocket()
+  const { isMobile, setOpenMobile } = useSidebar()
 
   // Get real-time stock data - show loading state if no data yet
   // Only depends on stockPrices since TOP_STOCKS_CONFIG is constant
@@ -83,6 +85,16 @@ export default function Sidebar({ onClose }: SidebarProps) {
     { name: "Watchlist", path: "/watchlist", icon: Star },
   ]
 
+  const handleNavigate = () => {
+    if (isMobile) {
+      // Close mobile sheet sidebar
+      setOpenMobile(false)
+    } else {
+      // Close animated desktop sidebar
+      onClose()
+    }
+  }
+
   return (
     <ShadcnSidebar className="h-screen w-64 bg-black border-r border-zinc-800 overflow-hidden">
       <SidebarHeader className="p-4 flex items-center justify-between">
@@ -92,9 +104,6 @@ export default function Sidebar({ onClose }: SidebarProps) {
           </motion.div>
           <span className="font-bold text-xl">StockPredict AI</span>
         </Link>
-        <button onClick={onClose} className="md:hidden p-1 rounded-md hover:bg-zinc-800">
-          <X className="h-5 w-5" />
-        </button>
       </SidebarHeader>
 
       <div className="px-4 py-2">
@@ -113,7 +122,11 @@ export default function Sidebar({ onClose }: SidebarProps) {
           {navItems.map((item) => (
             <SidebarMenuItem key={item.path}>
               <SidebarMenuButton asChild isActive={location.pathname === item.path}>
-                <Link to={item.path} className="flex items-center gap-3">
+                <Link
+                  to={item.path}
+                  className="flex items-center gap-3"
+                  onClick={handleNavigate}
+                >
                   <item.icon className="h-5 w-5" />
                   <span>{item.name}</span>
                 </Link>
@@ -132,6 +145,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
                 key={stock.symbol}
                 to={`/stocks/${stock.symbol}`}
                 className="flex items-center justify-between p-2 rounded-md hover:bg-zinc-900 transition-colors"
+                onClick={handleNavigate}
               >
                 <div className="flex items-center gap-2">
                   <div className={cn(
