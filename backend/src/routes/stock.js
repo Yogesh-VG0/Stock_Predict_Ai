@@ -8,7 +8,8 @@ const {
   generateAIExplanation,
   getBatchExplanationStatus,
   getAvailableStocksWithExplanations,
-  getPredictions
+  getPredictions,
+  getTechnicalIndicators
 } = require('../controllers/stockController');
 
 // Get stock details (company info + basic AI analysis)
@@ -28,6 +29,9 @@ router.post('/:symbol/explanation/generate', generateAIExplanation);
 
 // Get real ML predictions
 router.get('/:symbol/predictions', getPredictions);
+
+// Get technical indicators (RSI, MACD, SMA, EMA)
+router.get('/:symbol/indicators', getTechnicalIndicators);
 
 // Get batch explanation status
 router.get('/batch/status', getBatchExplanationStatus);

@@ -30,6 +30,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 // Lazy load heavy components
 const TradingViewAdvancedChart = lazy(() => import("@/components/tradingview/trading-view-advanced-chart"))
 const AIExplanationWidget = lazy(() => import("@/components/market/AIExplanationWidget"))
+const TechnicalIndicators = lazy(() => import("@/components/market/TechnicalIndicators"))
 
 // Chart loading skeleton
 const ChartSkeleton = memo(() => (
@@ -744,29 +745,54 @@ export default function StockDetail({}: StockDetailProps) {
         </motion.div>
       </div>
 
-      {/* Full-Width AI Analysis Section */}
-      {predictionData && (
+      {/* Technical Indicators & AI Analysis Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Technical Indicators - Left side */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.6 }}
+          className="lg:col-span-1"
         >
           <Suspense fallback={
             <Card className="p-6">
               <div className="animate-pulse space-y-4">
-                <div className="h-6 bg-zinc-800 rounded w-1/3"></div>
-                <div className="h-4 bg-zinc-800 rounded w-full"></div>
-                <div className="h-4 bg-zinc-800 rounded w-2/3"></div>
+                <div className="h-6 bg-zinc-800 rounded w-1/2"></div>
+                <div className="h-20 bg-zinc-800 rounded"></div>
+                <div className="h-20 bg-zinc-800 rounded"></div>
+                <div className="h-20 bg-zinc-800 rounded"></div>
               </div>
             </Card>
           }>
-            <AIExplanationWidget 
-              ticker={selectedStock} 
-              currentPrice={currentPrice}
-            />
+            <TechnicalIndicators symbol={selectedStock} />
           </Suspense>
         </motion.div>
-      )}
+
+        {/* AI Analysis - Right side (2 columns) */}
+        {predictionData && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.7 }}
+            className="lg:col-span-2"
+          >
+            <Suspense fallback={
+              <Card className="p-6">
+                <div className="animate-pulse space-y-4">
+                  <div className="h-6 bg-zinc-800 rounded w-1/3"></div>
+                  <div className="h-4 bg-zinc-800 rounded w-full"></div>
+                  <div className="h-4 bg-zinc-800 rounded w-2/3"></div>
+                </div>
+              </Card>
+            }>
+              <AIExplanationWidget 
+                ticker={selectedStock} 
+                currentPrice={currentPrice}
+              />
+            </Suspense>
+          </motion.div>
+        )}
+      </div>
     </div>
   )
 }

@@ -1,5 +1,6 @@
 const axios = require('axios');
 const mongoConnection = require('../config/mongodb');
+const massiveService = require('../services/massiveService');
 
 // Company overview data mapping for all 25 tickers
 const COMPANY_DATA = {
@@ -756,6 +757,30 @@ const getPredictions = async (req, res) => {
   }
 };
 
+// Get technical indicators for a stock
+const getTechnicalIndicators = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const upperSymbol = symbol.toUpperCase();
+
+    console.log(`📊 Fetching technical indicators for ${upperSymbol}`);
+
+    const indicators = await massiveService.getAllIndicators(upperSymbol);
+
+    res.json({
+      success: true,
+      data: indicators
+    });
+  } catch (error) {
+    console.error(`Error fetching technical indicators for ${req.params.symbol}:`, error.message);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch technical indicators',
+      message: error.message
+    });
+  }
+};
+
 module.exports = {
   getStockDetails,
   getAIAnalysis,
@@ -764,5 +789,6 @@ module.exports = {
   generateAIExplanation,
   getBatchExplanationStatus,
   getAvailableStocksWithExplanations,
-  getPredictions
+  getPredictions,
+  getTechnicalIndicators
 }; 
