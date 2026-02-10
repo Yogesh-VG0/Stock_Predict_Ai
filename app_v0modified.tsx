@@ -9,6 +9,7 @@ import StockDetail from "@/pages/stock-detail"
 import NewsPage from "@/pages/news"
 import WatchlistPage from "@/pages/watchlist"
 import PredictionsPage from "@/pages/predictions"
+import FundamentalsPage from "@/pages/fundamentals"
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/news" element={<NewsPage />} />
           <Route path="/watchlist" element={<WatchlistPage />} />
           <Route path="/predictions" element={<PredictionsPage />} />
+          <Route path="/fundamentals" element={<FundamentalsPage />} />
         </Routes>
       </Layout>
     </Router>

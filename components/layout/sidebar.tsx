@@ -83,6 +83,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
     { name: "Stock Analysis", path: "/stocks/AAPL", icon: LineChart },
     { name: "News", path: "/news", icon: Newspaper },
     { name: "Watchlist", path: "/watchlist", icon: Star },
+    { name: "Fundamentals", path: "/fundamentals", icon: LineChart },
   ]
 
   const handleNavigate = () => {
