@@ -150,8 +150,14 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
                 {displayStatus}
               </span>
 
-              {marketStatus && marketStatus.session && marketStatus.next_close_time && 
-               (marketStatus.session === 'pre-market' || marketStatus.session === 'regular' || marketStatus.session === 'after-hours') && (
+              {/* Pre-market: show time until regular market opens */}
+              {marketStatus && marketStatus.session === 'pre-market' && marketStatus.next_open_time && (
+                <span className="text-xs text-zinc-400 ml-1">
+                  {getTimeUntilOpen(marketStatus.next_open_time)} until open
+                </span>
+              )}
+              {/* Regular/After-hours: show time until close */}
+              {marketStatus && (marketStatus.session === 'regular' || marketStatus.session === 'after-hours') && marketStatus.next_close_time && (
                 <span className="text-xs text-zinc-400 ml-1">
                   {getTimeUntilClose(marketStatus.next_close_time)} until close
                 </span>
