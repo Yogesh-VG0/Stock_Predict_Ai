@@ -466,17 +466,22 @@ export default function StockDetail({}: StockDetailProps) {
       </motion.div>
 
       {/* Main Content Grid - Top Row (Company, Predictions, News) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
         {/* Left Column - Company Overview */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-          <Card className="h-fit">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.3 }}
+          className="h-full"
+        >
+          <Card className="h-full flex flex-col">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Info className="h-5 w-5 text-blue-500" />
                 Company Overview
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className="space-y-4 flex-1">
               <p className="text-sm text-zinc-300 leading-relaxed">{stockData.description}</p>
 
               <div className="grid grid-cols-1 gap-4 pt-2">
@@ -521,9 +526,10 @@ export default function StockDetail({}: StockDetailProps) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
+          className="h-full"
         >
           {predictionData && (
-            <Card>
+            <Card className="h-full flex flex-col">
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2">
                   <TrendingUp className="h-5 w-5 text-emerald-500" />
@@ -535,7 +541,7 @@ export default function StockDetail({}: StockDetailProps) {
                   )}
                 </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="flex-1">
                 <div className="grid grid-cols-1 gap-4">
                   {/* 1 Day Prediction */}
                   {(() => {
@@ -660,16 +666,21 @@ export default function StockDetail({}: StockDetailProps) {
         </motion.div>
 
         {/* Right Column - News */}
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}>
-          <Card className="h-fit">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.5 }}
+          className="h-full"
+        >
+          <Card className="h-full flex flex-col">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Newspaper className="h-5 w-5 text-amber-500" />
                 Latest News & Sentiment
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+            <CardContent className="flex-1 flex flex-col">
+              <div className="space-y-3 flex-1 overflow-y-auto pr-2">
                 {stockNews.map((item: any, index: number) => {
                   const sentiment = item.sentiment || "neutral"
                   
@@ -703,7 +714,7 @@ export default function StockDetail({}: StockDetailProps) {
               </div>
 
               {/* Sentiment Analysis */}
-              <div className="mt-4 pt-4 border-t border-zinc-800">
+              <div className="mt-3 pt-3 border-t border-zinc-800">
                 <h3 className="text-sm font-medium mb-3">News Sentiment</h3>
 
                 {(() => {
@@ -751,10 +762,6 @@ export default function StockDetail({}: StockDetailProps) {
           <BarChart3 className="h-4 w-4 text-emerald-500" />
           Advanced Technical & AI Analysis
         </h2>
-        <div className="hidden sm:flex items-center gap-2 text-xs text-zinc-500">
-          <Zap className="h-3 w-3 text-amber-400" />
-          <span>Real-time data • AI insights</span>
-        </div>
       </div>
 
       {/* Technical Indicators & AI Analysis Section */}
