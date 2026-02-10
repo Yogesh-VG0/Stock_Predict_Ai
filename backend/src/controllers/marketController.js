@@ -1,4 +1,5 @@
 const MarketService = require('../services/marketService');
+const notificationService = require('../services/notificationService');
 
 const getMarketStatus = async (req, res) => {
   try {
@@ -13,6 +14,8 @@ const getFearGreedIndex = async (req, res) => {
   try {
     const data = await MarketService.fetchFearGreedIndex();
     if (data) {
+      // Check for Fear & Greed notifications (non-blocking)
+      notificationService.checkFearGreedNotification(data).catch(() => {});
       res.json(data);
     } else {
       // Return fallback data if API fails

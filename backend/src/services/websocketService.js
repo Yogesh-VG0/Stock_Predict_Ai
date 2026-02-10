@@ -5,6 +5,19 @@ const path = require('path');
 // Ensure dotenv is loaded (safeguard if this module is required early)
 require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
+// Import notification service (lazy loaded to avoid circular dependency)
+let notificationService = null;
+const getNotificationService = () => {
+  if (!notificationService) {
+    try {
+      notificationService = require('./notificationService');
+    } catch (e) {
+      // Notification service not available
+    }
+  }
+  return notificationService;
+};
+
 // Singleton instance - ensures only ONE WebSocket connection per API key
 let instance = null;
 
@@ -40,6 +53,9 @@ class WebSocketService {
     
     // Volume tracking
     this.volumeData = new Map(); // Map of symbol -> volume data
+    
+    // Price baseline tracking for alerts
+    this.priceBaselines = new Map(); // Map of symbol -> { baselinePrice, lastCheckedPrice }
     
     // Track if API key is valid
     this.isApiKeyValid = !!this.finnhubToken && this.finnhubToken !== 'undefined' && this.finnhubToken !== 'your_finnhub_api_key_here';
@@ -253,6 +269,9 @@ class WebSocketService {
         volumeInfo.lastUpdate = Date.now();
         volumeInfo.tradeCount += 1;
         
+        // Check for price alerts (non-blocking)
+        this.checkPriceAlertForSymbol(symbol, trade.p);
+        
         if (callbacks) {
           const tradeData = {
             symbol: trade.s,
@@ -273,6 +292,41 @@ class WebSocketService {
           });
         }
       });
+    }
+  }
+
+  // Check for significant price movements and create notifications
+  checkPriceAlertForSymbol(symbol, currentPrice) {
+    if (!currentPrice || !symbol) return;
+    
+    const ns = getNotificationService();
+    if (!ns) return;
+    
+    // Initialize baseline if not exists
+    if (!this.priceBaselines.has(symbol)) {
+      this.priceBaselines.set(symbol, {
+        baselinePrice: currentPrice,
+        lastCheckedPrice: currentPrice,
+        lastAlertTime: 0
+      });
+      return;
+    }
+    
+    const baseline = this.priceBaselines.get(symbol);
+    const changePercent = ((currentPrice - baseline.baselinePrice) / baseline.baselinePrice) * 100;
+    
+    // Only check every 100 price updates to avoid too much processing
+    if (Math.abs(currentPrice - baseline.lastCheckedPrice) < 0.01) return;
+    baseline.lastCheckedPrice = currentPrice;
+    
+    // Create notification for significant moves (>3%)
+    if (Math.abs(changePercent) >= 3) {
+      ns.checkPriceAlert(symbol, currentPrice, baseline.baselinePrice, changePercent)
+        .then(() => {
+          // Reset baseline after alert so we don't keep alerting
+          baseline.baselinePrice = currentPrice;
+        })
+        .catch(() => {});
     }
   }
 

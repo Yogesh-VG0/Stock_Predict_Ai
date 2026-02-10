@@ -7,10 +7,37 @@ const newsRoutes = require('./routes/newsRoutes');
 const marketRoutes = require('./routes/market');
 const stockRoutes = require('./routes/stock');
 const watchlistRoutes = require('./routes/watchlist');
+const notificationRoutes = require('./routes/notifications');
+const notificationService = require('./services/notificationService');
 
 // Note: dotenv is loaded in server.js before this module is required
 
 const app = express();
+
+// Start notification scheduler after a short delay (to ensure DB is connected)
+setTimeout(() => {
+  // Check for market session notifications every 5 minutes
+  setInterval(async () => {
+    try {
+      await notificationService.checkMarketSessionNotifications();
+    } catch (error) {
+      console.error('Notification check error:', error.message);
+    }
+  }, 5 * 60 * 1000); // Every 5 minutes
+  
+  // Cleanup old notifications every hour
+  setInterval(async () => {
+    try {
+      await notificationService.cleanupOldNotifications();
+    } catch (error) {
+      console.error('Notification cleanup error:', error.message);
+    }
+  }, 60 * 60 * 1000); // Every hour
+  
+  // Initial check on startup
+  notificationService.checkMarketSessionNotifications().catch(() => {});
+  console.log('📢 Notification service started');
+}, 5000);
 
 // MongoDB connection is now handled in server.js before app starts
 // This ensures the DB is connected before any requests are processed
@@ -33,6 +60,7 @@ app.use('/api/news', newsRoutes);
 app.use('/api/market', marketRoutes);
 app.use('/api/stock', stockRoutes);
 app.use('/api/watchlist', watchlistRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // V1 API routes for comprehensive features
 app.use('/api/v1/explain/:ticker/:date', (req, res, next) => {

@@ -11,6 +11,7 @@
     { "source": "/api/news/:path*", "destination": "https://present-mellie-stockpredict-986dc946.koyeb.app/api/news/:path*" },
     { "source": "/api/stock/:path*", "destination": "https://present-mellie-stockpredict-986dc946.koyeb.app/api/stock/:path*" },
     { "source": "/api/watchlist/:path*", "destination": "https://present-mellie-stockpredict-986dc946.koyeb.app/api/watchlist/:path*" },
-    { "source": "/api/market/:path*", "destination": "https://present-mellie-stockpredict-986dc946.koyeb.app/api/market/:path*" }
+    { "source": "/api/market/:path*", "destination": "https://present-mellie-stockpredict-986dc946.koyeb.app/api/market/:path*" },
+    { "source": "/api/notifications/:path*", "destination": "https://present-mellie-stockpredict-986dc946.koyeb.app/api/notifications/:path*" }
   ]
 }
