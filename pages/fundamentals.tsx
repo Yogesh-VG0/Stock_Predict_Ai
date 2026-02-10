@@ -30,6 +30,7 @@ const AVAILABLE_SYMBOLS = [
 
 export default function FundamentalsPage() {
   const [symbol, setSymbol] = useState("AAPL")
+  const [customSymbol, setCustomSymbol] = useState("")
 
   return (
     <div className="space-y-6">
@@ -51,22 +52,60 @@ export default function FundamentalsPage() {
         </div>
 
         {/* Symbol selector */}
-        <div className="flex items-center gap-2">
-          <label htmlFor="fundamentals-symbol" className="text-xs md:text-sm text-zinc-400">
-            Symbol
-          </label>
-          <select
-            id="fundamentals-symbol"
-            value={symbol}
-            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            className="bg-zinc-900 border border-zinc-700 text-xs md:text-sm rounded-md px-2 py-1 text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        <div className="flex flex-col items-start gap-2 md:items-end">
+          <form
+            className="flex w-full items-center gap-2 md:w-auto"
+            onSubmit={(e) => {
+              e.preventDefault()
+              const value = customSymbol.trim().toUpperCase()
+              if (!value) return
+              setSymbol(value)
+              setCustomSymbol("")
+            }}
           >
-            {AVAILABLE_SYMBOLS.map((s) => (
-              <option key={s} value={s}>
+            <div className="flex flex-col gap-1">
+              <label
+                htmlFor="fundamentals-symbol-input"
+                className="text-xs md:text-sm text-zinc-400"
+              >
+                Symbol for widgets
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="fundamentals-symbol-input"
+                  type="text"
+                  value={customSymbol}
+                  onChange={(e) => setCustomSymbol(e.target.value)}
+                  placeholder={symbol || "AAPL"}
+                  className="w-28 md:w-32 bg-zinc-900 border border-zinc-700 text-xs md:text-sm rounded-md px-2 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center rounded-md bg-emerald-500 px-3 py-1 text-xs font-medium text-black shadow hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-900"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
+          </form>
+
+          {/* Quick-pick popular symbols */}
+          <div className="mt-1 flex max-w-xs flex-wrap gap-1 justify-start md:justify-end">
+            {AVAILABLE_SYMBOLS.slice(0, 8).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSymbol(s)}
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                  symbol === s
+                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
+                    : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+                }`}
+              >
                 {s}
-              </option>
+              </button>
             ))}
-          </select>
+          </div>
         </div>
       </div>
 
