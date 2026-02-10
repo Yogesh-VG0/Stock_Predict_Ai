@@ -93,7 +93,7 @@ export default function FundamentalsPage() {
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/area-chart?symbol=${symbol}&selection=one_year&closeKey=close&boxShadow=true&graphColor=22c55e&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/area-chart?symbol=${symbol}&selection=one_year&closeKey=close&boxShadow=true&graphColor=22c55e&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -112,7 +112,7 @@ export default function FundamentalsPage() {
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="638"
+                height="700"
                 style={{
                   background: "#020617",
                   padding: "10px",
@@ -120,7 +120,7 @@ export default function FundamentalsPage() {
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/fundamentals-chart?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/fundamentals-chart?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&boxShadow=true&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -139,7 +139,7 @@ export default function FundamentalsPage() {
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="220"
+                height="260"
                 style={{
                   background: "#020617",
                   padding: "10px",
@@ -147,7 +147,7 @@ export default function FundamentalsPage() {
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/fundamentals-table?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&sortMethod=companies&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/fundamentals-table?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&sortMethod=companies&boxShadow=true&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -166,7 +166,7 @@ export default function FundamentalsPage() {
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="265"
+                height="300"
                 style={{
                   background: "#020617",
                   padding: "10px",
@@ -174,7 +174,7 @@ export default function FundamentalsPage() {
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=true&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -193,7 +193,7 @@ export default function FundamentalsPage() {
               <iframe
                 referrerPolicy="origin"
                 width="100%"
-                height="495"
+                height="520"
                 style={{
                   background: "#020617",
                   padding: "10px",
@@ -201,7 +201,7 @@ export default function FundamentalsPage() {
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/press-releases?symbol=${symbol}&limit=3&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/press-releases?symbol=${symbol}&limit=3&boxShadow=true&textColor=ffffff&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
