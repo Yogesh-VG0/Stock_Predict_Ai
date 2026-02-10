@@ -52,7 +52,8 @@ export default function HomePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-6">
+      {/* Page header - stack on mobile, row on desktop */}
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-6">
         <motion.h1 
           initial={{ opacity: 0, y: -10 }} 
           animate={{ opacity: 1, y: 0 }} 
@@ -60,7 +61,7 @@ export default function HomePage() {
         >
           Market Dashboard
         </motion.h1>
-        <div className="min-w-0 flex-shrink-0" style={{ width: "400px" }}>
+        <div className="w-full md:w-[400px] min-w-0 flex-shrink-0">
           <TradingHoursBar compact />
         </div>
       </div>

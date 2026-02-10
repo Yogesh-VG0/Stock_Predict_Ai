@@ -5,6 +5,7 @@ import { Menu, Clock, Moon, CircleDot } from "lucide-react"
 import { getMarketStatus, MarketStatus } from "@/lib/api"
 import NotificationWidget from "@/components/market/NotificationWidget"
 import SearchWidget from "@/components/market/SearchWidget"
+import { useSidebar } from "@/components/ui/sidebar"
 
 // Helper functions
 function getSessionLabel(session: string | null) {
@@ -86,6 +87,7 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null)
   const [fallbackStatus, setFallbackStatus] = useState<string>("Market Closed")
+  const { toggleSidebar: toggleSidebarContext } = useSidebar()
 
   useEffect(() => {
     // Set initial values on client only
@@ -124,7 +126,15 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
     <div className="bg-black border-b border-zinc-800 py-2 px-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
-          <button onClick={toggleSidebar} className="p-2 rounded-md hover:bg-zinc-800 transition-colors">
+          <button
+            onClick={() => {
+              // Keep existing desktop behavior
+              toggleSidebar()
+              // Also toggle Shadcn sidebar context so mobile sheet opens/closes
+              toggleSidebarContext()
+            }}
+            className="p-2 rounded-md hover:bg-zinc-800 transition-colors"
+          >
             <Menu className="h-5 w-5" />
           </button>
 
