@@ -1,30 +1,73 @@
 "use client"
 
+import { useState } from "react"
 import { motion } from "framer-motion"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { BarChart3, FileText, Newspaper, Layers } from "lucide-react"
 
+const AVAILABLE_SYMBOLS = [
+  "AAPL",
+  "MSFT",
+  "GOOGL",
+  "AMZN",
+  "TSLA",
+  "NVDA",
+  "META",
+  "NFLX",
+  "JPM",
+  "V",
+  "JNJ",
+  "WMT",
+  "PG",
+  "UNH",
+  "HD",
+  "MA",
+  "BAC",
+  "XOM",
+  "LLY",
+  "ABBV",
+]
+
 export default function FundamentalsPage() {
-  // For now we focus on AAPL as a deep-dive example.
-  // In the future this could be parameterized by symbol.
-  const symbol = "AAPL"
+  const [symbol, setSymbol] = useState("AAPL")
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <motion.h1
-          initial={{ opacity: 0, y: -10 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-2xl font-bold flex items-center gap-2"
-        >
-          <BarChart3 className="h-6 w-6 text-emerald-500" />
-          Fundamentals & Filings
-        </motion.h1>
-        <p className="text-xs md:text-sm text-zinc-400 max-w-xl">
-          Deep-dive into {symbol} using fundamentals, SEC filings, and press releases widgets powered by Jika.io.
-          This page is independent from the core AI and real-time views.
-        </p>
+        <div className="space-y-2">
+          <motion.h1
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="text-2xl font-bold flex items-center gap-2"
+          >
+            <BarChart3 className="h-6 w-6 text-emerald-500" />
+            Fundamentals & Filings
+          </motion.h1>
+          <p className="text-xs md:text-sm text-zinc-400 max-w-xl">
+            Deep-dive into a symbol using fundamentals, SEC filings, and press releases widgets powered by Jika.io.
+            This page is independent from the core AI and real-time views.
+          </p>
+        </div>
+
+        {/* Symbol selector */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="fundamentals-symbol" className="text-xs md:text-sm text-zinc-400">
+            Symbol
+          </label>
+          <select
+            id="fundamentals-symbol"
+            value={symbol}
+            onChange={(e) => setSymbol(e.target.value.toUpperCase())}
+            className="bg-zinc-900 border border-zinc-700 text-xs md:text-sm rounded-md px-2 py-1 text-zinc-100 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          >
+            {AVAILABLE_SYMBOLS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Grid of widgets */}
@@ -38,19 +81,19 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-[#020617]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="470"
                 style={{
-                  background: "#FFFFFF",
+                  background: "#020617",
                   padding: "10px",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/area-chart?symbol=${symbol}&selection=one_year&closeKey=close&boxShadow=true&graphColor=1652f0&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/area-chart?symbol=${symbol}&selection=one_year&closeKey=close&boxShadow=true&graphColor=22c55e&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -65,19 +108,19 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-[#020617]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="638"
                 style={{
-                  background: "#FFFFFF",
+                  background: "#020617",
                   padding: "10px",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/fundamentals-chart?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/fundamentals-chart?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -92,19 +135,19 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-[#020617]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="220"
                 style={{
-                  background: "#FFFFFF",
+                  background: "#020617",
                   padding: "10px",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/fundamentals-table?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&sortMethod=companies&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/fundamentals-table?symbols=${symbol}&keys=Revenue,Net Income&reportingPeriod=quarter&from=2021&to=2026&sortMethod=companies&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -119,19 +162,19 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-[#020617]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="265"
                 style={{
-                  background: "#FFFFFF",
+                  background: "#020617",
                   padding: "10px",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/sec-filings?symbol=${symbol}&limit=5&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
@@ -146,19 +189,19 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white">
+            <div className="rounded-lg overflow-hidden bg-[#020617]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
                 height="495"
                 style={{
-                  background: "#FFFFFF",
+                  background: "#020617",
                   padding: "10px",
                   border: "none",
                   borderRadius: "5px",
                   boxShadow: "0 2px 4px 0 rgba(0,0,0,.2)",
                 }}
-                src={`https://jika.io/embed/press-releases?symbol=${symbol}&limit=3&boxShadow=true&textColor=161c2d&backgroundColor=FFFFFF&fontFamily=Nunito&`}
+                src={`https://jika.io/embed/press-releases?symbol=${symbol}&limit=3&boxShadow=true&textColor=e5e7eb&backgroundColor=020617&fontFamily=Nunito&`}
               />
             </div>
           </CardContent>
