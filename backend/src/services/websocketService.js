@@ -57,9 +57,9 @@ class WebSocketService {
     // Price baseline tracking for alerts
     this.priceBaselines = new Map(); // Map of symbol -> { baselinePrice, lastCheckedPrice }
     
-    // Price cache to reduce API calls (30 second TTL)
+    // Price cache to reduce API calls (60 second TTL)
     this.priceCache = new Map(); // Map of symbol -> { price, expiry }
-    this.CACHE_TTL = 30000; // 30 seconds cache
+    this.CACHE_TTL = 60000; // 60 seconds cache (longer to reduce API calls)
     
     // Track if API key is valid
     this.isApiKeyValid = !!this.finnhubToken && this.finnhubToken !== 'undefined' && this.finnhubToken !== 'your_finnhub_api_key_here';
@@ -505,37 +505,52 @@ class WebSocketService {
     const now = Date.now();
     const symbolsToFetch = [];
     
-    // First, get all cached prices
+    // First, get all cached prices (even stale ones)
     for (const symbol of symbols) {
       const cached = this.priceCache.get(symbol);
-      if (cached && (now < cached.expiry || now < this.rateLimitedUntil)) {
-        // Use cached data (or stale cache if rate limited)
+      if (cached) {
+        // Always return cached data if we have it
         const volumeInfo = this.volumeData.get(symbol);
         prices[symbol] = {
           ...cached.data,
           volume: volumeInfo?.totalVolume || 0,
           tradeCount: volumeInfo?.tradeCount || 0
         };
-      } else {
-        symbolsToFetch.push(symbol);
+        
+        // Only add to fetch list if cache is expired AND we're not rate limited
+        if (now >= cached.expiry && now >= this.rateLimitedUntil) {
+          symbolsToFetch.push(symbol);
+        }
+      } else if (now >= this.rateLimitedUntil) {
+        // No cache at all - prioritize fetching
+        symbolsToFetch.unshift(symbol); // Add to front (priority)
       }
     }
     
-    // Limit how many symbols we fetch at once to avoid rate limits
-    // Finnhub free tier: 60 calls/minute, so fetch max 5 at a time
-    const maxFetch = Math.min(symbolsToFetch.length, 5);
+    // Fetch missing/expired symbols
+    // Use higher limit on first request (when cache is empty), lower for updates
+    const cacheHitRate = Object.keys(prices).length / symbols.length;
+    const maxFetch = cacheHitRate < 0.5 ? 15 : 5; // Fetch more if cache is mostly empty
     const toFetch = symbolsToFetch.slice(0, maxFetch);
     
-    // Fetch missing symbols (limited batch)
-    for (const symbol of toFetch) {
-      const price = await this.getCurrentPrice(symbol);
-      if (price) {
-        const volumeInfo = this.volumeData.get(symbol);
-        prices[symbol] = {
-          ...price,
-          volume: volumeInfo?.totalVolume || 0,
-          tradeCount: volumeInfo?.tradeCount || 0
-        };
+    // Fetch in parallel (faster) but respect rate limits
+    if (toFetch.length > 0 && now >= this.rateLimitedUntil) {
+      const fetchPromises = toFetch.map(async (symbol) => {
+        const price = await this.getCurrentPrice(symbol);
+        return { symbol, price };
+      });
+      
+      const results = await Promise.all(fetchPromises);
+      
+      for (const { symbol, price } of results) {
+        if (price) {
+          const volumeInfo = this.volumeData.get(symbol);
+          prices[symbol] = {
+            ...price,
+            volume: volumeInfo?.totalVolume || 0,
+            tradeCount: volumeInfo?.tradeCount || 0
+          };
+        }
       }
     }
     
@@ -543,26 +558,31 @@ class WebSocketService {
   }
   
   // Update cache from WebSocket trade data (called from handleMessage)
-  updatePriceFromTrade(symbol, price, changePercent) {
+  updatePriceFromTrade(symbol, price) {
     if (!symbol || !price) return;
     
     const now = Date.now();
     const cached = this.priceCache.get(symbol);
+    
+    // Need previousClose to calculate change - use cached value or current price
+    const previousClose = cached?.data?.previousClose || price;
+    const change = price - previousClose;
+    const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
     
     // Update or create cache entry with live data
     this.priceCache.set(symbol, {
       data: {
         symbol,
         price,
-        change: cached?.data?.change || 0,
-        changePercent: changePercent || cached?.data?.changePercent || 0,
-        high: Math.max(price, cached?.data?.high || 0),
+        change,
+        changePercent,
+        high: Math.max(price, cached?.data?.high || price),
         low: cached?.data?.low ? Math.min(price, cached.data.low) : price,
         open: cached?.data?.open || price,
-        previousClose: cached?.data?.previousClose || price,
+        previousClose: previousClose,
         timestamp: now
       },
-      expiry: now + this.CACHE_TTL
+      expiry: now + this.CACHE_TTL * 2 // WebSocket data gets longer TTL
     });
   }
 

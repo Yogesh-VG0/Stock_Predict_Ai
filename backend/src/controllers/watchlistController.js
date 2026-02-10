@@ -7,6 +7,21 @@ const wsService = new WebSocketService();
 // Connect to WebSocket on startup
 wsService.connect();
 
+// Auto-subscribe to all tracked stocks for real-time updates
+const ALL_TRACKED_SYMBOLS = [
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX',
+  'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'XOM',
+  'LLY', 'ABBV', 'COST', 'ORCL', 'CRM', 'AVGO', 'BRK.B', 'KO'
+];
+
+// Subscribe to all stocks after WebSocket connects (delayed to ensure connection)
+setTimeout(() => {
+  console.log('📊 Auto-subscribing to all tracked stocks...');
+  ALL_TRACKED_SYMBOLS.forEach(symbol => {
+    wsService.subscribe(symbol, () => {}); // Empty callback - just need the subscription
+  });
+}, 3000);
+
 // Company data mapping
 const COMPANY_DATA = {
   'AAPL': { name: 'Apple Inc.', sector: 'Technology' },
