@@ -29,6 +29,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r ml_backend/requirements-prod.txt
+          python -m playwright install chromium
 
       - name: Run ML Pipeline (all 20 stocks)
         run: |

@@ -34,3 +34,12 @@ PyJWT==2.8.0
 xgboost==2.0.3
 torch==2.1.0
 sentencepiece==0.1.99
+finnhub-python==2.4.19
+playwright==1.40.0
+fake-useragent==1.4.0
+aiohttp-proxy==0.1.2
+aiohttp-socks==0.8.4
+tenacity==8.2.3
+backoff==2.2.1
+aiofiles==23.2.1
+beautifulsoup4==4.12.2
