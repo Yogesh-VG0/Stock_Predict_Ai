@@ -120,6 +120,35 @@ def run_backtest(
         row = df.loc[mask].iloc[-1]
         return float(row["Close"] if "Close" in row else row.get("Close_" + ticker, np.nan))
 
+
+    
+    # Pre-compute all predictions for all tickers
+    # ticker -> DataFrame with columns [date, window, trade_recommended, normalized_return, current_price]
+    all_preds_cache = {} 
+    
+    logger.info("Pre-computing predictions for backtest...")
+    for ticker in tickers:
+        try:
+            df = historical_data[ticker]
+            if df is None or df.empty or len(df) < 100:
+                continue
+            # We only need predictions for the simulation period
+            # But feature eng requires lookback. Pass full df, filter output.
+            preds_df = predictor.predict_batch(ticker, df)
+            if not preds_df.empty:
+                # Filter for trade_recommended only to save space/time lookup
+                preds_df["date"] = pd.to_datetime(preds_df["date"])
+                # We only care about rows where trade is recommended for the requested horizon
+                mask = (preds_df["window"] == horizon) & (preds_df["trade_recommended"])
+                relevant = preds_df[mask].copy()
+                if not relevant.empty:
+                    # Index by date for fast lookup
+                    all_preds_cache[ticker] = relevant.set_index("date")
+        except Exception as e:
+            logger.warning(f"Batch predict failed for {ticker}: {e}")
+            
+    logger.info("Pre-computation complete.")
+
     for i, trade_date in enumerate(trade_dates):
         trade_date = pd.Timestamp(trade_date)
         day_return = 0.0
@@ -167,28 +196,23 @@ def run_backtest(
         if n_open < max_positions:
             candidates = []
             for ticker in tickers:
-                df = historical_data[ticker]
-                if df is None or df.empty:
+                if ticker in positions:
                     continue
-                df = df.copy()
-                df["date"] = pd.to_datetime(df["date"])
-                df_trunc = df[df["date"] <= trade_date]
-                if len(df_trunc) < 70:
-                    continue
-                try:
-                    preds = predictor.predict_all_windows(ticker, df_trunc)
-                except Exception as e:
-                    logger.debug("Predict failed for %s: %s", ticker, e)
-                    continue
-                w = preds.get(horizon, {})
-                if w.get("trade_recommended") and w.get("normalized_return", 0) > 0:
-                    candidates.append((ticker, w.get("normalized_return", 0), w.get("current_price", 0)))
+                # Fast lookup from pre-computed cache
+                if ticker in all_preds_cache:
+                    p_df = all_preds_cache[ticker]
+                    if trade_date in p_df.index:
+                        # Handle duplicate index (rare but possible if multiple windows collide or data issue)
+                        row = p_df.loc[trade_date]
+                        if isinstance(row, pd.DataFrame):
+                            row = row.iloc[0] # Take first if multiple
+                        
+                        candidates.append((ticker, float(row["normalized_return"]), float(row["current_price"])))
+            
             if candidates:
                 candidates.sort(key=lambda x: x[1], reverse=True)
                 to_buy = candidates[: max_positions - n_open]
                 for ticker, _, price in to_buy:
-                    if ticker in positions:
-                        continue
                     positions[ticker] = (trade_date, price, 0.0)  # weight computed daily
                     prev_prices[ticker] = price
 

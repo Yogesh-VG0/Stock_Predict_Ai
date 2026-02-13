@@ -734,6 +734,100 @@ class StockPredictor:
         results["_meta"] = {"best_window": best_window}
         return results
 
+    def predict_batch(self, ticker: str, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Efficiently predict for all rows in df at once (vectorized).
+        Returns DataFrame with date, window, prediction, trade_recommended.
+        """
+        if self.feature_engineer is None:
+            from ..data.features_minimal import MinimalFeatureEngineer
+            self.feature_engineer = MinimalFeatureEngineer(self.mongo_client)
+
+        features, meta = self.feature_engineer.prepare_features(
+            df, ticker=ticker, mongo_client=self.mongo_client
+        )
+        if features is None or len(features) == 0:
+            return pd.DataFrame()
+
+        df_aligned = meta.get("df_aligned")
+        if df_aligned is None or "date" not in df_aligned.columns:
+            return pd.DataFrame()
+
+        dates = df_aligned["date"].values
+        closes = df_aligned["Close"].values
+        results_list = []
+
+        # Pre-calculate common metrics
+        # Note: sigma comes from model metadata, not calculated here
+        
+        for window_name in self.prediction_windows:
+            # Select model
+            model = self.pooled_models.get(window_name)
+            meta_w = self.pooled_metadata.get(window_name, {})
+            key = (ticker, window_name)
+            ticker_meta = self.metadata.get(key)
+            
+            # Use ticker model if production ready and enough data
+            if ticker_meta is not None and ticker_meta.get("n_train", 0) >= 300 and ticker_meta.get("production_ready", False):
+                model = self.models.get(key, model)
+                meta_w = ticker_meta
+            
+            if model is None:
+                continue
+
+            # Vectorized prediction
+            preds_ret = model.predict(features)
+            
+            # Vectorized trade logic
+            sigma = float(meta_w.get("val_rmse", 0.0))
+            raw_threshold = meta_w.get("trade_threshold")
+            if raw_threshold is None:
+                raw_threshold = float(TRADE_MIN_ALPHA)
+            else:
+                raw_threshold = float(raw_threshold)
+            min_alpha = max(raw_threshold, TRADE_MIN_ALPHA)
+
+            # Prob positive (vectorized)
+            # erf is not vectorized in math, use scipy or numpy approx if available, 
+            # OR just loop since N ~ 1000 is fast in python loop compared to repeated feature eng
+            # We'll use a simple numpy approx for speed or just list comp
+            
+            sqrt2 = math.sqrt(2)
+            if sigma > 0:
+                z_scores = preds_ret / (sigma * sqrt2)
+                # erfs = [math.erf(z) for z in z_scores] # Slower but standard
+                # np.erf requires scipy.special usually, or newer numpy? 
+                # Actually math.erf is fast enough for 1000 items.
+                probs = np.array([0.5 * (1 + math.erf(p / (sigma * sqrt2))) for p in preds_ret])
+            else:
+                probs = np.full(len(preds_ret), 0.5)
+
+            # Trade recommended mask
+            trade_mask = (preds_ret >= min_alpha) & (probs >= TRADE_MIN_PROB_POSITIVE)
+            
+            # Normalized return
+            horizon = TARGET_CONFIG.get(window_name, {}).get("horizon", 1)
+            norm_ret = preds_ret / max(1, horizon)
+
+            # Build result result_df for this window
+            # We want: date, window, trade_recommended, normalized_return, current_price
+            w_df = pd.DataFrame({
+                "date": dates,
+                "window": window_name,
+                "prediction": preds_ret,
+                "prob_positive": probs,
+                "trade_recommended": trade_mask,
+                "normalized_return": norm_ret,
+                "current_price": closes,
+                "horizon": horizon
+            })
+            results_list.append(w_df)
+
+        if not results_list:
+            return pd.DataFrame()
+
+        return pd.concat(results_list, ignore_index=True)
+
     def load_models(self) -> None:
         """Load models from disk (per-ticker + pooled)."""
         base = os.path.join(MODEL_DIR, "v1")
