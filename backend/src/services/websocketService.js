@@ -28,10 +28,10 @@ class WebSocketService {
       console.log('📡 Returning existing WebSocketService singleton');
       return instance;
     }
-    
+
     console.log('📡 Creating new WebSocketService singleton');
     instance = this;
-    
+
     this.ws = null;
     this.isConnected = false;
     this.subscribers = new Map(); // Map of symbol -> callback functions
@@ -43,27 +43,27 @@ class WebSocketService {
     this.wsUrl = 'wss://ws.finnhub.io';
     this.reconnectTimer = null;
     this.isShuttingDown = false; // Track if server is shutting down
-    
+
     // Rate limiting
     this.requestQueue = [];
     this.isProcessingQueue = false;
     this.lastRequestTime = 0;
     this.minRequestInterval = 1000; // 1 second between requests
     this.rateLimitedUntil = 0; // Timestamp when rate limit expires
-    
+
     // Volume tracking
     this.volumeData = new Map(); // Map of symbol -> volume data
-    
+
     // Price baseline tracking for alerts
     this.priceBaselines = new Map(); // Map of symbol -> { baselinePrice, lastCheckedPrice }
-    
+
     // Price cache to reduce API calls (60 second TTL)
     this.priceCache = new Map(); // Map of symbol -> { price, expiry }
     this.CACHE_TTL = 60000; // 60 seconds cache (longer to reduce API calls)
-    
+
     // Track if API key is valid
     this.isApiKeyValid = !!this.finnhubToken && this.finnhubToken !== 'undefined' && this.finnhubToken !== 'your_finnhub_api_key_here';
-    
+
     if (!this.isApiKeyValid) {
       console.error('❌ FINNHUB_API_KEY not found or invalid in environment variables');
       console.error('   Get your free API key at https://finnhub.io/register');
@@ -113,7 +113,7 @@ class WebSocketService {
     while (this.requestQueue.length > 0) {
       const now = Date.now();
       const timeSinceLastRequest = now - this.lastRequestTime;
-      
+
       if (timeSinceLastRequest < this.minRequestInterval) {
         await new Promise(resolve => setTimeout(resolve, this.minRequestInterval - timeSinceLastRequest));
       }
@@ -163,13 +163,13 @@ class WebSocketService {
 
     try {
       this.ws = new WebSocket(`${this.wsUrl}?token=${this.finnhubToken}`);
-      
+
       this.ws.on('open', () => {
         console.log('✅ Connected to Finnhub WebSocket');
         this.isConnected = true;
         this.reconnectAttempts = 0;
         this.currentReconnectDelay = this.baseReconnectDelay; // Reset delay on success
-        
+
         // Subscribe to all symbols that have subscribers
         const symbols = Array.from(this.subscribers.keys());
         if (symbols.length > 0) {
@@ -227,15 +227,15 @@ class WebSocketService {
 
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      
+
       // Exponential backoff: 5s, 10s, 20s, 40s, 60s (capped at 60s)
       this.currentReconnectDelay = Math.min(
         this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
         60000 // Max 60 seconds
       );
-      
+
       console.log(`⏳ Scheduling WebSocket reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${this.currentReconnectDelay / 1000}s`);
-      
+
       this.reconnectTimer = setTimeout(() => {
         if (!this.isShuttingDown) {
           this.connect();
@@ -258,7 +258,7 @@ class WebSocketService {
       message.data.forEach(trade => {
         const symbol = trade.s;
         const callbacks = this.subscribers.get(symbol);
-        
+
         // Track volume data
         if (!this.volumeData.has(symbol)) {
           this.volumeData.set(symbol, {
@@ -267,18 +267,18 @@ class WebSocketService {
             tradeCount: 0
           });
         }
-        
+
         const volumeInfo = this.volumeData.get(symbol);
         volumeInfo.totalVolume += trade.v || 0;
         volumeInfo.lastUpdate = Date.now();
         volumeInfo.tradeCount += 1;
-        
+
         // Update price cache with live WebSocket data
         this.updatePriceFromTrade(symbol, trade.p);
-        
+
         // Check for price alerts (non-blocking)
         this.checkPriceAlertForSymbol(symbol, trade.p);
-        
+
         if (callbacks) {
           const tradeData = {
             symbol: trade.s,
@@ -289,7 +289,7 @@ class WebSocketService {
             totalVolume: volumeInfo.totalVolume,
             tradeCount: volumeInfo.tradeCount
           };
-          
+
           callbacks.forEach(callback => {
             try {
               callback(tradeData);
@@ -305,10 +305,10 @@ class WebSocketService {
   // Check for significant price movements and create notifications
   checkPriceAlertForSymbol(symbol, currentPrice) {
     if (!currentPrice || !symbol) return;
-    
+
     const ns = getNotificationService();
     if (!ns) return;
-    
+
     // Initialize baseline if not exists
     if (!this.priceBaselines.has(symbol)) {
       this.priceBaselines.set(symbol, {
@@ -318,14 +318,14 @@ class WebSocketService {
       });
       return;
     }
-    
+
     const baseline = this.priceBaselines.get(symbol);
     const changePercent = ((currentPrice - baseline.baselinePrice) / baseline.baselinePrice) * 100;
-    
+
     // Only check every 100 price updates to avoid too much processing
     if (Math.abs(currentPrice - baseline.lastCheckedPrice) < 0.01) return;
     baseline.lastCheckedPrice = currentPrice;
-    
+
     // Create notification for significant moves (>3%)
     if (Math.abs(changePercent) >= 3) {
       ns.checkPriceAlert(symbol, currentPrice, baseline.baselinePrice, changePercent)
@@ -333,7 +333,7 @@ class WebSocketService {
           // Reset baseline after alert so we don't keep alerting
           baseline.baselinePrice = currentPrice;
         })
-        .catch(() => {});
+        .catch(() => { });
     }
   }
 
@@ -351,7 +351,7 @@ class WebSocketService {
         type: 'subscribe',
         symbol: symbol
       };
-      
+
       try {
         this.ws.send(JSON.stringify(subscribeMessage));
         console.log(`✅ Subscribed to ${symbol}`);
@@ -371,7 +371,7 @@ class WebSocketService {
         type: 'unsubscribe',
         symbol: symbol
       };
-      
+
       try {
         this.ws.send(JSON.stringify(unsubscribeMessage));
         console.log(`❌ Unsubscribed from ${symbol}`);
@@ -390,7 +390,7 @@ class WebSocketService {
         this.subscribeToSymbols([symbol]);
       }
     }
-    
+
     // Check if callback already exists for this symbol
     const callbacks = this.subscribers.get(symbol);
     if (!callbacks.includes(callback)) {
@@ -407,7 +407,7 @@ class WebSocketService {
       const index = callbacks.indexOf(callback);
       if (index > -1) {
         callbacks.splice(index, 1);
-        
+
         // If no more callbacks for this symbol, remove it and unsubscribe
         if (callbacks.length === 0) {
           this.subscribers.delete(symbol);
@@ -437,19 +437,19 @@ class WebSocketService {
   // Get current price for a symbol (with caching to reduce API calls)
   async getCurrentPrice(symbol) {
     const now = Date.now();
-    
+
     // Check cache first
     const cached = this.priceCache.get(symbol);
     if (cached && now < cached.expiry) {
       return cached.data;
     }
-    
+
     // Don't attempt API call if key is missing/invalid
     if (!this.isApiKeyValid) {
       console.warn(`⚠️ Skipping Finnhub API call for ${symbol} - API key not configured`);
       return cached?.data || null; // Return stale cache if available
     }
-    
+
     // Check if we're rate limited
     if (now < this.rateLimitedUntil) {
       return cached?.data || null; // Return stale cache if available
@@ -458,13 +458,13 @@ class WebSocketService {
     try {
       const url = `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${this.finnhubToken}`;
       const response = await this.makeRateLimitedRequest(url);
-      
+
       // Check for API error response
       if (response.data && response.data.error) {
         console.error(`Finnhub API error for ${symbol}:`, response.data.error);
         return cached?.data || null;
       }
-      
+
       const priceData = {
         symbol: symbol,
         price: response.data.c,
@@ -476,13 +476,13 @@ class WebSocketService {
         previousClose: response.data.pc,
         timestamp: now
       };
-      
+
       // Cache the result
       this.priceCache.set(symbol, {
         data: priceData,
         expiry: now + this.CACHE_TTL
       });
-      
+
       return priceData;
     } catch (error) {
       // More specific error logging
@@ -502,9 +502,9 @@ class WebSocketService {
   // Fallback realistic prices when rate limited and no cache
   getFallbackPrice(symbol) {
     const fallbackPrices = {
-      'AAPL': { price: 191.50, previousClose: 190.80 },
-      'MSFT': { price: 415.20, previousClose: 413.50 },
-      'NVDA': { price: 875.30, previousClose: 872.00 },
+      'AAPL': { price: 255.80, previousClose: 255.50 },
+      'MSFT': { price: 425.20, previousClose: 424.10 },
+      'NVDA': { price: 885.30, previousClose: 882.00 },
       'AMZN': { price: 178.90, previousClose: 177.50 },
       'GOOGL': { price: 175.80, previousClose: 174.90 },
       'META': { price: 505.60, previousClose: 502.30 },
@@ -529,11 +529,11 @@ class WebSocketService {
       'CRM': { price: 298.50, previousClose: 296.00 },
       'BAC': { price: 38.90, previousClose: 38.50 }
     };
-    
+
     const fallback = fallbackPrices[symbol] || { price: 100.00, previousClose: 99.50 };
     const change = fallback.price - fallback.previousClose;
     const changePercent = (change / fallback.previousClose) * 100;
-    
+
     return {
       symbol,
       price: fallback.price,
@@ -553,7 +553,7 @@ class WebSocketService {
     const prices = {};
     const now = Date.now();
     const symbolsToFetch = [];
-    
+
     // First, get all cached prices (even stale ones)
     for (const symbol of symbols) {
       const cached = this.priceCache.get(symbol);
@@ -565,7 +565,7 @@ class WebSocketService {
           volume: volumeInfo?.totalVolume || 0,
           tradeCount: volumeInfo?.tradeCount || 0
         };
-        
+
         // Only add to fetch list if cache is expired AND we're not rate limited
         if (now >= cached.expiry && now >= this.rateLimitedUntil) {
           symbolsToFetch.push(symbol);
@@ -583,22 +583,22 @@ class WebSocketService {
         };
       }
     }
-    
+
     // Fetch missing/expired symbols
     // Use higher limit on first request (when cache is empty), lower for updates
     const cacheHitRate = Object.keys(prices).length / symbols.length;
     const maxFetch = cacheHitRate < 0.5 ? 15 : 5; // Fetch more if cache is mostly empty
     const toFetch = symbolsToFetch.slice(0, maxFetch);
-    
+
     // Fetch in parallel (faster) but respect rate limits
     if (toFetch.length > 0 && now >= this.rateLimitedUntil) {
       const fetchPromises = toFetch.map(async (symbol) => {
         const price = await this.getCurrentPrice(symbol);
         return { symbol, price };
       });
-      
+
       const results = await Promise.all(fetchPromises);
-      
+
       for (const { symbol, price } of results) {
         if (price) {
           const volumeInfo = this.volumeData.get(symbol);
@@ -610,22 +610,22 @@ class WebSocketService {
         }
       }
     }
-    
+
     return prices;
   }
-  
+
   // Update cache from WebSocket trade data (called from handleMessage)
   updatePriceFromTrade(symbol, price) {
     if (!symbol || !price) return;
-    
+
     const now = Date.now();
     const cached = this.priceCache.get(symbol);
-    
+
     // Need previousClose to calculate change - use cached value or current price
     const previousClose = cached?.data?.previousClose || price;
     const change = price - previousClose;
     const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
-    
+
     // Update or create cache entry with live data
     this.priceCache.set(symbol, {
       data: {
