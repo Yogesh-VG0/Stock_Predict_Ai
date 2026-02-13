@@ -132,8 +132,9 @@ export default function EnhancedQuickPredictionWidget() {
 
         // Calculate confidence based on ML model data if available
         let confidence = "Medium"
-        if (mlPredictions.next_day?.confidence !== undefined || mlPredictions['7_day']?.confidence !== undefined) {
-          const confidenceValue = mlPredictions.next_day?.confidence || mlPredictions['7_day']?.confidence || 0.5
+        const nextDayPred = mlPredictions['1_day'] || mlPredictions.next_day;
+        if (nextDayPred?.confidence !== undefined || mlPredictions['7_day']?.confidence !== undefined) {
+          const confidenceValue = nextDayPred?.confidence || mlPredictions['7_day']?.confidence || 0.5
           confidence = confidenceValue > 0.7 ? "High" : confidenceValue > 0.4 ? "Medium" : "Low"
         }
 

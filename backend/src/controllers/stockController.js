@@ -731,7 +731,10 @@ const getPredictions = async (req, res) => {
         // Transform prediction data structure
         for (const [window, predData] of Object.entries(predictions)) {
           if (predData && typeof predData === 'object') {
-            transformedData[window] = {
+            // Standardize 'next_day' to '1_day' for frontend compatibility
+            const normalizedWindow = window === 'next_day' ? '1_day' : window;
+
+            transformedData[normalizedWindow] = {
               predicted_price: predData.predicted_price || 0,
               predicted_change: predData.price_change || 0,
               current_price: predData.current_price || 0,
@@ -761,7 +764,10 @@ const getPredictions = async (req, res) => {
 
         for (const [window, predData] of Object.entries(storedPredictions)) {
           if (predData && typeof predData === 'object') {
-            transformedData[window] = {
+            // Standardize 'next_day' to '1_day' for frontend compatibility
+            const normalizedWindow = window === 'next_day' ? '1_day' : window;
+
+            transformedData[normalizedWindow] = {
               predicted_price: predData.predicted_price || 0,
               predicted_change: predData.price_change || 0,
               current_price: predData.current_price || 0,

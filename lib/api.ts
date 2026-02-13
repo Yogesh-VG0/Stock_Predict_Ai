@@ -12,7 +12,8 @@ export interface Prediction {
 }
 
 export interface PredictionTimeframes {
-  next_day: Prediction;
+  '1_day'?: Prediction;
+  next_day?: Prediction;
   '7_day': Prediction;
   '30_day': Prediction;
 }
