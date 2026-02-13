@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { 
-  getStockDetails, 
-  getAIAnalysis, 
+const {
+  getStockDetails,
+  getAIAnalysis,
   getComprehensiveExplanation,
   getStoredExplanation,
   generateAIExplanation,
@@ -12,9 +12,7 @@ const {
   getTechnicalIndicators
 } = require('../controllers/stockController');
 
-// Get stock details (company info + basic AI analysis)
-router.get('/:symbol', getStockDetails);
-
+// Specific routes first to avoid shadowing by /:symbol
 // Get enhanced AI analysis (detailed sentiment + factors)
 router.get('/:symbol/analysis', getAIAnalysis);
 
@@ -32,6 +30,10 @@ router.get('/:symbol/predictions', getPredictions);
 
 // Get technical indicators (RSI, MACD, SMA, EMA)
 router.get('/:symbol/indicators', getTechnicalIndicators);
+
+// Get stock details (company info + basic AI analysis)
+// This is last because it matches any single parameter
+router.get('/:symbol', getStockDetails);
 
 // Get batch explanation status
 router.get('/batch/status', getBatchExplanationStatus);
