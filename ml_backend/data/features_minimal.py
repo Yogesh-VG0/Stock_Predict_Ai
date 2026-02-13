@@ -199,7 +199,7 @@ class MinimalFeatureEngineer:
                 missing = set(["log_return_1d", "volatility_20d", "volume_ratio", "price_vs_sma20", "rsi"]) - set(df.columns)
                 logger.error("Missing core columns: %s (df has: %s)", missing, list(df.columns[:15]))
                 return None, {}
-            df_clean = df.dropna(subset=core)
+            df_clean = df.dropna(subset=core).copy()
             cols_to_fill = [c for c in self.feature_columns if c in df_clean.columns]
             df_clean[cols_to_fill] = df_clean[cols_to_fill].fillna(0)
 
