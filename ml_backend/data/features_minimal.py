@@ -10,7 +10,7 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from ..config.constants import get_ticker_id
+from ..utils.tickers import get_ticker_id
 from ..config.feature_config_v1 import FEATURE_CONFIG_V1
 
 logger = logging.getLogger(__name__)

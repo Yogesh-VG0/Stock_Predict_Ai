@@ -2,6 +2,7 @@
 Configuration constants for the stock prediction system.
 """
 
+import hashlib
 import os
 
 # MongoDB Configuration
@@ -164,6 +165,16 @@ TICKER_SUBREDDITS = {
     "AIG": ["AIG", "stocks", "investing"],
     "TGT": ["Target", "stocks", "investing"]
 }
+
+# Deterministic ticker_id for pooled models (stable across runs; Python hash() is salted)
+_ALL_TICKERS = sorted(set(TOP_100_TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
+TICKER_TO_ID = {ticker: i for i, ticker in enumerate(_ALL_TICKERS)}
+
+
+
+# Utility imports to keep back-compatibility if needed, but better to import from utils
+# from ..utils.tickers import get_ticker_id  <-- No, avoided circular imports.
+
 
 # RSS Feeds - Removed general market feeds since we use stock-specific RSS feeds
 # Stock-specific RSS feeds are generated dynamically in sentiment.py:
