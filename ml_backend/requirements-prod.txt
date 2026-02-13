@@ -31,3 +31,4 @@ praw==7.7.1
 tweepy==4.14.0
 pandas_market_calendars==4.3.0
 PyJWT==2.8.0
+xgboost==2.0.3
