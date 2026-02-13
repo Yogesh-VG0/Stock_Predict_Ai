@@ -9,12 +9,12 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
-  
+
   // Performance optimizations
   compiler: {
-    removeConsole: process.env.NODE_ENV === 'production',
+    removeConsole: false, // temporarily disabled for debugging
   },
-  
+
   // Optimize package imports
   modularizeImports: {
     'lucide-react': {
@@ -24,7 +24,7 @@ const nextConfig = {
       transform: 'framer-motion/dist/es/{{member}}',
     },
   },
-  
+
   // Experimental optimizations
   experimental: {
     optimizePackageImports: ['lucide-react', 'framer-motion', 'recharts', 'date-fns'],
@@ -32,7 +32,7 @@ const nextConfig = {
 
   async rewrites() {
     const backendUrl = process.env.NODE_BACKEND_URL || process.env.NEXT_PUBLIC_NODE_BACKEND_URL || 'http://localhost:5000';
-    
+
     return [
       {
         source: '/api/news/:path*',
