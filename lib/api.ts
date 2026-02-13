@@ -55,7 +55,15 @@ export interface AIExplanation {
   explanation: string;
   data_summary: DataSummary;
   prediction_summary: {
-    next_day: {
+    '1_day'?: {
+      predicted_price: number;
+      confidence: number;
+      price_change: number;
+      price_range?: { low: number; high: number };
+      model_predictions?: { lstm: number; xgboost: number; lightgbm: number };
+      ensemble_weights?: { lstm: number; xgboost: number; lightgbm: number };
+    };
+    next_day?: {
       predicted_price: number;
       confidence: number;
       price_change: number;

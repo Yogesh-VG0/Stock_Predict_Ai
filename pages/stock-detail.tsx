@@ -39,11 +39,11 @@ const ChartSkeleton = memo(() => (
   </div>
 ))
 ChartSkeleton.displayName = "ChartSkeleton"
-import { 
-  getStockDetails, 
-  StockDetails, 
-  getPredictions, 
-  getStockPrice, 
+import {
+  getStockDetails,
+  StockDetails,
+  getPredictions,
+  getStockPrice,
   getSymbolFromCompanyName,
   PredictionTimeframes,
   getComprehensiveAIExplanation,
@@ -53,7 +53,7 @@ import { useWebSocket, useStockPrice } from "@/hooks/use-websocket-context"
 
 type StockDetailProps = {}
 
-export default function StockDetail({}: StockDetailProps) {
+export default function StockDetail({ }: StockDetailProps) {
   const { symbol: urlSymbol } = useParams<{ symbol: string }>()
   const [isLoading, setIsLoading] = useState(true)
   const [stockData, setStockData] = useState<StockDetails | null>(null)
@@ -64,7 +64,7 @@ export default function StockDetail({}: StockDetailProps) {
   const [currentPrice, setCurrentPrice] = useState<number>(0)
   const [isUsingRealData, setIsUsingRealData] = useState(false)
   const [availableStocks] = useState([
-    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", 
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
     "JPM", "V", "JNJ", "WMT", "PG", "UNH", "HD", "MA", "BAC", "XOM", "LLY", "ABBV"
   ])
   const { toast } = useToast();
@@ -95,23 +95,28 @@ export default function StockDetail({}: StockDetailProps) {
   useEffect(() => {
     if (currentStockPrice) {
       setCurrentPrice(currentStockPrice.price)
-      
+
       // Update prediction data with new real-time price for dynamic percentage calculation
-      setPredictionData(prev => prev ? {
-        ...prev,
-        next_day: {
-          ...prev.next_day,
-          current_price: currentStockPrice.price
-        },
-        '7_day': {
-          ...prev['7_day'],
-          current_price: currentStockPrice.price
-        },
-        '30_day': {
-          ...prev['30_day'],
-          current_price: currentStockPrice.price
+      setPredictionData(prev => {
+        if (!prev) return null;
+
+        const updated = { ...prev };
+
+        if (updated['1_day']) {
+          updated['1_day'] = { ...updated['1_day'], current_price: currentStockPrice.price };
         }
-      } : null)
+        if (updated.next_day) {
+          updated.next_day = { ...updated.next_day, current_price: currentStockPrice.price };
+        }
+        if (updated['7_day']) {
+          updated['7_day'] = { ...updated['7_day'], current_price: currentStockPrice.price };
+        }
+        if (updated['30_day']) {
+          updated['30_day'] = { ...updated['30_day'], current_price: currentStockPrice.price };
+        }
+
+        return updated;
+      })
     }
   }, [currentStockPrice?.price])
 
@@ -151,7 +156,7 @@ export default function StockDetail({}: StockDetailProps) {
       // Load prediction data from the same source as AIExplanationWidget
       let aiExplanation = null
       let priceData = null
-      
+
       try {
         // Use the same function that AIExplanationWidget uses to get real data from MongoDB
         aiExplanation = await getComprehensiveAIExplanation(symbol)
@@ -160,7 +165,7 @@ export default function StockDetail({}: StockDetailProps) {
         console.log(`No AI explanation available for ${symbol}, will use enhanced mock`)
         aiExplanation = null
       }
-      
+
       try {
         priceData = await getStockPrice(symbol)
         if (priceData) {
@@ -181,38 +186,59 @@ export default function StockDetail({}: StockDetailProps) {
       }
 
       // Set prediction data - use real data from AI explanation if available
-      if (aiExplanation && aiExplanation.prediction_summary) {
+      if (aiExplanation && aiExplanation.prediction_summary && (aiExplanation.prediction_summary['1_day'] || aiExplanation.prediction_summary.next_day)) {
         // Transform AI explanation prediction data to match the expected format
-        const realPredictionData = {
-          next_day: {
-            predicted_price: aiExplanation.prediction_summary.next_day.predicted_price,
-            predicted_change: aiExplanation.prediction_summary.next_day.price_change,
+        const realPredictionData: PredictionTimeframes = {
+          '1_day': {
+            predicted_price: aiExplanation.prediction_summary['1_day']?.predicted_price || aiExplanation.prediction_summary.next_day?.predicted_price || 0,
+            predicted_change: aiExplanation.prediction_summary['1_day']?.price_change || aiExplanation.prediction_summary.next_day?.price_change || 0,
             current_price: priceData?.price || 0,
-            confidence: aiExplanation.prediction_summary.next_day.confidence,
-            price_change: aiExplanation.prediction_summary.next_day.price_change
+            confidence: aiExplanation.prediction_summary['1_day']?.confidence || aiExplanation.prediction_summary.next_day?.confidence || 0,
           },
           '7_day': {
-            predicted_price: aiExplanation.prediction_summary['7_day'].predicted_price,
-            predicted_change: aiExplanation.prediction_summary['7_day'].price_change,
+            predicted_price: aiExplanation.prediction_summary['7_day']?.predicted_price || 0,
+            predicted_change: aiExplanation.prediction_summary['7_day']?.price_change || 0,
             current_price: priceData?.price || 0,
-            confidence: aiExplanation.prediction_summary['7_day'].confidence,
-            price_change: aiExplanation.prediction_summary['7_day'].price_change
+            confidence: aiExplanation.prediction_summary['7_day']?.confidence || 0,
           },
           '30_day': {
-            predicted_price: aiExplanation.prediction_summary['30_day'].predicted_price,
-            predicted_change: aiExplanation.prediction_summary['30_day'].price_change,
+            predicted_price: aiExplanation.prediction_summary['30_day']?.predicted_price || 0,
+            predicted_change: aiExplanation.prediction_summary['30_day']?.price_change || 0,
             current_price: priceData?.price || 0,
-            confidence: aiExplanation.prediction_summary['30_day'].confidence,
-            price_change: aiExplanation.prediction_summary['30_day'].price_change
+            confidence: aiExplanation.prediction_summary['30_day']?.confidence || 0,
           }
         }
-        console.log(`✅ Using real prediction data for ${symbol} from MongoDB`)
+        console.log(`✅ Using real prediction data for ${symbol} from MongoDB explanation`)
         setPredictionData(realPredictionData)
         setIsUsingRealData(true)
       } else {
-        console.log(`⚠️ No real prediction data available for ${symbol}, using enhanced mock`)
-        setPredictionData(generateEnhancedPrediction(symbol, priceData?.price || 0))
-        setIsUsingRealData(false)
+        // fallback: Try to get predictions independently
+        console.log(`🔍 No explanation-based predictions, trying independent getPredictions for ${symbol}...`)
+        const independentPredictions = await getPredictions(symbol)
+
+        if (independentPredictions && independentPredictions[symbol]) {
+          console.log(`✅ Using independent ML predictions for ${symbol}`)
+          const mlPreds = independentPredictions[symbol]
+
+          // Map to PredictionTimeframes
+          const realPredictionData: PredictionTimeframes = {
+            '1_day': {
+              predicted_price: mlPreds['1_day']?.predicted_price || mlPreds.next_day?.predicted_price || 0,
+              predicted_change: mlPreds['1_day']?.predicted_change || mlPreds.next_day?.predicted_change || 0,
+              current_price: priceData?.price || 0,
+              confidence: mlPreds['1_day']?.confidence || mlPreds.next_day?.confidence || 0
+            },
+            '7_day': mlPreds['7_day'] || { predicted_price: 0, predicted_change: 0, current_price: 0, confidence: 0 },
+            '30_day': mlPreds['30_day'] || { predicted_price: 0, predicted_change: 0, current_price: 0, confidence: 0 }
+          }
+
+          setPredictionData(realPredictionData)
+          setIsUsingRealData(true)
+        } else {
+          console.log(`⚠️ No real prediction data available for ${symbol}, using enhanced mock`)
+          setPredictionData(generateEnhancedPrediction(symbol, priceData?.price || 0))
+          setIsUsingRealData(false)
+        }
       }
     } catch (error) {
       console.error('Error loading stock data:', error)
@@ -227,14 +253,14 @@ export default function StockDetail({}: StockDetailProps) {
     try {
       const rssRes = await fetch(`/api/news/rss?symbol=${symbol}`)
       const rssData = await rssRes.json()
-      
+
       if (rssData.data) {
         const rssNews = rssData.data.map((item: any) => ({
           ...item,
           sentiment: item.sentiment || 'neutral',
           provider: 'rss'
         }))
-        
+
         rssNews.sort((a: any, b: any) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime())
         setStockNews(rssNews.slice(0, 6))
       } else {
@@ -249,7 +275,7 @@ export default function StockDetail({}: StockDetailProps) {
   const generateEnhancedPrediction = (symbol: string, currentPrice: number): PredictionTimeframes => {
     const volatility = Math.random() * 0.1 + 0.02
     const getConfidence = () => volatility > 0.08 ? 0.6 : volatility > 0.05 ? 0.75 : 0.85
-    
+
     return {
       next_day: {
         predicted_price: currentPrice * (1 + (Math.random() * 0.04 - 0.02)),
@@ -280,7 +306,7 @@ export default function StockDetail({}: StockDetailProps) {
     if (!searchQuery) return
 
     let symbol = getSymbolFromCompanyName(searchQuery) || searchQuery.toUpperCase()
-    
+
     if (availableStocks.includes(symbol)) {
       setSelectedStock(symbol)
       setSearchQuery("")
@@ -407,9 +433,8 @@ export default function StockDetail({}: StockDetailProps) {
             <button
               key={symbol}
               onClick={() => setSelectedStock(symbol)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${
-                selectedStock === symbol ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"
-              }`}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${selectedStock === symbol ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"
+                }`}
             >
               {symbol}
             </button>
@@ -544,12 +569,15 @@ export default function StockDetail({}: StockDetailProps) {
                 <div className="grid grid-cols-1 gap-4">
                   {/* 1 Day Prediction */}
                   {(() => {
-                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData.next_day.current_price || 0
-                    const predictedPrice = predictionData.next_day.predicted_price
-                    const calculatedChange = currentPriceForCalc > 0 
+                    const prediction = predictionData['1_day'] || predictionData.next_day
+                    if (!prediction) return null;
+
+                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || prediction.current_price || 0
+                    const predictedPrice = prediction.predicted_price
+                    const calculatedChange = currentPriceForCalc > 0
                       ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
                       : 0
-                    
+
                     return (
                       <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 rounded-lg p-4 border border-emerald-500/20">
                         <div className="flex justify-between items-center mb-2">
@@ -561,11 +589,10 @@ export default function StockDetail({}: StockDetailProps) {
                             ${predictedPrice.toFixed(2)}
                           </div>
                           <div
-                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${
-                              calculatedChange >= 0
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : "bg-red-500/20 text-red-400"
-                            }`}
+                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-red-500/20 text-red-400"
+                              }`}
                           >
                             {calculatedChange >= 0 ? (
                               <TrendingUp className="h-3 w-3" />
@@ -585,10 +612,10 @@ export default function StockDetail({}: StockDetailProps) {
                   {(() => {
                     const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['7_day'].current_price || 0
                     const predictedPrice = predictionData['7_day'].predicted_price
-                    const calculatedChange = currentPriceForCalc > 0 
+                    const calculatedChange = currentPriceForCalc > 0
                       ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
                       : 0
-                    
+
                     return (
                       <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 rounded-lg p-4 border border-blue-500/20">
                         <div className="flex justify-between items-center mb-2">
@@ -600,11 +627,10 @@ export default function StockDetail({}: StockDetailProps) {
                             ${predictedPrice.toFixed(2)}
                           </div>
                           <div
-                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${
-                              calculatedChange >= 0
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : "bg-red-500/20 text-red-400"
-                            }`}
+                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-red-500/20 text-red-400"
+                              }`}
                           >
                             {calculatedChange >= 0 ? (
                               <TrendingUp className="h-3 w-3" />
@@ -624,10 +650,10 @@ export default function StockDetail({}: StockDetailProps) {
                   {(() => {
                     const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['30_day'].current_price || 0
                     const predictedPrice = predictionData['30_day'].predicted_price
-                    const calculatedChange = currentPriceForCalc > 0 
+                    const calculatedChange = currentPriceForCalc > 0
                       ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
                       : 0
-                    
+
                     return (
                       <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 rounded-lg p-4 border border-purple-500/20">
                         <div className="flex justify-between items-center mb-2">
@@ -639,11 +665,10 @@ export default function StockDetail({}: StockDetailProps) {
                             ${predictedPrice.toFixed(2)}
                           </div>
                           <div
-                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${
-                              calculatedChange >= 0
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : "bg-red-500/20 text-red-400"
-                            }`}
+                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-red-500/20 text-red-400"
+                              }`}
                           >
                             {calculatedChange >= 0 ? (
                               <TrendingUp className="h-3 w-3" />
@@ -682,7 +707,7 @@ export default function StockDetail({}: StockDetailProps) {
               <div className="space-y-3 max-h-40 overflow-y-auto pr-2">
                 {stockNews.map((item: any, index: number) => {
                   const sentiment = item.sentiment || "neutral"
-                  
+
                   return (
                     <div
                       key={`${item.provider}-${item.uuid || item.id || index}`}
@@ -721,7 +746,7 @@ export default function StockDetail({}: StockDetailProps) {
                   const negativeSentiment = stockNews.filter(n => n.sentiment === 'negative').length
                   const totalSentiment = stockNews.length || 1
                   const sentimentScore = ((positiveSentiment - negativeSentiment) / totalSentiment + 1) * 50
-                  
+
                   return (
                     <>
                       <div className="flex items-center gap-2 mb-2">
@@ -742,8 +767,8 @@ export default function StockDetail({}: StockDetailProps) {
 
                       <p className="text-xs text-zinc-300">
                         Sentiment is {
-                          sentimentScore > 60 ? 'bullish' : 
-                          sentimentScore > 40 ? 'neutral' : 'bearish'
+                          sentimentScore > 60 ? 'bullish' :
+                            sentimentScore > 40 ? 'neutral' : 'bearish'
                         } with {positiveSentiment} positive, {negativeSentiment} negative articles.
                       </p>
                     </>
@@ -803,8 +828,8 @@ export default function StockDetail({}: StockDetailProps) {
                 </div>
               </Card>
             }>
-              <AIExplanationWidget 
-                ticker={selectedStock} 
+              <AIExplanationWidget
+                ticker={selectedStock}
                 currentPrice={currentPrice}
               />
             </Suspense>
