@@ -36,13 +36,9 @@ const AVAILABLE_STOCKS = [
 ];
 
 // Direct MongoDB prediction data as fallback
-const REAL_MONGODB_PREDICTIONS: Record<string, any> = {
-  'AAPL': {
-    next_day: { predicted_price: 197.31, confidence: 0.552, price_change: 0.72 },
-    '7_day': { predicted_price: 195.93, confidence: 0.558, price_change: -0.66 },
-    '30_day': { predicted_price: 185.08, confidence: 0.790, price_change: -11.51 }
-  }
-};
+// Direct MongoDB prediction data as fallback
+const REAL_MONGODB_PREDICTIONS: Record<string, any> = {};
+
 
 export default function EnhancedQuickPredictionWidget() {
   const [symbol, setSymbol] = useState("")
@@ -69,7 +65,7 @@ export default function EnhancedQuickPredictionWidget() {
         if (!prev || prev.currentPrice === currentStockPrice.price) {
           return prev
         }
-        
+
         return {
           ...prev,
           currentPrice: currentStockPrice.price,
@@ -109,7 +105,7 @@ export default function EnhancedQuickPredictionWidget() {
         change: currentStockPrice.change,
         changePercent: currentStockPrice.changePercent
       } : await getStockPrice(symbol.toUpperCase())
-      
+
       // If both WebSocket and API fail, create fallback data
       if (!priceData) {
         priceData = {
@@ -121,66 +117,26 @@ export default function EnhancedQuickPredictionWidget() {
       }
 
       console.log(`🔍 Fetching ML predictions for ${symbol.toUpperCase()}...`)
-      
-      // Check if we have real MongoDB data for this symbol
-      if (REAL_MONGODB_PREDICTIONS[symbol.toUpperCase()]) {
-        console.log(`✅ Using REAL MongoDB predictions for ${symbol.toUpperCase()}`)
-        const realData = REAL_MONGODB_PREDICTIONS[symbol.toUpperCase()]
-        
-        // Transform MongoDB data to match our prediction format
-        const mlPredictions = {
-          "1_day": {
-            predicted_price: realData.next_day.predicted_price,
-            predicted_change: realData.next_day.price_change,
-            current_price: priceData.price
-          },
-          "7_day": {
-            predicted_price: realData['7_day'].predicted_price,
-            predicted_change: realData['7_day'].price_change,
-            current_price: priceData.price
-          },
-          "30_day": {
-            predicted_price: realData['30_day'].predicted_price,
-            predicted_change: realData['30_day'].price_change,
-            current_price: priceData.price
-          }
-        }
-        
-        // Calculate confidence from real ML model data
-        const confidenceValue = realData.next_day.confidence
-        const confidence = confidenceValue > 0.7 ? "High" : confidenceValue > 0.4 ? "Medium" : "Low"
-        
-        setPrediction({
-          symbol: symbol.toUpperCase(),
-          currentPrice: priceData.price,
-          predictions: mlPredictions as any,
-          confidence: confidence,
-          lastUpdated: new Date().toISOString(),
-          isRealTimePrice: false,
-          isRealMLPrediction: true
-        })
-        
-        // Real-time updates will be handled automatically by the WebSocket context
-        return
-      }
-      
+
+
+
       // Try to get ML predictions from API backend
       const predictionData = await getPredictions(symbol.toUpperCase())
-      
+
       console.log('📊 Prediction data received:', predictionData)
 
       if (predictionData && predictionData[symbol.toUpperCase()]) {
         // Use real ML predictions if available
         console.log(`✅ Using API ML predictions for ${symbol.toUpperCase()}`)
         const mlPredictions = predictionData[symbol.toUpperCase()]
-        
+
         // Calculate confidence based on ML model data if available
         let confidence = "Medium"
         if (mlPredictions.next_day?.confidence !== undefined || mlPredictions['7_day']?.confidence !== undefined) {
           const confidenceValue = mlPredictions.next_day?.confidence || mlPredictions['7_day']?.confidence || 0.5
           confidence = confidenceValue > 0.7 ? "High" : confidenceValue > 0.4 ? "Medium" : "Low"
         }
-        
+
         setPrediction({
           symbol: symbol.toUpperCase(),
           currentPrice: priceData.price,
@@ -207,7 +163,7 @@ export default function EnhancedQuickPredictionWidget() {
   const generateEnhancedMockPrediction = (symbol: string, currentPrice: number): PredictionData => {
     // Enhanced mock predictions that consider market volatility and trends
     const volatility = Math.random() * 0.1 + 0.02 // 2-12% volatility
-    
+
     const predictions = {
       "1_day": {
         predicted_price: currentPrice * (1 + (Math.random() * 0.06 - 0.03)), // ±3%
@@ -336,16 +292,16 @@ export default function EnhancedQuickPredictionWidget() {
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-lg font-bold">{prediction.symbol}</h3>
               </div>
-              
-                              <div className="text-sm text-zinc-400 mb-3">
-                  Current Price: <span className="text-white font-medium">${prediction.currentPrice.toFixed(2)}</span>
-                  {isClient && prediction.isRealTimePrice && lastUpdate && (
-                    <div className="text-xs text-green-500 mt-1 flex items-center gap-1">
-                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-                      Live Price • Updated: {lastUpdate}
-                    </div>
-                  )}
-                </div>
+
+              <div className="text-sm text-zinc-400 mb-3">
+                Current Price: <span className="text-white font-medium">${prediction.currentPrice.toFixed(2)}</span>
+                {isClient && prediction.isRealTimePrice && lastUpdate && (
+                  <div className="text-xs text-green-500 mt-1 flex items-center gap-1">
+                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    Live Price • Updated: {lastUpdate}
+                  </div>
+                )}
+              </div>
 
               {/* Timeframe Selector */}
               <div className="flex justify-center gap-2 mb-4">
@@ -379,7 +335,7 @@ export default function EnhancedQuickPredictionWidget() {
                     </div>
                     <div className="text-right">
                       <div className="text-sm text-zinc-400">Change</div>
-                      <div className={cn("text-lg font-bold flex items-center gap-1", 
+                      <div className={cn("text-lg font-bold flex items-center gap-1",
                         calculatedChange >= 0 ? "text-green-500" : "text-red-500"
                       )}>
                         {calculatedChange >= 0 ? (
@@ -388,7 +344,7 @@ export default function EnhancedQuickPredictionWidget() {
                           <TrendingDown className="h-4 w-4" />
                         )}
                         {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
-                    </div>
+                      </div>
                     </div>
                   </div>
 

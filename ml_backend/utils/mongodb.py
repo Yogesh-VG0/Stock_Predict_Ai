@@ -2,7 +2,7 @@
 MongoDB integration for data storage and retrieval.
 """
 
-from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo import MongoClient, ASCENDING, DESCENDING, UpdateOne
 from pymongo.errors import ServerSelectionTimeoutError, BulkWriteError
 from typing import Dict, List, Optional, Any
 import logging
@@ -60,12 +60,22 @@ class MongoDBClient:
             logger.error(f"Error initializing MongoDB client: {str(e)}")
 
     def connect(self) -> None:
-        """Connect to MongoDB server."""
+        """Connect to MongoDB server with connection pooling."""
         try:
             self.client = MongoClient(
                 self.connection_string,
-                serverSelectionTimeoutMS=5000,  # 5 second timeout
-                connectTimeoutMS=5000
+                # Connection pool
+                maxPoolSize=50,
+                minPoolSize=10,
+                maxIdleTimeMS=45000,
+                waitQueueTimeoutMS=5000,
+                # Timeouts
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=10000,
+                socketTimeoutMS=20000,
+                # Reliability
+                retryWrites=True,
+                retryReads=True,
             )
             # Test the connection
             self.client.server_info()
@@ -94,34 +104,42 @@ class MongoDBClient:
     def create_indexes(self) -> None:
         """Create indexes on frequently queried fields."""
         try:
-            # Predictions collection indexes
-            self.collections[MONGO_COLLECTIONS["predictions"]].create_index([
-                ("ticker", ASCENDING),
-                ("timestamp", DESCENDING)
-            ])
-            
-            # Historical data collection indexes
-            self.collections[MONGO_COLLECTIONS["historical_data"]].create_index([
-                ("ticker", ASCENDING),
-                ("date", DESCENDING)
-            ])
-            
-            # Sentiment data collection indexes
-            self.db['sentiment'].create_index([
-                ("ticker", ASCENDING),
-                ("last_updated", DESCENDING)
-            ])
-            
-            # Model versions collection indexes
-            self.collections[MONGO_COLLECTIONS["model_versions"]].create_index([
-                ("ticker", ASCENDING),
-                ("window", ASCENDING),
-                ("version", DESCENDING)
-            ])
-            
+            preds = self.collections[MONGO_COLLECTIONS["predictions"]]
+            preds.create_index(
+                [("ticker", ASCENDING), ("timestamp", DESCENDING)],
+                name="idx_ticker_timestamp",
+            )
+            hist = self.collections[MONGO_COLLECTIONS["historical_data"]]
+            try:
+                hist.create_index(
+                    [("ticker", ASCENDING), ("date", ASCENDING)],
+                    name="idx_ticker_date",
+                    unique=True,
+                )
+            except Exception as idx_err:
+                # Fallback if duplicates exist: create non-unique index
+                logger.warning(
+                    "Could not create unique index on historical_data (duplicates may exist): %s. "
+                    "Creating non-unique index. Run deduplication to enable upsert.",
+                    idx_err,
+                )
+                hist.create_index(
+                    [("ticker", ASCENDING), ("date", ASCENDING)],
+                    name="idx_ticker_date",
+                )
+            sent = self.db["sentiment"]
+            sent.create_index(
+                [("ticker", ASCENDING), ("last_updated", DESCENDING)],
+                name="idx_ticker_last_updated",
+            )
+            model_versions = self.collections[MONGO_COLLECTIONS["model_versions"]]
+            model_versions.create_index(
+                [("ticker", ASCENDING), ("window", ASCENDING), ("version", DESCENDING)],
+                name="idx_ticker_window_version",
+            )
             logger.info("Created indexes on collections")
         except Exception as e:
-            logger.error(f"Error creating indexes: {str(e)}")
+            logger.warning(f"Could not create indexes: {e}")
 
     def setup_historical_data_schema(self):
         """Set up JSON schema validation for the historical_data collection."""
@@ -248,8 +266,19 @@ class MongoDBClient:
                 doc['ticker'] = ticker
                 doc['date'] = pd.to_datetime(doc['date'])
             if documents:
-                result = collection.insert_many(documents)
-                logger.info(f"Stored {len(result.inserted_ids)} historical data points for {ticker} in historical_data collection")
+                ops = [
+                    UpdateOne(
+                        {"ticker": doc["ticker"], "date": doc["date"]},
+                        {"$set": doc},
+                        upsert=True,
+                    )
+                    for doc in documents
+                ]
+                result = collection.bulk_write(ops, ordered=False)
+                logger.info(
+                    f"Upserted {result.upserted_count + result.modified_count + result.matched_count} "
+                    f"historical data points for {ticker} in historical_data collection"
+                )
             return True
         except BulkWriteError as e:
             logger.error(f"Error storing historical data for {ticker}: {str(e)}")

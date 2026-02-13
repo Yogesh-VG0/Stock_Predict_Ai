@@ -704,10 +704,20 @@ class FeatureEngineer:
                 # Restore date column if it existed
                 if 'date' in df.columns:
                     df_merged = df_merged.reset_index()
-                
+                # Ensure sorted by date so ffill/shift are meaningful
+                if 'date' in df_merged.columns:
+                    df_merged = df_merged.sort_values('date').reset_index(drop=True)
+                else:
+                    df_merged = df_merged.sort_index()
+
                 # Forward fill macro data (it's lower frequency than daily stock data)
+                # Shift by 1 day to avoid point-in-time leakage (macro values not known same-day)
                 macro_columns = [col for col in macro_df.columns if col != 'date']
-                df_merged[macro_columns] = df_merged[macro_columns].fillna(method='ffill')
+                df_merged[macro_columns] = (
+                    df_merged[macro_columns]
+                    .ffill()
+                    .shift(1)  # minimum lag to avoid same-day availability assumptions
+                )
                 
                 # Add macro trend features
                 for col in macro_columns:

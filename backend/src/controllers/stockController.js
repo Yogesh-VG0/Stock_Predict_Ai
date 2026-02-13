@@ -751,9 +751,12 @@ const getPredictions = async (req, res) => {
 
     // Fallback: Read stored predictions from MongoDB
     try {
+      console.log(`🔍 Controller: Attempting to fetch stored predictions for ${upperSymbol}`);
       const storedPredictions = await mongoConnection.getLatestPredictions(upperSymbol);
 
       if (storedPredictions) {
+        console.log(`✅ Controller: Found stored predictions for ${upperSymbol}`);
+
         const transformedData = {};
 
         for (const [window, predData] of Object.entries(storedPredictions)) {

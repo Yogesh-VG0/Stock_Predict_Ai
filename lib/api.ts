@@ -119,6 +119,7 @@ export async function getPredictions(ticker?: string): Promise<Predictions | nul
           headers: {
             'Content-Type': 'application/json',
           },
+          cache: 'no-store', // Ensure fresh data from backend
         });
 
         if (response.ok) {
@@ -134,15 +135,17 @@ export async function getPredictions(ticker?: string): Promise<Predictions | nul
     }
 
     // If Node.js backend fails, try ML backend directly
-    const url = ticker 
+    const url = ticker
       ? `${API_BASE_URL}/api/v1/predictions/${ticker}`
       : `${API_BASE_URL}/api/v1/predictions`;
-    
-    const response = await fetch(url);
+
+    const response = await fetch(url, { cache: 'no-store' });
     if (response.ok) {
       const data = await response.json();
       console.log(`✅ Direct ML predictions loaded for ${ticker || 'all stocks'}:`, data);
-      return ticker ? { [ticker]: data } : data.predictions;
+      // Support { windows } format from ML API
+      const windows = data.windows || data;
+      return ticker ? { [ticker]: windows } : data.predictions;
     } else {
       console.log(`❌ ML backend predictions unavailable for ${ticker || 'all stocks'}, status: ${response.status}`);
     }
@@ -157,11 +160,11 @@ export async function getPredictions(ticker?: string): Promise<Predictions | nul
 
 export async function getSentiment(ticker: string): Promise<Sentiment | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/v1/sentiment/${ticker}`);
+    const response = await fetch(`${API_BASE_URL}/api/v1/sentiment/${ticker}`, { cache: 'no-store' });
     if (!response.ok) {
       throw new Error('Failed to fetch sentiment');
     }
-    
+
     const data = await response.json();
     return data.sentiment;
   } catch (error) {
@@ -176,7 +179,7 @@ export async function checkHealth(): Promise<boolean> {
     if (!response.ok) {
       throw new Error('API health check failed');
     }
-    
+
     const data = await response.json();
     return data.status === 'healthy';
   } catch (error) {
@@ -211,7 +214,7 @@ export async function getStockPrice(symbol: string): Promise<{ price: number; ch
       'TSLA': { price: 238.45, change: -5.67, changePercent: -2.32 },
       'NVDA': { price: 875.28, change: 12.45, changePercent: 1.44 },
     }
-    
+
     return mockPrices[symbol.toUpperCase()] || {
       price: Math.random() * 500 + 50,
       change: Math.random() * 20 - 10,
@@ -223,7 +226,7 @@ export async function getStockPrice(symbol: string): Promise<{ price: number; ch
   }
 }
 
-export async function searchStocks(query: string): Promise<Array<{symbol: string; name: string; price?: number}> | null> {
+export async function searchStocks(query: string): Promise<Array<{ symbol: string; name: string; price?: number }> | null> {
   try {
     // Extended mock search results - replace with real API
     const mockStocks = [
@@ -248,8 +251,8 @@ export async function searchStocks(query: string): Promise<Array<{symbol: string
       { symbol: "LLY", name: "Eli Lilly and Co." },
       { symbol: "ABBV", name: "AbbVie Inc." }
     ]
-    
-    return mockStocks.filter(stock => 
+
+    return mockStocks.filter(stock =>
       stock.symbol.toLowerCase().includes(query.toLowerCase()) ||
       stock.name.toLowerCase().includes(query.toLowerCase())
     ).slice(0, 10)
@@ -280,7 +283,7 @@ export function getSymbolFromCompanyName(companyName: string): string | null {
     'netflix': 'NFLX',
     'netflix inc': 'NFLX'
   }
-  
+
   return companyMap[companyName.toLowerCase()] || null
 }
 
@@ -306,7 +309,7 @@ export interface StockDetails {
 
 export async function getStockDetails(symbol: string): Promise<StockDetails | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/stock/${symbol}`);
+    const response = await fetch(`${API_BASE_URL}/api/stock/${symbol}`, { cache: 'no-store' });
     if (!response.ok) {
       throw new Error('Failed to fetch stock details');
     }
@@ -326,7 +329,7 @@ export async function getAIAnalysis(symbol: string): Promise<{
   lastUpdated?: string;
 } | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/stock/${symbol}/ai-analysis`);
+    const response = await fetch(`${API_BASE_URL}/api/stock/${symbol}/ai-analysis`, { cache: 'no-store' });
     if (!response.ok) {
       throw new Error('Failed to fetch AI analysis');
     }
@@ -341,21 +344,21 @@ export async function getAIAnalysis(symbol: string): Promise<{
 export async function getComprehensiveAIExplanation(ticker: string, date?: string): Promise<AIExplanation | null> {
   try {
     const targetDate = date || new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-    
+
     // PRIORITY 1: Check if we have stored explanation in MongoDB (fastest)
     // Only try ML backend in development
     const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
     if (isLocalDev) try {
-      const storedResponse = await fetch(`http://127.0.0.1:8000/api/v1/explanation/stored/${ticker}?window=comprehensive`);
+      const storedResponse = await fetch(`http://127.0.0.1:8000/api/v1/explanation/stored/${ticker}?window=comprehensive`, { cache: 'no-store' });
       if (storedResponse.ok) {
         const storedData = await storedResponse.json();
-        
+
         // Transform stored MongoDB data to frontend format
         if (storedData.explanation_data?.ai_explanation) {
           console.log(`✅ Using stored explanation for ${ticker} from MongoDB`);
-          
+
           const explanationData = storedData.explanation_data;
-          
+
           return {
             ticker: ticker,
             date: explanationData.explanation_date || targetDate,
@@ -404,7 +407,7 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
               macd: explanationData.technical_indicators?.MACD || 0,
               macd_signal: explanationData.technical_indicators?.MACD_Signal > 0 ? 'Bullish' : 'Bearish',
               bollinger_position: explanationData.technical_indicators?.Close > explanationData.technical_indicators?.Bollinger_Upper ? 'Upper Band' :
-                                explanationData.technical_indicators?.Close < explanationData.technical_indicators?.Bollinger_Lower ? 'Lower Band' : 'Mid-range',
+                explanationData.technical_indicators?.Close < explanationData.technical_indicators?.Bollinger_Lower ? 'Lower Band' : 'Mid-range',
               volume_trend: explanationData.technical_indicators?.Volume > explanationData.technical_indicators?.Volume_SMA ? 'High' : 'Normal',
               // Additional technical data
               bollinger_upper: explanationData.technical_indicators?.Bollinger_Upper || 0,
@@ -431,10 +434,10 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
     } catch (storedError) {
       console.log(`No stored explanation found for ${ticker}, will try generation`);
     }
-    
+
     // PRIORITY 2: Try Node.js backend stored explanation endpoint
     try {
-      const response = await fetch(`${API_BASE_URL}/api/stock/${ticker}/explanation?window=comprehensive`);
+      const response = await fetch(`${API_BASE_URL}/api/stock/${ticker}/explanation?window=comprehensive`, { cache: 'no-store' });
       if (response.ok) {
         const data = await response.json();
         if (data) {
@@ -445,11 +448,11 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
     } catch (nodeError) {
       console.log('Node.js backend stored explanation not available');
     }
-    
+
     // PRIORITY 3: Only generate if no stored data exists (this is expensive!)
     console.log(`⚠️ No stored explanation found for ${ticker}, this will trigger generation`);
     return null; // Return null to indicate no stored data, let component decide whether to generate
-    
+
   } catch (error) {
     console.error('Error fetching comprehensive AI explanation:', error);
     return null;
@@ -459,19 +462,20 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
 export async function generateAIExplanation(ticker: string, date?: string): Promise<AIExplanation | null> {
   try {
     const targetDate = date || new Date().toISOString().split('T')[0];
-    
+
     const response = await fetch(`${API_BASE_URL}/api/stock/${ticker}/explanation/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ date: targetDate })
+      body: JSON.stringify({ date: targetDate }),
+      cache: 'no-store'
     });
-    
+
     if (!response.ok) {
       throw new Error(`Failed to generate AI explanation: ${response.statusText}`);
     }
-    
+
     const data = await response.json();
     return data.explanation;
   } catch (error) {
@@ -482,8 +486,8 @@ export async function generateAIExplanation(ticker: string, date?: string): Prom
 
 export async function getStoredAIExplanation(ticker: string, window: string = 'comprehensive'): Promise<any | null> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/stock/${ticker}/explanation?window=${window}`);
-    
+    const response = await fetch(`${API_BASE_URL}/api/stock/${ticker}/explanation?window=${window}`, { cache: 'no-store' });
+
     if (!response.ok) {
       if (response.status === 404) {
         console.log(`No stored explanation available for ${ticker}-${window}`);
@@ -491,7 +495,7 @@ export async function getStoredAIExplanation(ticker: string, window: string = 'c
       }
       throw new Error(`Failed to fetch stored explanation: ${response.statusText}`);
     }
-    
+
     const data = await response.json();
     return data.explanation;
   } catch (error) {
@@ -505,7 +509,7 @@ export async function generateMockAIExplanation(ticker: string): Promise<AIExpla
   const currentDate = new Date().toISOString().split('T')[0];
   const currentPrice = await getStockPrice(ticker);
   const basePrice = currentPrice?.price || 150;
-  
+
   return {
     ticker,
     date: currentDate,
@@ -647,14 +651,14 @@ export interface BatchGenerationResult {
 export async function generateBatchAIExplanations(date?: string): Promise<BatchGenerationResult | null> {
   try {
     const targetDate = date || new Date().toISOString().split('T')[0];
-    
+
     // Only try ML backend in development (localhost)
     const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
     if (!isLocalDev) {
       console.log('Batch generation only available in development mode');
       return null;
     }
-    
+
     // Try ML backend directly first
     const mlResponse = await fetch(`http://127.0.0.1:8000/api/v1/explain/batch`, {
       method: 'POST',
@@ -663,12 +667,12 @@ export async function generateBatchAIExplanations(date?: string): Promise<BatchG
       },
       body: JSON.stringify({ date: targetDate })
     });
-    
+
     if (mlResponse.ok) {
       const result = await mlResponse.json();
       return result;
     }
-    
+
     throw new Error(`Batch generation failed: ${mlResponse.statusText}`);
   } catch (error) {
     console.error('Error generating batch AI explanations:', error);
@@ -680,7 +684,7 @@ export async function getBatchExplanationStatus(): Promise<BatchExplanationStatu
   try {
     // Use Node.js backend which connects directly to MongoDB
     const backendResponse = await fetch(`${API_BASE_URL}/api/stock/batch/status`);
-    
+
     if (backendResponse.ok) {
       const result = await backendResponse.json();
       return {
@@ -693,18 +697,18 @@ export async function getBatchExplanationStatus(): Promise<BatchExplanationStatu
         detailed_status: []
       };
     }
-    
+
     // Fallback to ML backend if Node.js backend fails (only in development)
     const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost';
     if (isLocalDev) {
       const mlResponse = await fetch(`http://127.0.0.1:8000/api/v1/explain/batch/status`);
-      
+
       if (mlResponse.ok) {
         const result = await mlResponse.json();
         return result;
       }
     }
-    
+
     console.log('Batch status unavailable');
     return null;
   } catch (error) {
@@ -776,7 +780,7 @@ export async function addToWatchlist(userId: string, symbol: string): Promise<{ 
       },
       body: JSON.stringify({ symbol: symbol.toUpperCase() })
     });
-    
+
     const data = await response.json();
     return data;
   } catch (error) {
@@ -790,7 +794,7 @@ export async function removeFromWatchlist(userId: string, symbol: string): Promi
     const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/${userId}/${symbol}`, {
       method: 'DELETE'
     });
-    
+
     const data = await response.json();
     return data;
   } catch (error) {
@@ -803,11 +807,11 @@ export async function getRealtimeUpdates(symbols: string[]): Promise<{ success: 
   try {
     const symbolsParam = symbols.join(',');
     const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/updates/realtime?symbols=${symbolsParam}`);
-    
+
     if (!response.ok) {
       throw new Error('Failed to fetch real-time updates');
     }
-    
+
     const data = await response.json();
     return data;
   } catch (error) {
@@ -819,11 +823,11 @@ export async function getRealtimeUpdates(symbols: string[]): Promise<{ success: 
 export async function getWebSocketStatus(): Promise<{ success: boolean; connected?: boolean; subscribedSymbols?: string[] }> {
   try {
     const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/status/websocket`);
-    
+
     if (!response.ok) {
       throw new Error('Failed to get WebSocket status');
     }
-    
+
     const data = await response.json();
     return data;
   } catch (error) {
@@ -841,7 +845,7 @@ export async function subscribeToUpdates(symbols: string[]): Promise<{ success: 
       },
       body: JSON.stringify({ symbols })
     });
-    
+
     const data = await response.json();
     return data;
   } catch (error) {

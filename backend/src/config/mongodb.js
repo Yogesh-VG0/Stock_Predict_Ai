@@ -167,6 +167,9 @@ class MongoDBConnection {
         return null;
       }
 
+      console.log(`🔍 MongoDB: Fetching latest predictions for ${ticker}`);
+
+
       const collection = this.db.collection('stock_predictions');
 
       // Get the most recent timestamp for this ticker
@@ -176,8 +179,12 @@ class MongoDBConnection {
       );
 
       if (!latestDoc) {
+        console.log(`❌ MongoDB: No predictions found for ${ticker}`);
         return null;
       }
+
+      console.log(`✅ MongoDB: Found latest doc for ${ticker} at ${latestDoc.timestamp}`);
+
 
       // Get all predictions from that timestamp
       const cursor = collection.find({
@@ -204,7 +211,10 @@ class MongoDBConnection {
         };
       }
 
-      return Object.keys(predictions).length > 0 ? predictions : null;
+      const count = Object.keys(predictions).length;
+      console.log(`✅ MongoDB: Retrieved ${count} prediction windows for ${ticker}`);
+      return count > 0 ? predictions : null;
+
     } catch (error) {
       console.error(`Error getting predictions for ${ticker}:`, error.message);
       return null;
