@@ -300,7 +300,7 @@ const getStockDetails = async (req, res) => {
       const explanationResponse = await axios.get(`${ML_BACKEND_URL}/api/v1/predictions/${upperSymbol}/explanation`, {
         timeout: 10000
       });
-      
+
       if (explanationResponse.data && explanationResponse.data.explanation) {
         const explanation = explanationResponse.data.explanation;
         aiAnalysis = {
@@ -384,7 +384,7 @@ const getAIAnalysis = async (req, res) => {
 
     } catch (mlError) {
       console.log(`ML Backend not available for ${upperSymbol}, using fallback`);
-      
+
       // Fallback AI analysis
       res.json({
         positiveFactors: [
@@ -522,9 +522,9 @@ Our analysis processed ${Math.floor(Math.random() * 200 + 50)} data points acros
     res.json(mockExplanation);
   } catch (error) {
     console.error('Error fetching comprehensive explanation:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch comprehensive explanation',
-      message: error.message 
+      message: error.message
     });
   }
 };
@@ -540,13 +540,13 @@ const getStoredExplanation = async (req, res) => {
 
     // Get directly from MongoDB
     const storedData = await mongoConnection.getStoredExplanation(ticker, window);
-    
+
     if (storedData && storedData.explanation_data) {
       console.log(`✅ Found stored explanation for ${ticker} (${storedData.explanation_data.explanation_length || 0} chars)`);
-      
+
       // Transform MongoDB data to frontend format
       const explanationData = storedData.explanation_data;
-      
+
       const transformedData = {
         ticker: ticker,
         date: explanationData.explanation_date || new Date().toISOString().split('T')[0],
@@ -595,7 +595,7 @@ const getStoredExplanation = async (req, res) => {
           macd: explanationData.technical_indicators?.MACD || 0,
           macd_signal: (explanationData.technical_indicators?.MACD_Signal || 0) > 0 ? 'Bullish' : 'Bearish',
           bollinger_position: explanationData.technical_indicators?.Close > explanationData.technical_indicators?.Bollinger_Upper ? 'Upper Band' :
-                             explanationData.technical_indicators?.Close < explanationData.technical_indicators?.Bollinger_Lower ? 'Lower Band' : 'Mid-range',
+            explanationData.technical_indicators?.Close < explanationData.technical_indicators?.Bollinger_Lower ? 'Lower Band' : 'Mid-range',
           volume_trend: (explanationData.technical_indicators?.Volume || 0) > (explanationData.technical_indicators?.Volume_SMA || 0) ? 'High' : 'Normal',
           // Extended technical data
           bollinger_upper: explanationData.technical_indicators?.Bollinger_Upper || 0,
@@ -622,15 +622,15 @@ const getStoredExplanation = async (req, res) => {
     }
 
     console.log(`❌ No stored explanation found for ${ticker}-${window}`);
-    res.status(404).json({ 
+    res.status(404).json({
       error: 'No stored explanation found',
       message: `No explanation available for ${ticker} with window ${window}`
     });
   } catch (error) {
     console.error('Error fetching stored explanation:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch stored explanation',
-      message: error.message 
+      message: error.message
     });
   }
 };
@@ -648,7 +648,7 @@ const generateAIExplanation = async (req, res) => {
       const response = await axios.get(`${ML_BACKEND_URL}/api/v1/explain/${ticker}/${targetDate}`, {
         timeout: 30000 // 30 seconds for AI generation
       });
-      
+
       if (response.data) {
         return res.json({
           status: 'success',
@@ -660,7 +660,7 @@ const generateAIExplanation = async (req, res) => {
       }
     } catch (mlError) {
       console.error(`ML Backend error for ${ticker}:`, mlError.message);
-      
+
       // Return fallback response
       return res.status(503).json({
         status: 'fallback',
@@ -671,10 +671,10 @@ const generateAIExplanation = async (req, res) => {
     }
   } catch (error) {
     console.error('Error generating AI explanation:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       status: 'error',
       error: 'Failed to generate AI explanation',
-      message: error.message 
+      message: error.message
     });
   }
 };
@@ -683,17 +683,17 @@ const generateAIExplanation = async (req, res) => {
 const getBatchExplanationStatus = async (req, res) => {
   try {
     console.log('📊 Getting batch explanation status from MongoDB');
-    
+
     const status = await mongoConnection.getBatchStatus();
-    
+
     console.log(`✅ Batch status: ${status.with_explanations}/${status.total_tickers} (${status.coverage_percentage}%)`);
-    
+
     res.json(status);
   } catch (error) {
     console.error('Error getting batch status:', error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to get batch status',
-      message: error.message 
+      message: error.message
     });
   }
 };
@@ -703,7 +703,7 @@ const getAvailableStocksWithExplanations = async (req, res) => {
   try {
     const mongoClient = req.app.locals.mongoClient;
     const result = await mongoClient.getAvailableStocksWithExplanations();
-    
+
     res.json(result);
   } catch (error) {
     console.error('Error getting available stocks with explanations:', error);
@@ -711,21 +711,21 @@ const getAvailableStocksWithExplanations = async (req, res) => {
   }
 };
 
-// Get real ML predictions from ML backend
+// Get real ML predictions from ML backend or MongoDB
 const getPredictions = async (req, res) => {
   try {
     const { symbol } = req.params;
     const upperSymbol = symbol.toUpperCase();
 
-    // Try to get predictions from ML backend
+    // Try to get predictions from ML backend first (live)
     try {
       const mlResponse = await axios.get(`${ML_BACKEND_URL}/api/v1/predictions/${upperSymbol}`, {
-        timeout: 30000
+        timeout: 5000
       });
 
       if (mlResponse.data) {
-        // Transform the data to match frontend expectations
-        const predictions = mlResponse.data;
+        // Support both { windows: {...} } and legacy { next_day: {...} } formats
+        const predictions = mlResponse.data.windows || mlResponse.data;
         const transformedData = {};
 
         // Transform prediction data structure
@@ -743,14 +743,42 @@ const getPredictions = async (req, res) => {
           }
         }
 
-        res.json({ [upperSymbol]: transformedData });
-      } else {
-        throw new Error('No prediction data received');
+        return res.json({ [upperSymbol]: transformedData });
       }
     } catch (mlError) {
-      console.log(`ML backend unavailable for ${upperSymbol}, returning null for frontend fallback`);
-      res.status(404).json({ error: `No ML predictions available for ${upperSymbol}` });
+      console.log(`ML backend unavailable for ${upperSymbol}, trying MongoDB...`);
     }
+
+    // Fallback: Read stored predictions from MongoDB
+    try {
+      const storedPredictions = await mongoConnection.getLatestPredictions(upperSymbol);
+
+      if (storedPredictions) {
+        const transformedData = {};
+
+        for (const [window, predData] of Object.entries(storedPredictions)) {
+          if (predData && typeof predData === 'object') {
+            transformedData[window] = {
+              predicted_price: predData.predicted_price || 0,
+              predicted_change: predData.price_change || 0,
+              current_price: predData.current_price || 0,
+              confidence: predData.confidence || 0,
+              price_change: predData.price_change || 0,
+              model_predictions: predData.model_predictions || {},
+              ensemble_weights: predData.ensemble_weights || {}
+            };
+          }
+        }
+
+        console.log(`✅ Serving stored predictions for ${upperSymbol} from MongoDB`);
+        return res.json({ [upperSymbol]: transformedData });
+      }
+    } catch (mongoError) {
+      console.log(`MongoDB predictions unavailable for ${upperSymbol}:`, mongoError.message);
+    }
+
+    // No predictions available from any source
+    res.status(404).json({ error: `No predictions available for ${upperSymbol}` });
   } catch (error) {
     console.error('Error getting predictions:', error);
     res.status(500).json({ error: 'Failed to get predictions' });

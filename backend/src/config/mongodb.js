@@ -19,39 +19,39 @@ class MongoDBConnection {
       // Log connection attempt (mask credentials in URI)
       const maskedUri = MONGODB_URI.replace(/:\/\/[^:]+:[^@]+@/, '://*****:*****@');
       console.log(`📡 Connecting to MongoDB: ${maskedUri}`);
-      
+
       this.connection = await mongoose.connect(MONGODB_URI, {
         useNewUrlParser: true,
         useUnifiedTopology: true,
         serverSelectionTimeoutMS: 10000, // 10 second timeout
         connectTimeoutMS: 10000,
       });
-      
+
       this.db = this.connection.connection.db;
       this.isConnected = true;
-      
+
       // Set up connection event handlers
       mongoose.connection.on('disconnected', () => {
         console.warn('⚠️ MongoDB disconnected');
         this.isConnected = false;
       });
-      
+
       mongoose.connection.on('reconnected', () => {
         console.log('✅ MongoDB reconnected');
         this.isConnected = true;
       });
-      
+
       mongoose.connection.on('error', (err) => {
         console.error('❌ MongoDB connection error:', err.message);
         this.isConnected = false;
       });
-      
+
       console.log('✅ Connected to MongoDB (Node.js Backend)');
       return this.connection;
     } catch (error) {
       this.isConnected = false;
       console.error('❌ MongoDB connection error:', error.message);
-      
+
       // Provide helpful error messages
       if (error.message.includes('ECONNREFUSED')) {
         console.error('   💡 Is MongoDB running? Try: mongod --dbpath /path/to/data');
@@ -60,7 +60,7 @@ class MongoDBConnection {
       } else if (error.message.includes('getaddrinfo ENOTFOUND')) {
         console.error('   💡 Cannot resolve MongoDB host - check your MONGODB_URI');
       }
-      
+
       throw error;
     }
   }
@@ -80,7 +80,7 @@ class MongoDBConnection {
       }
 
       const collection = this.db.collection('prediction_explanations');
-      
+
       const explanation = await collection.findOne(
         { ticker: ticker.toUpperCase(), window: window },
         { sort: { timestamp: -1 } } // Get most recent
@@ -101,9 +101,9 @@ class MongoDBConnection {
       }
 
       const collection = this.db.collection('prediction_explanations');
-      
+
       const stocks = await collection.distinct('ticker', { window: 'comprehensive' });
-      
+
       return stocks;
     } catch (error) {
       console.error('Error getting available stocks:', error.message);
@@ -126,21 +126,21 @@ class MongoDBConnection {
       }
 
       const collection = this.db.collection('prediction_explanations');
-      
+
       // Get all tickers with explanations
       const stocksWithExplanations = await collection.distinct('ticker', { window: 'comprehensive' });
-      
+
       // Define all target tickers (same as ML backend)
       const allTickers = [
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
         'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'XOM',
         'LLY', 'ABBV', 'AVGO', 'COST', 'CRM', 'ORCL', 'BRK-B'
       ];
-      
+
       const coverage = stocksWithExplanations.length;
       const total = allTickers.length;
       const coveragePercentage = Math.round((coverage / total) * 100);
-      
+
       return {
         with_explanations: coverage,
         without_explanations: total - coverage,
@@ -157,6 +157,57 @@ class MongoDBConnection {
         coverage_percentage: 0,
         available_tickers: []
       };
+    }
+  }
+
+  async getLatestPredictions(ticker) {
+    try {
+      if (!this.isConnected || !this.db) {
+        console.warn(`⚠️ MongoDB not connected - cannot retrieve predictions for ${ticker}`);
+        return null;
+      }
+
+      const collection = this.db.collection('stock_predictions');
+
+      // Get the most recent timestamp for this ticker
+      const latestDoc = await collection.findOne(
+        { ticker: ticker.toUpperCase() },
+        { sort: { timestamp: -1 } }
+      );
+
+      if (!latestDoc) {
+        return null;
+      }
+
+      // Get all predictions from that timestamp
+      const cursor = collection.find({
+        ticker: ticker.toUpperCase(),
+        timestamp: latestDoc.timestamp
+      });
+
+      const predictions = {};
+      const docs = await cursor.toArray();
+
+      for (const doc of docs) {
+        const window = doc.window;
+        if (window === '_meta') continue; // Skip metadata entries
+
+        predictions[window] = {
+          predicted_price: doc.predicted_price,
+          price_change: doc.price_change,
+          current_price: doc.current_price,
+          confidence: doc.confidence || 0,
+          price_range: doc.price_range || {},
+          model_predictions: doc.model_predictions || {},
+          ensemble_weights: doc.ensemble_weights || {},
+          timestamp: doc.timestamp
+        };
+      }
+
+      return Object.keys(predictions).length > 0 ? predictions : null;
+    } catch (error) {
+      console.error(`Error getting predictions for ${ticker}:`, error.message);
+      return null;
     }
   }
 }

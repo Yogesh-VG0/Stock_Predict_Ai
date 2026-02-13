@@ -63,3 +63,8 @@ sessions/
 
 # Models (large files - too big for GitHub, use Git LFS or download separately)
 models/
+
+# ML pipeline logs & temp data
+pipeline_log*.txt
+ml_backend/data_cache/
+ml_backend/scripts/smoke_data/

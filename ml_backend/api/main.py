@@ -2,58 +2,46 @@
 Main FastAPI application for the stock prediction system.
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Request, Query
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-import jwt
 from pydantic import BaseModel
-import time
-from functools import wraps
 import redis.asyncio as redis
 import os
 from dotenv import load_dotenv
-from fastapi_limiter import FastAPILimiter
-from fastapi_limiter.depends import RateLimiter
 import logging
+
+from ml_backend.api.errors import setup_error_handling
+from ml_backend.api.rate_limiter import (
+    InMemoryRateLimiter,
+    RateLimitMiddleware,
+    cleanup_rate_limiter_task,
+)
+from ml_backend.api.routes.batch_predictions import router as batch_router
 import traceback
 from starlette.concurrency import run_in_threadpool
 import json
-import httpx
 import pandas as pd
-import google.generativeai as genai
 import numpy as np
-from ml_backend.data.economic_calendar import EconomicCalendar
 import asyncio
-import sys
 import random
+import uuid
+
+from ml_backend.data.economic_calendar import EconomicCalendar
 
 from ml_backend.config.constants import (
-    API_PREFIX,
-    API_VERSION,
-    RATE_LIMIT,
-    JWT_ALGORITHM,
-    ACCESS_TOKEN_EXPIRE_MINUTES,
     TOP_100_TICKERS,
-    API_CONFIG,
-    PREDICTION_WINDOWS,
-    TECHNICAL_INDICATORS,
-    FEATURE_CONFIG,
-    MODEL_CONFIG,
-    MONGO_COLLECTIONS,
-    REDDIT_SUBREDDITS,
-    RSS_FEEDS,
-    RETRY_CONFIG,
     HISTORICAL_DATA_YEARS,
-    MONGODB_URI
+    MONGODB_URI,
 )
 from ml_backend.utils.mongodb import MongoDBClient
 from ml_backend.data.ingestion import DataIngestion
 from ml_backend.data.sentiment import SentimentAnalyzer
-from ml_backend.data.features import FeatureEngineer
+from ml_backend.data.features_minimal import MinimalFeatureEngineer
 from ml_backend.models.predictor import StockPredictor
+from ml_backend.api.utils import normalize_prediction_dict
 
 # Load environment variables
 load_dotenv()
@@ -68,14 +56,24 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# CORS middleware
+setup_error_handling(app)
+
+# CORS: use CORS_ORIGINS env for prod (e.g. ["https://yourdomain.com"]), else ["*"] for dev
+_cors_origins = os.getenv("CORS_ORIGINS", "*")
+if _cors_origins != "*":
+    _cors_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+else:
+    _cors_origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize fallback rate limiter (used when Redis unavailable)
+fallback_limiter = InMemoryRateLimiter()
 
 # Initialize Redis client for rate limiting and caching
 redis_client = None
@@ -90,9 +88,22 @@ except Exception as e:
     logger.warning(f"Could not connect to Redis: {str(e)}. Redis features will be disabled")
     redis_client = None
 
-# Global instances
-mongo_client = None
-predictor = None
+# Rate limiting with Redis/in-memory fallback
+app.add_middleware(
+    RateLimitMiddleware,
+    redis_client=redis_client,
+    fallback_limiter=fallback_limiter,
+    limit=100,
+    window=3600,
+    exclude_paths=["/health", "/docs", "/openapi.json", "/redoc"],
+)
+
+# Include batch predictions router
+app.include_router(batch_router, prefix="/api/v1/predictions")
+
+# Cache TTL for predictions (seconds)
+PREDICTIONS_CACHE_TTL = 60  # 1 minute
+PREDICTIONS_CACHE_VERSION = "v1"
 
 @app.on_event("startup")
 async def startup():
@@ -117,27 +128,28 @@ async def startup():
         logger.info("Initializing sentiment analyzer...")
         app.state.sentiment_analyzer = SentimentAnalyzer(mongo_client, calendar_fetcher=app.state.calendar_fetcher)
         
-        logger.info("Initializing feature engineer...")
-        app.state.feature_engineer = FeatureEngineer(
-            sentiment_analyzer=app.state.sentiment_analyzer,
-            mongo_client=app.state.mongo_client,
-            calendar_fetcher=app.state.calendar_fetcher
-        )
+        logger.info("Initializing minimal feature engineer (v1 - leakage-proof)...")
+        app.state.feature_engineer = MinimalFeatureEngineer(mongo_client=app.state.mongo_client)
         
         logger.info("Initializing stock predictor...")
-        predictor = StockPredictor(app.state.mongo_client)
-        predictor.set_feature_engineer(app.state.feature_engineer)
-        app.state.stock_predictor = predictor
+        stock_predictor = StockPredictor(app.state.mongo_client)
+        stock_predictor.set_feature_engineer(app.state.feature_engineer)
+        app.state.stock_predictor = stock_predictor
         
         if redis_client is not None:
             logger.info("Initializing Redis...")
             await redis_client.ping()
-            await FastAPILimiter.init(redis_client)
+            app.state.redis_client = redis_client
         else:
-            logger.info("Redis not configured, skipping rate limiting")
+            logger.info("Redis not configured, using in-memory rate limiter only")
+            app.state.redis_client = None
+
+        # Start rate limiter cleanup task (prevents memory buildup)
+        asyncio.create_task(cleanup_rate_limiter_task(fallback_limiter, interval=3600))
             
         logger.info("Loading models...")
-        predictor.load_models()
+        app.state.stock_predictor.load_models()
+        app.state.training_jobs = {}  # Job status: use Redis in production for persistence
         
         logger.info("API startup completed successfully")
     except Exception as e:
@@ -163,34 +175,6 @@ async def shutdown():
         logger.info("API shutdown completed")
     except Exception as e:
         logger.error(f"Error during shutdown: {str(e)}")
-
-# Rate limiting middleware
-def rate_limit(limit: int = RATE_LIMIT, window: int = 3600):
-    """Rate limiting decorator using Redis."""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(request: Request, *args, **kwargs):
-            client_ip = request.client.host
-            key = f"rate_limit:{client_ip}"
-            if redis_client is None:
-                return await func(request, *args, **kwargs)
-            # Get current count
-            current = await redis_client.get(key)
-            if current is None:
-                # First request in the window
-                await redis_client.setex(key, window, 1)
-            else:
-                current = int(current)
-                if current >= limit:
-                    raise HTTPException(
-                        status_code=429,
-                        detail="Rate limit exceeded. Please try again later."
-                    )
-                # Increment counter
-                await redis_client.incr(key)
-            return await func(request, *args, **kwargs)
-        return wrapper
-    return decorator
 
 # Models
 class PredictionResponse(BaseModel):
@@ -276,111 +260,106 @@ def load_all_historical_data_from_mongodb(mongo_client, tickers, start_date, end
             results[ticker] = df
     return results
 
-@app.post("/api/v1/train", tags=["Training"], summary="Train All Models", description="Train all models for all tickers using existing data in MongoDB.")
-async def train_all_models():
-    """
-    Train all models for all tickers using existing data in MongoDB. Does NOT fetch new sentiment or ingest new data.
-    """
-    logger.info("Starting model training pipeline (no ingestion, no sentiment fetch)...")
+
+def _run_training_job(job_id: str) -> None:
+    """Background task: run full training pipeline. Updates app.state.training_jobs[job_id]."""
+    if not hasattr(app.state, "training_jobs") or app.state.training_jobs is None:
+        app.state.training_jobs = {}
+    jobs = app.state.training_jobs
     try:
-        # Step 1: Load all historical data from MongoDB
+        jobs[job_id] = {"status": "running", "progress": 0, "message": "Loading historical data..."}
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=HISTORICAL_DATA_YEARS * 365)
         historical_data = load_all_historical_data_from_mongodb(
             app.state.mongo_client, TOP_100_TICKERS, start_date, end_date
         )
-        logger.info(f"Loaded historical data for tickers: {list(historical_data.keys())}")
-        for t, df in historical_data.items():
-            logger.info(f"{t}: {df.shape if df is not None else 'None'}")
-        # Step 2: Train and predict using MongoDB data
-        logger.info("Starting model training for all tickers...")
+        jobs[job_id] = {"status": "running", "progress": 20, "message": f"Training {len(historical_data)} tickers..."}
         app.state.stock_predictor.train_all_models(historical_data)
-        logger.info("Model training completed.")
-        for ticker, df in historical_data.items():
+        jobs[job_id] = {"status": "running", "progress": 70, "message": "Storing predictions..."}
+        total = len(historical_data)
+        for i, (ticker, df) in enumerate(historical_data.items()):
             if df is not None and not df.empty:
-                # Rename OHLCV columns to standard names before feature engineering
                 df = app.state.data_ingestion.rename_ohlcv_columns(df, ticker)
-                # Ensure 'date' is a column and is datetime
                 if 'date' not in df.columns and isinstance(df.index, pd.DatetimeIndex):
                     df = df.reset_index()
                 if 'date' not in df.columns and 'index' in df.columns:
                     df = df.rename(columns={'index': 'date'})
                 if 'date' in df.columns:
                     df['date'] = pd.to_datetime(df['date'])
-                features, _ = app.state.feature_engineer.prepare_features(df)
+                features, _ = app.state.feature_engineer.prepare_features(df, ticker=ticker, mongo_client=app.state.mongo_client)
                 if features is not None and features.size > 0:
                     try:
-                        latest_features = features[-1]
-                        # Try to get the latest price from Alpha Vantage quote endpoint
-                        av_quote = app.state.mongo_client.get_alpha_vantage_data(ticker, 'quote')
-                        raw_current_price = None
-                        if av_quote and 'Global Quote' in av_quote and '05. price' in av_quote['Global Quote']:
-                            try:
-                                raw_current_price = float(av_quote['Global Quote']['05. price'])
-                                logger.info(f"Using Alpha Vantage quote price for {ticker}: {raw_current_price}")
-                            except Exception as e:
-                                logger.warning(f"Could not parse Alpha Vantage price for {ticker}: {e}")
-                        if raw_current_price is None:
-                            if 'Close' in df.columns:
-                                raw_current_price = float(df['Close'].iloc[-1])
-                                logger.info(f"Using last Close price for {ticker}: {raw_current_price}")
-                            else:
-                                close_idx = app.state.feature_engineer.feature_columns.index('Close') if hasattr(app.state.feature_engineer, 'feature_columns') and 'Close' in app.state.feature_engineer.feature_columns else -1
-                                raw_current_price = float(latest_features[close_idx]) if close_idx != -1 else None
-                                logger.info(f"Using features array for Close price for {ticker}: {raw_current_price}")
                         predictions = app.state.stock_predictor.predict_all_windows(ticker, df)
-                        # Ensure predictions dict contains valid values before storing
+                        predictions = normalize_prediction_dict(predictions)
                         if predictions:
-                            for window, vals in predictions.items():
-                                # Validate prediction structure
-                                if not isinstance(vals, dict):
-                                    logger.error(f"Invalid prediction structure for {ticker}-{window}: {vals}")
-                                    continue
-                                    
-                                # Ensure prediction value exists and is valid
-                                if "price_change" in vals:
-                                    try:
-                                        predictions[window]["prediction"] = float(vals["price_change"])
-                                    except (ValueError, TypeError) as e:
-                                        logger.error(f"Invalid price_change for {ticker}-{window}: {vals['price_change']}, error: {e}")
-                                        predictions[window]["prediction"] = 0.0
-                                elif "prediction" in vals:
-                                    try:
-                                        predictions[window]["prediction"] = float(vals["prediction"])
-                                    except (ValueError, TypeError) as e:
-                                        logger.error(f"Invalid prediction for {ticker}-{window}: {vals['prediction']}, error: {e}")
-                                        predictions[window]["prediction"] = 0.0
-                                else:
-                                    logger.error(f"No prediction or price_change found for {ticker}-{window}: {vals}")
-                                    predictions[window]["prediction"] = 0.0
-                                
-                                # Ensure confidence value exists and is valid
-                                try:
-                                    predictions[window]["confidence"] = float(vals.get("confidence", 0.0))
-                                except (ValueError, TypeError) as e:
-                                    logger.error(f"Invalid confidence for {ticker}-{window}: {vals.get('confidence')}, error: {e}")
-                                    predictions[window]["confidence"] = 0.0
-                        logger.info(f"Storing complete predictions for {ticker}: {predictions}")
-                        if predictions:
-                            # Store complete prediction data (the new store_predictions method handles all fields)
-                            result = app.state.mongo_client.store_predictions(ticker, predictions)
-                            if result:
-                                logger.info(f"Successfully stored complete predictions for {ticker}")
-                            else:
-                                logger.error(f"Failed to store predictions for {ticker}")
-                        else:
-                            logger.warning(f"No predictions generated for {ticker}")
+                            app.state.mongo_client.store_predictions(ticker, predictions)
                     except Exception as e:
                         logger.error(f"Error predicting/storing for {ticker}: {str(e)}")
-                else:
-                    logger.warning(f"No features for {ticker}, skipping prediction.")
-            else:
-                logger.warning(f"No historical data for {ticker}, skipping.")
-        logger.info("Training and prediction pipeline completed successfully.")
-        return {"status": "Training and prediction completed (no ingestion, no sentiment fetch)"}
+            jobs[job_id] = {
+                "status": "running",
+                "progress": 70 + int(30 * (i + 1) / max(total, 1)),
+                "message": f"Processed {i+1}/{total} tickers",
+            }
+        jobs[job_id] = {
+            "status": "completed",
+            "progress": 100,
+            "message": "Training and prediction completed",
+            "completed_at": datetime.utcnow().isoformat(),
+        }
     except Exception as e:
-        logger.error(f"Error during training: {str(e)}")
-        raise HTTPException(status_code=500, detail="Training failed")
+        logger.error(f"Training job {job_id} failed: {e}")
+        jobs[job_id] = {
+            "status": "failed",
+            "progress": 0,
+            "message": str(e),
+            "error": str(e),
+            "completed_at": datetime.utcnow().isoformat(),
+        }
+
+
+@app.post("/api/v1/train", tags=["Training"], summary="Train All Models", description="Start training job in background. Returns job_id to poll status.")
+async def train_all_models(background_tasks: BackgroundTasks) -> Dict:
+    """Start training job. Returns job_id immediately. Poll GET /api/v1/train/status/{job_id} for progress."""
+    job_id = str(uuid.uuid4())
+    if not hasattr(app.state, "training_jobs"):
+        app.state.training_jobs = {}
+    app.state.training_jobs[job_id] = {"status": "pending", "progress": 0, "message": "Job queued"}
+    background_tasks.add_task(_run_training_job, job_id)
+    return {"job_id": job_id, "status": "pending", "message": "Training job started. Poll /api/v1/train/status/{job_id} for progress."}
+
+
+@app.get("/api/v1/train/status/{job_id}", tags=["Training"], summary="Get Training Job Status", description="Get status of a training job.")
+async def get_training_status(job_id: str) -> Dict:
+    """Get status of a training job."""
+    jobs = getattr(app.state, "training_jobs", None) or {}
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return jobs[job_id]
+
+async def _get_predictions_cached(ticker: str) -> Optional[Dict]:
+    """Get predictions from Redis cache if available."""
+    if redis_client is None:
+        return None
+    try:
+        key = f"predictions:{PREDICTIONS_CACHE_VERSION}:{ticker}"
+        cached = await redis_client.get(key)
+        if cached:
+            return json.loads(cached)
+    except Exception as e:
+        logger.debug(f"Cache read failed for {ticker}: {e}")
+    return None
+
+
+async def _set_predictions_cache(ticker: str, predictions: Dict) -> None:
+    """Store predictions in Redis cache."""
+    if redis_client is None or not predictions:
+        return
+    try:
+        key = f"predictions:{PREDICTIONS_CACHE_VERSION}:{ticker}"
+        await redis_client.setex(key, PREDICTIONS_CACHE_TTL, json.dumps(predictions, default=str))
+    except Exception as e:
+        logger.debug(f"Cache write failed for {ticker}: {e}")
+
 
 @app.get("/api/v1/predictions/{ticker}", tags=["Predictions"], summary="Get Predictions", description="Get model predictions for a given ticker.")
 async def get_predictions(ticker: str) -> Dict:
@@ -388,20 +367,34 @@ async def get_predictions(ticker: str) -> Dict:
     try:
         if ticker not in TOP_100_TICKERS:
             raise HTTPException(status_code=404, detail="Ticker not found in S&P 100")
-        # Get latest predictions
-        predictions = app.state.mongo_client.get_latest_predictions(ticker)
+        cached = await _get_predictions_cached(ticker)
+        if isinstance(cached, dict) and "windows" in cached:
+            return cached
+        predictions = None
+        if isinstance(cached, dict) and "windows" not in cached:
+            predictions = cached
+        else:
+            predictions = app.state.mongo_client.get_latest_predictions(ticker)
         if not predictions:
-            # Generate new predictions
-            df = app.state.mongo_client.get_historical_data(ticker)
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=365 * 2)
+            df = app.state.mongo_client.get_historical_data(ticker, start_date, end_date)
             if df is None or df.empty:
                 raise HTTPException(status_code=404, detail="No historical data available")
-            features, _ = app.state.feature_engineer.prepare_features(df)
+            features, _ = app.state.feature_engineer.prepare_features(df, ticker=ticker, mongo_client=app.state.mongo_client)
             if features is None or features.size == 0:
                 raise HTTPException(status_code=404, detail="No features available for prediction")
-            latest_features = features[-1]
-            predictions = app.state.stock_predictor.predict_all_windows(latest_features)
+            predictions = app.state.stock_predictor.predict_all_windows(ticker, df)
+            predictions = normalize_prediction_dict(predictions)
             app.state.mongo_client.store_predictions(ticker, predictions)
-        return predictions
+        windows = normalize_prediction_dict(predictions) if predictions else {}
+        result = {
+            "ticker": ticker,
+            "as_of": datetime.utcnow().isoformat(),
+            "windows": windows,
+        }
+        await _set_predictions_cache(ticker, result)
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -439,7 +432,12 @@ async def get_historical(ticker: str, start_date: Optional[str] = None, end_date
         data = app.state.mongo_client.get_historical_data(ticker, start_dt, end_dt)
         if data is None or data.empty:
             raise HTTPException(status_code=404, detail="No historical data available")
-        return data.to_dict()
+        return {
+            "ticker": ticker,
+            "start_date": start_date,
+            "end_date": end_date,
+            "data": data.to_dict(orient="records"),
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -1736,28 +1734,16 @@ async def predict_stock(ticker: str, request: PredictionRequest):
     try:
         logger.info(f"Prediction request for {ticker}")
         
-        # Fetch historical data
-        collection = app.state.mongo_client.db.stock_data
+        # Fetch historical data from MongoDB
         end_date = datetime.now()
         start_date = end_date - timedelta(days=request.days_back)
+        df = app.state.mongo_client.get_historical_data(ticker, start_date, end_date)
         
-        query = {
-            'ticker': ticker,
-            'date': {'$gte': start_date, '$lte': end_date}
-        }
-        
-        cursor = collection.find(query).sort('date', 1)
-        data = list(cursor)
-        
-        if len(data) < 50:
+        if df is None or len(df) < 50:
             raise HTTPException(
                 status_code=404, 
-                detail=f"Insufficient historical data for {ticker}. Found {len(data)} records, need at least 50."
+                detail=f"Insufficient historical data for {ticker}. Found {len(df) if df is not None else 0} records, need at least 50."
             )
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(data)
-        df = df.set_index('date') if 'date' in df.columns else df
         
         # Validate required columns
         required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -1842,8 +1828,7 @@ async def list_available_models():
     """List all available trained models."""
     try:
         models_info = {}
-        models_dir = "models"
-        
+        models_dir = "models/v1" if os.path.exists("models/v1") else "models"
         if os.path.exists(models_dir):
             for ticker_dir in os.listdir(models_dir):
                 ticker_path = os.path.join(models_dir, ticker_dir)
@@ -1874,7 +1859,7 @@ async def list_available_models():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Returns 503 when unhealthy."""
     try:
         # Test MongoDB connection
         if hasattr(app.state, 'mongo_client') and app.state.mongo_client and app.state.mongo_client.db is not None:
@@ -1882,19 +1867,24 @@ async def health_check():
             mongodb_status = "connected" if stats else "disconnected"
         else:
             mongodb_status = "not_initialized"
-        
-        return {
-            "status": "healthy",
+
+        healthy = mongodb_status == "connected"
+        payload = {
+            "status": "healthy" if healthy else "unhealthy",
             "mongodb": mongodb_status,
             "timestamp": datetime.now().isoformat(),
-            "api_version": "2.0.0"
+            "api_version": "2.0.0",
         }
+        return JSONResponse(content=payload, status_code=200 if healthy else 503)
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+        return JSONResponse(
+            content={
+                "status": "unhealthy",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+            },
+            status_code=503,
+        )
 
 @app.get("/debug/sec-filing-extraction/{ticker}")
 async def debug_sec_filing_extraction(ticker: str):
@@ -2110,15 +2100,15 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
         # 4. Get SHAP feature importance from the predictor
         shap_factors = {}
         try:
-            if hasattr(app.state, 'predictor') and app.state.predictor:
+            if hasattr(app.state, 'stock_predictor') and app.state.stock_predictor:
                 # Get features for explanation
                 if hasattr(app.state, 'feature_engineer') and app.state.feature_engineer:
                     features_df = historical_data.tail(60) if not historical_data.empty else None
                     if features_df is not None:
-                        features, _ = app.state.feature_engineer.prepare_features(features_df)
-                        if len(features) > 0:
+                        features, _ = app.state.feature_engineer.prepare_features(features_df, ticker=ticker, mongo_client=app.state.mongo_client)
+                        if features is not None and len(features) > 0:
                             latest_features = features[-1:].reshape(1, -1)
-                            shap_result = app.state.predictor.explain_prediction(latest_features, 'next_day', ticker)
+                            shap_result = getattr(app.state.stock_predictor, 'explain_prediction', lambda *a, **k: None)(latest_features, 'next_day', ticker)
                             
                             # Get top 10 most important features
                             if shap_result:
