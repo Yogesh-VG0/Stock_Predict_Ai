@@ -1,0 +1,60 @@
+name: Daily ML Predictions
+
+on:
+  schedule:
+    # Run Mon-Fri at 21:30 UTC (5:30 PM ET, after US market close)
+    - cron: '30 21 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger from GitHub UI
+
+env:
+  MONGODB_URI: ${{ secrets.MONGODB_URI }}
+
+jobs:
+  update-predictions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: ml_backend/requirements-prod.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r ml_backend/requirements-prod.txt
+
+      - name: Run ML Pipeline (all 20 stocks)
+        run: |
+          python -m ml_backend.scripts.run_pipeline \
+            --tickers AAPL MSFT GOOGL AMZN TSLA NVDA META NFLX JPM V \
+                      JNJ WMT PG UNH HD MA BAC XOM LLY ABBV
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Verify predictions stored
+        run: |
+          python -c "
+          import os
+          from pymongo import MongoClient
+          uri = os.getenv('MONGODB_URI')
+          client = MongoClient(uri)
+          db = client['stock_predictor']
+          col = db['stock_predictions']
+          count = col.count_documents({})
+          tickers = col.distinct('ticker')
+          print(f'Total predictions in DB: {count}')
+          print(f'Tickers with predictions: {len(tickers)}')
+          print(f'Tickers: {tickers}')
+          assert len(tickers) >= 15, f'Expected 15+ tickers but got {len(tickers)}'
+          print('✅ Prediction update successful!')
+          "
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
