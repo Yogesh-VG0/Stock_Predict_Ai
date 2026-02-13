@@ -32,3 +32,5 @@ tweepy==4.14.0
 pandas_market_calendars==4.3.0
 PyJWT==2.8.0
 xgboost==2.0.3
+torch==2.1.0
+sentencepiece==0.1.99
