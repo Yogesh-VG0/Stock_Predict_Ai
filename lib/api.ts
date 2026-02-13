@@ -218,15 +218,25 @@ export async function getMarketStatus(): Promise<MarketStatus | null> {
 
 export async function getStockPrice(symbol: string): Promise<{ price: number; change: number; changePercent: number } | null> {
   try {
-    console.log(`🔍 getStockPrice called for ${symbol} - Note: This currently returns hardcoded MOCK data for some stocks.`);
-    // For now, returning mock data for demonstration
+    // Try to get real-time price from our watchlist updates endpoint which uses the WS cache
+    const response = await fetch(`${API_BASE_URL}/api/watchlist/updates/realtime?symbols=${symbol.toUpperCase()}`, { cache: 'no-store' });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.updates && data.updates[symbol.toUpperCase()]) {
+        const update = data.updates[symbol.toUpperCase()];
+        return {
+          price: update.price,
+          change: update.change || 0,
+          changePercent: update.changePercent || 0
+        };
+      }
+    }
+
+    console.log(`🔍 getStockPrice using fallback mock for ${symbol}`);
     const mockPrices: Record<string, any> = {
-      'AAPL': { price: 191.45, change: 2.34, changePercent: 1.24 },
-      'MSFT': { price: 378.85, change: -1.22, changePercent: -0.32 },
-      'GOOGL': { price: 140.93, change: 0.87, changePercent: 0.62 },
-      'AMZN': { price: 155.74, change: 3.21, changePercent: 2.10 },
-      'TSLA': { price: 238.45, change: -5.67, changePercent: -2.32 },
-      'NVDA': { price: 875.28, change: 12.45, changePercent: 1.44 },
+      'AAPL': { price: 255.45, change: 1.34, changePercent: 0.52 },
+      'MSFT': { price: 425.85, change: -1.22, changePercent: -0.28 },
+      'NVDA': { price: 885.28, change: 10.45, changePercent: 1.22 },
     }
 
     return mockPrices[symbol.toUpperCase()] || {

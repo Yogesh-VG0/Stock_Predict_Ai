@@ -144,13 +144,16 @@ export default function StockDetail({ }: StockDetailProps) {
       // Load stock details
       const details = await getStockDetails(symbol)
       if (details) {
+        // Use real price from backend if available, otherwise fallback to details or mock
+        const finalPrice = details.price || currentPrice || 187.68
         const stockDataWithPrice = {
           ...details,
-          price: currentPrice || 187.68,
-          change: 4.23,
-          changePercent: 2.31
+          price: finalPrice,
+          change: details.change !== undefined ? details.change : 0,
+          changePercent: details.changePercent !== undefined ? details.changePercent : 0
         }
         setStockData(stockDataWithPrice)
+        if (details.price) setCurrentPrice(details.price)
       }
 
       // Load prediction data from the same source as AIExplanationWidget
