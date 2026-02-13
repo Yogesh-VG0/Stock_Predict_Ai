@@ -21,3 +21,4 @@ requests==2.31.0
 fredapi==0.5.2
 Brotli==1.1.0
 tensorflow==2.15.0
+optuna==3.4.0
