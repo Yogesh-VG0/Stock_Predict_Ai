@@ -339,6 +339,19 @@ const getStockDetails = async (req, res) => {
       aiAnalysis
     };
 
+    // Add real-time price from WebSocket service cache/API
+    try {
+      const currentPrice = await wsService.getCurrentPrice(upperSymbol);
+      if (currentPrice) {
+        stockDetails.price = currentPrice;
+        // In a real app, we'd get change/percent too, but let's provide a reasonable mock if missing
+        stockDetails.change = 0;
+        stockDetails.changePercent = 0;
+      }
+    } catch (priceError) {
+      console.log(`⚠️ Could not fetch real-time price for ${upperSymbol}:`, priceError.message);
+    }
+
     res.json(stockDetails);
 
   } catch (error) {

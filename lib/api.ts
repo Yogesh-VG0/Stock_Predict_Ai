@@ -115,7 +115,9 @@ export async function getPredictions(ticker?: string): Promise<Predictions | nul
     // First try to get real predictions from Node.js backend which calls ML backend
     if (ticker) {
       try {
-        const response = await fetch(`${NODE_BACKEND_URL}/api/stock/${ticker}/predictions`, {
+        const fullUrl = `${NODE_BACKEND_URL}/api/stock/${ticker}/predictions`;
+        console.log(`🌐 Fetching from Node Backend: ${fullUrl}`);
+        const response = await fetch(fullUrl, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -123,12 +125,15 @@ export async function getPredictions(ticker?: string): Promise<Predictions | nul
           cache: 'no-store', // Ensure fresh data from backend
         });
 
+        console.log(`📡 Response for ${ticker} predictions: ${response.status} ${response.statusText}`);
+
         if (response.ok) {
           const data = await response.json();
           console.log(`✅ Real ML predictions loaded for ${ticker}:`, data);
           return data;
         } else {
-          console.log(`❌ No real predictions available for ${ticker}, status: ${response.status}`);
+          const errorBody = await response.text().catch(() => 'No body');
+          console.log(`❌ No real predictions available for ${ticker}, status: ${response.status}. Body: ${errorBody.substring(0, 100)}`);
         }
       } catch (error) {
         console.log(`❌ Backend predictions unavailable for ${ticker}:`, error);
@@ -205,7 +210,7 @@ export async function getMarketStatus(): Promise<MarketStatus | null> {
 
 export async function getStockPrice(symbol: string): Promise<{ price: number; change: number; changePercent: number } | null> {
   try {
-    // This would be replaced with a real API call to Alpha Vantage, Finnhub, etc.
+    console.log(`🔍 getStockPrice called for ${symbol} - Note: This currently returns hardcoded MOCK data for some stocks.`);
     // For now, returning mock data for demonstration
     const mockPrices: Record<string, any> = {
       'AAPL': { price: 191.45, change: 2.34, changePercent: 1.24 },
