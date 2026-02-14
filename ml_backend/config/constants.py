@@ -9,33 +9,32 @@ import os
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
 MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
 
-# S&P 100 Tickers (Top 25 from your list, with company names)
+# S&P 100 Tickers (full list — 100 large-cap US equities)
 TOP_100_TICKERS = [
-    "AAPL",   # Apple Inc.
-    "MSFT",   # Microsoft Corporation
-    "NVDA",   # Nvidia Corporation
-    "AMZN",   # Amazon.com, Inc.
-    "GOOGL",  # Alphabet Inc. (Class A)
-    "META",   # Meta Platforms, Inc.
-    "BRK-B",  # Berkshire Hathaway Inc. (Class B)
-    "TSLA",   # Tesla, Inc.
-    "AVGO",   # Broadcom Inc.
-    "LLY",    # Eli Lilly and Company
-    "WMT",    # Walmart Inc.
-    "JPM",    # JPMorgan Chase & Co.
-    "V",      # Visa Inc.
-    "MA",     # Mastercard Incorporated
-    "NFLX",   # Netflix, Inc.
-    "XOM",    # Exxon Mobil Corporation
-    "COST",   # Costco Wholesale Corporation
-    "ORCL",   # Oracle Corporation
-    "PG",     # The Procter & Gamble Company
-    "JNJ",    # Johnson & Johnson
-    "UNH",    # UnitedHealth Group Incorporated
-    "HD",     # The Home Depot, Inc.
-    "ABBV",   # AbbVie Inc.
-    "KO",     # The Coca-Cola Company
-    "CRM"     # Salesforce, Inc.
+    # Technology
+    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "ORCL", "CRM",
+    "AMD", "INTC", "CSCO", "ADBE", "QCOM", "TXN", "NOW", "INTU", "AMAT",
+    # Consumer Discretionary
+    "AMZN", "TSLA", "HD", "NFLX", "LOW", "SBUX", "NKE", "MCD",
+    "DIS", "BKNG", "TGT",
+    # Financials
+    "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "AXP",
+    "BLK", "SCHW", "C", "COF", "BK", "MET", "AIG", "USB",
+    # Energy
+    "XOM", "CVX", "COP",
+    # Healthcare
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "ABT", "TMO", "DHR",
+    "MRK", "AMGN", "GILD", "ISRG", "MDT", "BMY", "CVS",
+    # Consumer Staples
+    "WMT", "COST", "PG", "KO", "PEP", "MDLZ", "CL", "MO",
+    # Industrials
+    "CAT", "HON", "UNP", "BA", "RTX", "LMT", "DE", "GE",
+    "GD", "EMR", "FDX", "UPS", "MMM",
+    # Communication
+    "CMCSA", "VZ", "T", "CHTR",
+    # Conglomerates / Other
+    "BRK-B", "ACN", "IBM", "PYPL", "LIN", "NEE", "SO",
+    "DUK", "AMT", "SPG", "PLTR", "TMUS", "PM",
 ]
 
 # API Configuration

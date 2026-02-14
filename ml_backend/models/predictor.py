@@ -17,6 +17,7 @@ import lightgbm as lgb
 from ..config.constants import PREDICTION_WINDOWS
 from ..config.feature_config_v1 import (
     FEATURE_CONFIG_V1,
+    FEATURE_PRUNING,
     LIGHTGBM_PARAMS,
     POOL_CONFIG,
     TARGET_CONFIG,
@@ -55,10 +56,65 @@ class StockPredictor:
         # Track the latest training cutoff date across all tickers/windows
         # so the backtest can restrict itself to OOS dates only.
         self._train_cutoff_dates = {"pooled": [], "ticker": []}  # per model type
+        self._feature_shortlist = {}  # {window_name: [col_names]} — pruned feature set per horizon
 
     def set_feature_engineer(self, feature_engineer):
         """Set the feature engineer (MinimalFeatureEngineer or compatible)."""
         self.feature_engineer = feature_engineer
+
+    # ------------------------------------------------------------------
+    # Feature pruning helpers
+    # ------------------------------------------------------------------
+    def _build_feature_shortlists(self) -> None:
+        """Build per-horizon feature shortlists from pooled model importance.
+
+        Keeps protected features + top-k by gain.  Called after Phase 1
+        pooled training so Phase 2 retrains with a cleaner feature set.
+        """
+        if not FEATURE_PRUNING.get("enabled", False):
+            return
+        top_k = FEATURE_PRUNING.get("top_k", 30)
+        protected = set(FEATURE_PRUNING.get("protected_features", []))
+        min_feats = FEATURE_PRUNING.get("min_features", 15)
+
+        for window_name, meta in self.pooled_metadata.items():
+            all_cols = meta.get("feature_columns", [])
+            importance = meta.get("top_features_gain", [])
+            if not all_cols or not importance:
+                continue
+            # Top-k feature names by gain (already sorted desc in metadata)
+            top_names = [entry["name"] for entry in importance[:top_k]]
+            # Merge protected (that actually exist) + top-k
+            shortlist = sorted(
+                set(top_names) | (protected & set(all_cols))
+            )
+            if len(shortlist) < min_feats:
+                logger.info(
+                    "Pruning %s: shortlist too small (%d < %d) — skipping",
+                    window_name, len(shortlist), min_feats,
+                )
+                continue
+            self._feature_shortlist[window_name] = shortlist
+            logger.info(
+                "Pruning %s: %d → %d features (top_k=%d, protected=%d)",
+                window_name, len(all_cols), len(shortlist), top_k,
+                len(protected & set(all_cols)),
+            )
+
+    def _select_features(
+        self, X: np.ndarray, current_cols: list, model_cols: list
+    ) -> np.ndarray:
+        """Select & reorder columns of *X* so they match *model_cols*.
+
+        If model_cols is None or identical to current_cols, returns X unchanged.
+        """
+        if not model_cols or model_cols == current_cols:
+            return X
+        col_to_idx = {c: i for i, c in enumerate(current_cols)}
+        indices = [col_to_idx[c] for c in model_cols if c in col_to_idx]
+        if not indices or len(indices) == len(current_cols):
+            return X
+        return X[:, indices]
 
     def get_oos_start_date(self) -> Optional[pd.Timestamp]:
         """Return the earliest date the backtest should start (after all training data).
@@ -118,7 +174,16 @@ class StockPredictor:
                 fe = MinimalFeatureEngineer(self.mongo_client)
                 self.feature_engineer = fe
             
+            # Phase 1: train pooled with ALL features → extract importance
             self.train_pooled_models(historical_data, fe)
+
+            # Phase 2: build per-horizon feature shortlists, then retrain pooled
+            if FEATURE_PRUNING.get("enabled", False):
+                self._build_feature_shortlists()
+                if self._feature_shortlist:
+                    logger.info("Retraining pooled models with pruned features …")
+                    self._train_cutoff_dates["pooled"] = []  # reset for clean Phase 2
+                    self.train_pooled_models(historical_data, fe)
 
             for t, df in historical_data.items():
                 if df is None or df.empty or len(df) < FEATURE_CONFIG_V1["min_rows"]:
@@ -255,6 +320,20 @@ class StockPredictor:
             X_all = np.vstack(rows_by_window[window_name])
             y_all = np.concatenate(y_by_window[window_name])
             dates_all = np.concatenate(dates_by_window[window_name])
+
+            # --- Feature pruning: select shortlisted columns (Phase 2) ---
+            active_cols = list(feature_cols_ref) if feature_cols_ref else []
+            if window_name in self._feature_shortlist:
+                shortlist = self._feature_shortlist[window_name]
+                col_to_idx = {c: i for i, c in enumerate(feature_cols_ref)}
+                sel_idx = sorted([col_to_idx[c] for c in shortlist if c in col_to_idx])
+                if len(sel_idx) >= FEATURE_PRUNING.get("min_features", 15):
+                    X_all = X_all[:, sel_idx]
+                    active_cols = [feature_cols_ref[i] for i in sel_idx]
+                    logger.info(
+                        "POOLED-%s: pruned %d → %d features",
+                        window_name, len(feature_cols_ref), len(active_cols),
+                    )
 
             if len(y_all) < POOL_CONFIG.get("min_total_samples", 2000):
                 logger.warning(
@@ -399,7 +478,7 @@ class StockPredictor:
             try:
                 booster = model.booster_
                 gains = booster.feature_importance(importance_type="gain")
-                cols = feature_cols_ref
+                cols = active_cols
                 pairs = sorted(zip(cols, gains), key=lambda x: x[1], reverse=True)[:30]
                 top_features_gain_pooled = [{"name": n, "gain": float(g)} for n, g in pairs]
             except Exception:
@@ -415,7 +494,7 @@ class StockPredictor:
                 "hit_rate": hit_rate,
                 "correlation": correlation,
                 "market_neutral": USE_MARKET_NEUTRAL_TARGET,
-                "feature_columns": feature_cols_ref,
+                "feature_columns": active_cols,
                 "mean_return": mean_ret,
                 "std_return": std_ret,
                 "trade_threshold": threshold,
@@ -500,6 +579,16 @@ class StockPredictor:
                     f"Skipping {ticker}-{window_name}: n={len(X)} < 300 (gap={gap})"
                 )
                 continue
+
+            # --- Feature pruning: select shortlisted columns ---
+            active_cols = feature_cols
+            if window_name in self._feature_shortlist:
+                shortlist = self._feature_shortlist[window_name]
+                col_to_idx = {c: i for i, c in enumerate(feature_cols)}
+                sel_idx = sorted([col_to_idx[c] for c in shortlist if c in col_to_idx])
+                if len(sel_idx) >= FEATURE_PRUNING.get("min_features", 15):
+                    X = X[:, sel_idx]
+                    active_cols = [feature_cols[i] for i in sel_idx]
 
             n = len(X)
             train_end = int(n * train_r)
@@ -595,7 +684,7 @@ class StockPredictor:
             try:
                 booster = model.booster_
                 gains = booster.feature_importance(importance_type="gain")
-                cols = feature_cols
+                cols = active_cols
                 pairs = sorted(zip(cols, gains), key=lambda x: x[1], reverse=True)[:30]
                 top_features_gain = [{"name": n, "gain": float(g)} for n, g in pairs]
             except Exception:
@@ -610,7 +699,7 @@ class StockPredictor:
             pred_std = float(np.std(val_pred)) if len(val_pred) > 1 else 0.0
             threshold = pred_mean + TRADE_SIGMA_MULT * pred_std if pred_std > 0 else float(TRADE_MIN_ALPHA)
             meta_out = {
-                "feature_columns": feature_cols,
+                "feature_columns": active_cols,
                 "top_features_gain": top_features_gain,
                 "n_train": int(len(X_train)),
                 "n_val": int(len(X_val)),
@@ -642,8 +731,8 @@ class StockPredictor:
                 # Baselines: naive 0 (predict no alpha)
                 baseline_rmse = float(np.sqrt(np.mean(y_test ** 2)))
                 # Momentum baseline: predict next return = last 1d return (if feature present)
-                if "log_return_1d" in feature_cols:
-                    idx = feature_cols.index("log_return_1d")
+                if "log_return_1d" in active_cols:
+                    idx = active_cols.index("log_return_1d")
                     mom_pred = X[test_mask][:, idx]
                     baseline_momentum_rmse = float(np.sqrt(np.mean((y_test - mom_pred) ** 2)))
                 else:
@@ -726,7 +815,8 @@ class StockPredictor:
 
         results = {}
         # Use last row for prediction; current_price from df_aligned (matches feature row)
-        X = features[-1:].astype(np.float32)
+        X_full = features[-1:].astype(np.float32)
+        current_cols = meta.get("feature_columns", [])
         df_aligned = meta.get("df_aligned")
         if df_aligned is not None and "Close" in df_aligned.columns:
             current_price = float(df_aligned["Close"].iloc[-1])
@@ -766,8 +856,10 @@ class StockPredictor:
             # meta_w already selected above (pooled unless ticker prod-ready); don't re-fetch
             if not meta_w:
                 meta_w = {}
-            # No scaling (tree models)
-            pred_return = float(model.predict(X)[0])
+            # Select features to match model's training columns (pruning-aware)
+            model_cols = meta_w.get("feature_columns")
+            X_pred = self._select_features(X_full, current_cols, model_cols)
+            pred_return = float(model.predict(X_pred)[0])
             pred_price = current_price * math.exp(pred_return)
             price_change = pred_price - current_price
             
@@ -866,6 +958,7 @@ class StockPredictor:
 
         dates = df_aligned["date"].values
         closes = df_aligned["Close"].values
+        current_cols = meta.get("feature_columns", [])
         results_list = []
 
         # Pre-calculate common metrics
@@ -886,8 +979,12 @@ class StockPredictor:
             if model is None:
                 continue
 
+            # Feature selection: match model's training columns
+            model_cols = meta_w.get("feature_columns")
+            X_pred = self._select_features(features, current_cols, model_cols)
+
             # Vectorized prediction
-            preds_ret = model.predict(features)
+            preds_ret = model.predict(X_pred)
             
             # Vectorized trade logic
             sigma = float(meta_w.get("val_rmse", 0.0))
@@ -966,6 +1063,15 @@ class StockPredictor:
                         self.pooled_metadata = json.load(f)
                 except Exception as e:
                     logger.warning("Could not load pooled metadata: %s", e)
+            # Load feature shortlists (pruning config)
+            shortlist_path = os.path.join(pooled_path, "feature_shortlist.json")
+            if os.path.exists(shortlist_path):
+                try:
+                    with open(shortlist_path) as f:
+                        self._feature_shortlist = json.load(f)
+                    logger.info("Loaded feature shortlists for %d horizons", len(self._feature_shortlist))
+                except Exception as e:
+                    logger.warning("Could not load feature shortlist: %s", e)
         for ticker in os.listdir(base):
             if ticker == "_pooled":
                 continue
@@ -1013,6 +1119,13 @@ class StockPredictor:
                         json.dump(self.pooled_metadata, f, indent=2)
                 except Exception as e:
                     logger.warning("Could not save pooled metadata: %s", e)
+            # Save feature shortlists (pruning config)
+            if self._feature_shortlist:
+                try:
+                    with open(os.path.join(pooled_path, "feature_shortlist.json"), "w") as f:
+                        json.dump(self._feature_shortlist, f, indent=2)
+                except Exception as e:
+                    logger.warning("Could not save feature shortlist: %s", e)
         for (ticker, window), model in self.models.items():
             path = os.path.join(base, ticker)
             os.makedirs(path, exist_ok=True)

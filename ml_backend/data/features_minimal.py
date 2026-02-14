@@ -15,22 +15,53 @@ from ..config.feature_config_v1 import FEATURE_CONFIG_V1
 
 logger = logging.getLogger(__name__)
 
-# Sector mapping for S&P 100 tickers (simplified)
+# Sector mapping for S&P 100 tickers → sector ETF
 SECTOR_MAP = {
+    # Technology → XLK
     "AAPL": "XLK", "MSFT": "XLK", "NVDA": "XLK", "GOOGL": "XLK", "META": "XLK",
     "ORCL": "XLK", "CRM": "XLK", "AVGO": "XLK", "AMD": "XLK", "INTC": "XLK",
+    "CSCO": "XLK", "ADBE": "XLK", "QCOM": "XLK", "TXN": "XLK", "NOW": "XLK",
+    "INTU": "XLK", "IBM": "XLK", "ACN": "XLK", "AMAT": "XLK",
+    # Consumer Discretionary → XLY
     "AMZN": "XLY", "HD": "XLY", "LOW": "XLY", "NFLX": "XLY", "SBUX": "XLY",
-    "TSLA": "XLY", "NKE": "XLY", "MCD": "XLY", "DIS": "XLY",
+    "TSLA": "XLY", "NKE": "XLY", "MCD": "XLY", "DIS": "XLY", "BKNG": "XLY",
+    "TGT": "XLY",
+    # Financials → XLF
     "JPM": "XLF", "BAC": "XLF", "WFC": "XLF", "GS": "XLF", "MS": "XLF",
     "V": "XLF", "MA": "XLF", "AXP": "XLF", "BLK": "XLF", "SCHW": "XLF",
+    "C": "XLF", "COF": "XLF", "BK": "XLF", "MET": "XLF", "AIG": "XLF",
+    "USB": "XLF", "PYPL": "XLF",
+    # Energy → XLE
     "XOM": "XLE", "CVX": "XLE", "COP": "XLE",
+    # Healthcare → XLV
     "JNJ": "XLV", "UNH": "XLV", "PFE": "XLV", "ABBV": "XLV", "LLY": "XLV",
+    "ABT": "XLV", "TMO": "XLV", "DHR": "XLV", "MRK": "XLV", "AMGN": "XLV",
+    "GILD": "XLV", "ISRG": "XLV", "MDT": "XLV", "BMY": "XLV", "CVS": "XLV",
+    # Consumer Staples → XLP
     "WMT": "XLP", "COST": "XLP", "PG": "XLP", "KO": "XLP", "PEP": "XLP",
+    "MDLZ": "XLP", "CL": "XLP", "MO": "XLP", "PM": "XLP",
+    # Industrials → XLI
+    "CAT": "XLI", "HON": "XLI", "UNP": "XLI", "BA": "XLI", "RTX": "XLI",
+    "LMT": "XLI", "DE": "XLI", "GE": "XLI", "GD": "XLI", "EMR": "XLI",
+    "FDX": "XLI", "UPS": "XLI", "MMM": "XLI",
+    # Communication → XLC
+    "CMCSA": "XLC", "VZ": "XLC", "T": "XLC", "CHTR": "XLC", "TMUS": "XLC",
+    # Utilities → XLU
+    "NEE": "XLU", "SO": "XLU", "DUK": "XLU",
+    # Real Estate → XLRE
+    "AMT": "XLRE", "SPG": "XLRE",
+    # Materials → XLB
+    "LIN": "XLB",
+    # Other / Conglomerates
+    "BRK-B": "XLF", "PLTR": "XLK",
 }
 DEFAULT_SECTOR = "XLF"
 
 # Sector ID mapping (module-level; stable across calls)
-SECTOR_ID = {"XLK": 0, "XLF": 1, "XLE": 2, "XLV": 3, "XLP": 4, "XLY": 5}
+SECTOR_ID = {
+    "XLK": 0, "XLF": 1, "XLE": 2, "XLV": 3, "XLP": 4, "XLY": 5,
+    "XLI": 6, "XLC": 7, "XLU": 8, "XLRE": 9, "XLB": 10,
+}
 
 
 def _ensure_date_column(df: pd.DataFrame) -> pd.DataFrame:
@@ -203,6 +234,9 @@ class MinimalFeatureEngineer:
             # 7. Minimal macro (lagged - never same-day release)
             df = self._add_macro_features(df, mc)
 
+            # 7b. Cross-asset features: VIX proxy + sector ETF returns (lagged)
+            df = self._add_cross_asset_features(df, ticker, mc)
+
             # 8. Regime flags (quantile uses prior window only - no self-referential threshold)
             q = df["volatility_20d"].shift(1).rolling(60, min_periods=20).quantile(0.7)
             df["vol_regime"] = (df["volatility_20d"] > q).astype(int).fillna(0)
@@ -218,7 +252,7 @@ class MinimalFeatureEngineer:
                 "date", "date_norm", "macro_date", "date_merge", "timestamp", "_id",
                 "Open", "High", "Low", "Close", "Volume", "Adj Close",
                 "sma_20", "sma_50", "volume_ma20", "dollar_volume",
-                "SPY_close",
+                "SPY_close", "VIX_close", "sector_etf_close",
                 "split", "fold", "ticker",
             }
             self.feature_columns = [c for c in df.columns if c not in exclude and df[c].dtype in [np.float64, np.int64, float, int]]
@@ -406,6 +440,98 @@ class MinimalFeatureEngineer:
             logger.warning("Could not add macro: %s", e)
             df["macro_spread_2y10y"] = 0
             df["macro_fed_funds"] = 0
+        return df
+
+    def _add_cross_asset_features(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
+        """Add cross-asset regime context: VIX proxy + sector ETF returns.
+
+        All features use shift(1) for strict point-in-time safety.
+        VIX improves regime detection; sector ETFs capture rotation.
+        """
+        _ca_defaults = {
+            "vix_return_1d": 0.0, "vix_vol_20d": 0.0, "vix_level": 20.0,
+            "sector_etf_return_1d": 0.0, "sector_etf_return_5d": 0.0,
+            "macro_spread_chg": 0.0, "macro_ff_chg": 0.0,
+        }
+        try:
+            from .cache_fetch import fetch_price_df_mongo_first
+
+            dates = _to_series(df["date"])
+            start = pd.Timestamp(dates.min()) - timedelta(days=60)
+            end = datetime.utcnow() + timedelta(days=2)
+            df["date_norm"] = pd.to_datetime(dates).dt.normalize()
+
+            # --- VIX proxy ---
+            vix_df = fetch_price_df_mongo_first(
+                mongo_client, "^VIX", start, end,
+                cache=self.price_cache, allow_fallback_yfinance=True,
+            )
+            if vix_df is not None and not vix_df.empty:
+                vix_df = _ensure_date_column(vix_df)
+                vix_df = _ensure_ohlcv(vix_df, "^VIX")
+                vix_df = vix_df.sort_values("date").drop_duplicates("date", keep="last")
+                vix_df["date_norm"] = pd.to_datetime(_to_series(vix_df["date"])).dt.normalize()
+                vix_close = _to_series(vix_df["Close"])
+                vix_df["vix_return_1d"] = np.log(vix_close / vix_close.shift(1))
+                vix_df["vix_vol_20d"] = vix_df["vix_return_1d"].rolling(20, min_periods=5).std()
+                vix_df["vix_level"] = vix_close
+                vix_merge = vix_df[["date_norm", "vix_return_1d", "vix_vol_20d", "vix_level"]].copy()
+                df = df.merge(vix_merge, on="date_norm", how="left")
+                # shift(1) for point-in-time safety: use yesterday's VIX data
+                df["vix_return_1d"] = df["vix_return_1d"].shift(1).fillna(0)
+                df["vix_vol_20d"] = df["vix_vol_20d"].shift(1).ffill().fillna(0)
+                df["vix_level"] = df["vix_level"].shift(1).ffill().fillna(20)
+            else:
+                for c in ["vix_return_1d", "vix_vol_20d", "vix_level"]:
+                    df[c] = _ca_defaults[c]
+
+            # --- Sector ETF return (ticker's own sector, not SPY) ---
+            sector_etf = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
+            if sector_etf and sector_etf != "SPY":
+                etf_df = fetch_price_df_mongo_first(
+                    mongo_client, sector_etf, start, end,
+                    cache=self.price_cache, allow_fallback_yfinance=True,
+                )
+                if etf_df is not None and not etf_df.empty:
+                    etf_df = _ensure_date_column(etf_df)
+                    etf_df = _ensure_ohlcv(etf_df, sector_etf)
+                    etf_df = etf_df.sort_values("date").drop_duplicates("date", keep="last")
+                    etf_df["date_norm"] = pd.to_datetime(_to_series(etf_df["date"])).dt.normalize()
+                    etf_close = _to_series(etf_df["Close"])
+                    etf_df["sector_etf_return_1d"] = np.log(etf_close / etf_close.shift(1))
+                    etf_df["sector_etf_return_5d"] = np.log(etf_close / etf_close.shift(5))
+                    etf_merge = etf_df[["date_norm", "sector_etf_return_1d", "sector_etf_return_5d"]].copy()
+                    df = df.merge(etf_merge, on="date_norm", how="left", suffixes=("", "_etf_dup"))
+                    # Drop any duplicate columns from merge
+                    dup_cols = [c for c in df.columns if c.endswith("_etf_dup")]
+                    if dup_cols:
+                        df = df.drop(columns=dup_cols)
+                    df["sector_etf_return_1d"] = df["sector_etf_return_1d"].shift(1).fillna(0)
+                    df["sector_etf_return_5d"] = df["sector_etf_return_5d"].shift(1).fillna(0)
+                else:
+                    df["sector_etf_return_1d"] = 0.0
+                    df["sector_etf_return_5d"] = 0.0
+            else:
+                df["sector_etf_return_1d"] = 0.0
+                df["sector_etf_return_5d"] = 0.0
+
+            df = df.drop(columns=["date_norm"], errors="ignore")
+
+            # --- Macro rate CHANGES (complement levels from _add_macro_features) ---
+            if "macro_spread_2y10y" in df.columns:
+                df["macro_spread_chg"] = _to_series(df["macro_spread_2y10y"]).diff().fillna(0)
+            else:
+                df["macro_spread_chg"] = 0.0
+            if "macro_fed_funds" in df.columns:
+                df["macro_ff_chg"] = _to_series(df["macro_fed_funds"]).diff().fillna(0)
+            else:
+                df["macro_ff_chg"] = 0.0
+
+        except Exception as e:
+            logger.warning("Could not add cross-asset features: %s", e)
+            for col, default in _ca_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
         return df
 
     def _add_earnings_proximity(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:

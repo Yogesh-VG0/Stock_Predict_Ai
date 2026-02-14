@@ -21,8 +21,16 @@ from .config.feature_config_v1 import TARGET_CONFIG, ROUND_TRIP_COST_BPS
 
 logger = logging.getLogger(__name__)
 
-# Default tickers for backtest (subset for speed)
-DEFAULT_BACKTEST_TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "JPM", "V", "XOM", "JNJ"]
+# Default tickers for backtest (representative cross-sector subset)
+DEFAULT_BACKTEST_TICKERS = [
+    "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",  # Tech
+    "JPM", "V", "GS",                                   # Financials
+    "XOM", "CVX",                                        # Energy
+    "JNJ", "UNH", "LLY",                                # Healthcare
+    "WMT", "KO",                                         # Staples
+    "CAT", "HON",                                        # Industrials
+    "CMCSA", "T",                                        # Communication
+]
 
 
 def run_backtest(

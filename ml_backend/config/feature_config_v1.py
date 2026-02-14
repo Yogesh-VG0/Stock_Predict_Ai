@@ -83,3 +83,19 @@ LIGHTGBM_PARAMS = {
     "verbosity": -1,
     "n_jobs": -1,
 }
+
+# Feature pruning: remove noisy features based on pooled model importance
+# Phase 1: train pooled with all features → extract top-k by gain
+# Phase 2: retrain pooled + per-ticker with shortlisted features only
+FEATURE_PRUNING = {
+    "enabled": True,
+    "top_k": 30,                       # Keep top-k features by gain per horizon
+    "protected_features": [            # Core stability features — never prune
+        "log_return_1d", "log_return_5d", "log_return_21d",
+        "volatility_20d", "volume_ratio", "rsi",
+        "sector_id", "ticker_id",
+        "vix_return_1d", "vix_level",             # cross-asset regime
+        "sector_etf_return_1d",                    # sector rotation
+    ],
+    "min_features": 15,                # Don't prune below this many features
+}

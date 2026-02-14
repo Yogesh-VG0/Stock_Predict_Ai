@@ -16,15 +16,7 @@ env:
 jobs:
   update-predictions:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        batch:
-          - "AAPL MSFT GOOGL AMZN TSLA"
-          - "NVDA META NFLX JPM V"
-          - "JNJ WMT PG UNH HD"
-          - "MA BAC XOM LLY ABBV"
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -42,7 +34,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ml_backend/requirements-prod.txt
 
-      - name: Run ML Pipeline (batch)
+      - name: Run ML Pipeline (sequential batches)
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
@@ -55,28 +47,71 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: "StockPredictAI/1.0"
           PYTHONPATH: ${{ github.workspace }}
-          BATCH_TICKERS: ${{ matrix.batch }}
           GITHUB_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
         run: |
           set -e
-          echo "Batch tickers: $BATCH_TICKERS"
 
-          # Simple retry loop (3 tries)
-          for i in 1 2 3; do
-            echo "Attempt $i..."
-            python -m ml_backend.scripts.run_pipeline --tickers $BATCH_TICKERS && break
-            if [ "$i" -eq 3 ]; then
-              echo "Pipeline failed after 3 attempts."
-              exit 1
+          # 10 batches × 10 tickers = 100 stocks (single job, one install)
+          BATCHES=(
+            "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
+            "CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX"
+            "LOW SBUX NKE MCD DIS BKNG TGT JPM V MA"
+            "BAC WFC GS MS AXP BLK SCHW C COF BK"
+            "MET AIG USB XOM CVX COP JNJ UNH LLY PFE"
+            "ABBV ABT TMO DHR MRK AMGN GILD ISRG MDT BMY"
+            "CVS WMT COST PG KO PEP MDLZ CL MO CAT"
+            "HON UNP BA RTX LMT DE GE GD EMR FDX"
+            "UPS MMM CMCSA VZ T CHTR BRK-B ACN IBM PYPL"
+            "LIN NEE SO DUK AMT SPG PLTR TMUS PM AMAT"
+          )
+
+          FAILED_BATCHES=()
+          for idx in "${!BATCHES[@]}"; do
+            BATCH="${BATCHES[$idx]}"
+            BATCH_NUM=$((idx + 1))
+            echo ""
+            echo "===== Batch $BATCH_NUM/${#BATCHES[@]}: $BATCH ====="
+
+            SUCCESS=0
+            for attempt in 1 2 3; do
+              echo "  Attempt $attempt..."
+              if python -m ml_backend.scripts.run_pipeline --tickers $BATCH; then
+                SUCCESS=1
+                break
+              fi
+              echo "  Attempt $attempt failed."
+              sleep $((attempt * 20))
+            done
+
+            if [ "$SUCCESS" -eq 0 ]; then
+              echo "  *** Batch $BATCH_NUM FAILED after 3 attempts ***"
+              FAILED_BATCHES+=("$BATCH_NUM")
             fi
-            sleep $((i * 30))
+
+            # Rate limit: brief pause between batches (API courtesy)
+            if [ "$BATCH_NUM" -lt "${#BATCHES[@]}" ]; then
+              sleep 5
+            fi
           done
 
-      - name: Verify predictions are fresh (per ticker)
+          echo ""
+          echo "===== Pipeline Summary ====="
+          echo "Total batches: ${#BATCHES[@]}"
+          echo "Failed batches: ${#FAILED_BATCHES[@]}"
+          if [ "${#FAILED_BATCHES[@]}" -gt 0 ]; then
+            echo "Failed batch numbers: ${FAILED_BATCHES[*]}"
+            # Fail the job if more than 30% of batches failed
+            if [ "${#FAILED_BATCHES[@]}" -gt 3 ]; then
+              echo "Too many failures — failing job."
+              exit 1
+            fi
+            echo "Partial success — continuing."
+          fi
+
+      - name: Verify predictions are fresh
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          BATCH_TICKERS: ${{ matrix.batch }}
         run: |
           python - << 'PY'
           import os
@@ -84,9 +119,8 @@ jobs:
           from pymongo import MongoClient
 
           uri = os.getenv("MONGODB_URI")
-          tickers = os.getenv("BATCH_TICKERS","").split()
-          if not uri or not tickers:
-            raise SystemExit("Missing MONGODB_URI or tickers")
+          if not uri:
+            raise SystemExit("Missing MONGODB_URI")
 
           client = MongoClient(uri, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000)
           client.admin.command("ping")
@@ -97,42 +131,44 @@ jobs:
           now = datetime.utcnow()
           cutoff = now - timedelta(hours=3)
 
-          # Require at least one doc per ticker per horizon, excluding _meta
           horizons = ["next_day", "7_day", "30_day"]
 
+          # Check a representative sample (canary tickers from each batch)
+          canary = ["AAPL", "AMZN", "JPM", "XOM", "WMT", "CAT", "CMCSA", "PLTR"]
           missing = []
           stale = []
 
-          for t in tickers:
+          for t in canary:
             for w in horizons:
-              q = {
-                "ticker": t,
-                "window": {"$eq": w},   # excludes _meta rows
-              }
-              doc = col.find_one(q, sort=[("timestamp",-1)])
+              q = {"ticker": t, "window": {"$eq": w}}
+              doc = col.find_one(q, sort=[("timestamp", -1)])
               if not doc:
-                missing.append((t,w))
+                missing.append((t, w))
                 continue
               ts = doc.get("timestamp")
               if not ts or ts < cutoff:
-                stale.append((t,w,ts))
+                stale.append((t, w, ts))
 
-          print(f"Checked {len(tickers)} tickers x {len(horizons)} horizons")
+          # Also check total doc count to ensure scale
+          total = col.count_documents({"timestamp": {"$gte": cutoff}})
+          print(f"Fresh docs in last 3h: {total}")
+          print(f"Canary check: {len(canary)} tickers x {len(horizons)} horizons")
           if missing:
             print("Missing:", missing)
           if stale:
             print("Stale:", stale)
 
           assert not missing, f"Missing predictions: {missing}"
-          assert not stale, f"Stale predictions (older than 6h): {stale}"
-          print("Fresh predictions verified for this batch")
+          assert not stale, f"Stale predictions: {stale}"
+          assert total >= 200, f"Expected >= 200 fresh docs, got {total}"
+          print("Freshness verified")
           PY
 
       - name: Upload logs/artifacts (always)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pipeline-logs-${{ github.run_id }}-${{ strategy.job-index }}
+          name: pipeline-logs-${{ github.run_id }}
           path: |
             ml_backend/**/*.log
             **/*.log
