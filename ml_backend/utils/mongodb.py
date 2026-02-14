@@ -312,7 +312,12 @@ class MongoDBClient:
         sentiment['ticker'] = ticker
         sentiment['last_updated'] = datetime.utcnow()
         sentiment['date'] = sentiment['timestamp'].replace(hour=0, minute=0, second=0, microsecond=0)
-        collection.insert_one(sentiment)
+        # Upsert on {ticker, date} so only the latest sentiment per ticker per day is kept
+        collection.update_one(
+            {"ticker": ticker, "date": sentiment["date"]},
+            {"$set": sentiment},
+            upsert=True,
+        )
 
     def get_latest_predictions(self, ticker: str) -> Dict[str, Dict[str, float]]:
         """Get latest complete predictions for a ticker."""
@@ -473,7 +478,12 @@ class MongoDBClient:
                 "timestamp": datetime.utcnow()
             }
             
-            result = collection.insert_one(document)
+            # Upsert on {ticker, window, version} so retrains update in place
+            collection.update_one(
+                {"ticker": ticker, "window": window, "version": version},
+                {"$set": document},
+                upsert=True,
+            )
             logger.info(f"Stored model version {version} for {ticker} {window}")
             return True
             
@@ -493,7 +503,12 @@ class MongoDBClient:
                 "timestamp": datetime.utcnow()
             }
             
-            result = collection.insert_one(document)
+            # Upsert on {ticker, window} so only the latest metrics are kept
+            collection.update_one(
+                {"ticker": ticker, "window": window},
+                {"$set": document},
+                upsert=True,
+            )
             logger.info(f"Stored prediction metrics for {ticker} {window}")
             return True
             
