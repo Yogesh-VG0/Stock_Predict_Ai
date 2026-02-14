@@ -229,9 +229,22 @@ class MongoDBClient:
                 
                 documents.append(document)
             
-            # Bulk insert
-            result = collection.insert_many(documents)
-            logger.info(f"Stored {len(result.inserted_ids)} complete predictions for {ticker}")
+            # Upsert: replace the existing doc for each ticker+window
+            # so only the latest prediction is kept (no unbounded growth).
+            from pymongo import UpdateOne as _UpdateOne
+            ops = [
+                _UpdateOne(
+                    {"ticker": doc["ticker"], "window": doc["window"]},
+                    {"$set": doc},
+                    upsert=True,
+                )
+                for doc in documents
+            ]
+            result = collection.bulk_write(ops)
+            logger.info(
+                f"Upserted {result.upserted_count + result.modified_count} predictions for {ticker} "
+                f"(upserted={result.upserted_count}, modified={result.modified_count})"
+            )
             
             # Log what was stored for verification
             for doc in documents:
