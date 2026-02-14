@@ -52,10 +52,42 @@ class StockPredictor:
         self.pooled_models = {}  # {window: lgb.LGBMRegressor}
         self.pooled_metadata = {}  # {window: dict}
         self.prediction_windows = list(PREDICTION_WINDOWS.keys())
+        # Track the latest training cutoff date across all tickers/windows
+        # so the backtest can restrict itself to OOS dates only.
+        self._train_cutoff_dates = {"pooled": [], "ticker": []}  # per model type
 
     def set_feature_engineer(self, feature_engineer):
         """Set the feature engineer (MinimalFeatureEngineer or compatible)."""
         self.feature_engineer = feature_engineer
+
+    def get_oos_start_date(self) -> Optional[pd.Timestamp]:
+        """Return the earliest date the backtest should start (after all training data).
+
+        Uses true holdout/test start dates from per-ticker metadata splits
+        and pooled holdout dates. For strict OOS, we need the date *after* the
+        latest test_start across the model type that will be used at inference.
+        Since inference prefers pooled unless ticker is prod_ready, we use the
+        latest cutoff across all model types to be safe.
+        """
+        all_cutoffs = []
+        # Pooled cutoffs
+        for ts in self._train_cutoff_dates.get("pooled", []):
+            all_cutoffs.append(ts)
+        # Per-ticker test start dates from metadata splits
+        for (ticker, window), meta in self.metadata.items():
+            splits = meta.get("splits", {})
+            tsd = splits.get("test_start_date_x")
+            if tsd is not None:
+                all_cutoffs.append(pd.Timestamp(tsd))
+        # Fallback to ticker cutoffs if no test_start dates stored
+        if not all_cutoffs:
+            for ts in self._train_cutoff_dates.get("ticker", []):
+                all_cutoffs.append(ts)
+        if not all_cutoffs:
+            return None
+        # Use the *latest* cutoff so that no model's training data leaks
+        cutoff = max(all_cutoffs)
+        return cutoff + pd.Timedelta(days=1)
 
     def train_all_models(
         self,
@@ -236,6 +268,11 @@ class StockPredictor:
             y_all = y_all[order]
             dates_all = dates_all[order]
 
+            # Verify dates are monotonically sorted after argsort
+            assert np.all(dates_all[:-1] <= dates_all[1:]), (
+                f"Pooled {window_name}: dates not sorted after argsort — data integrity error"
+            )
+
             n = len(y_all)
             n_folds = max(1, WALK_FORWARD_FOLDS)
             fold_rmses, fold_maes, fold_hits, fold_corrs = [], [], [], []
@@ -264,9 +301,6 @@ class StockPredictor:
                 y_train, y_val = y_all[:train_end], y_all[val_start:val_end]
                 if len(y_train) < 200 or len(y_val) < 20:
                     break
-                # Skip fold if val too small → unstable conformal quantiles
-                if len(y_val) < 20:
-                    continue
 
                 w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
                 fold_model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
@@ -301,10 +335,65 @@ class StockPredictor:
             correlation = float(np.median(fold_corrs))
             q90_med = float(np.median(fold_q90)) if fold_q90 else rmse
             q95_med = float(np.median(fold_q95)) if fold_q95 else rmse * 1.3
-            # Regime-adaptive threshold: mean + 2*sigma (Losing Loonies v4 - tradable moves)
+
+            # === True tail holdout: data after the last fold's val_end ===
+            # The walk-forward folds validate incrementally but the final model
+            # has seen all fold training data. Reserve a held-out tail segment
+            # with a proper purge/embargo gap for honest OOS evaluation.
+            horizon = TARGET_CONFIG[window_name]["horizon"]
+            holdout_gap = max(purge, horizon) + embargo
+            holdout_start = min(val_end + holdout_gap, n)
+            pooled_holdout_meta = {}
+            if holdout_start < n - 20:
+                X_holdout = X_all[holdout_start:]
+                y_holdout = y_all[holdout_start:]
+                holdout_pred = model.predict(X_holdout)
+                holdout_rmse = float(np.sqrt(np.mean((y_holdout - holdout_pred) ** 2)))
+                holdout_mae = float(np.mean(np.abs(y_holdout - holdout_pred)))
+                holdout_hit = float(np.mean((y_holdout > 0) == (holdout_pred > 0)))
+                h_c = np.corrcoef(y_holdout, holdout_pred)[0, 1] if len(y_holdout) > 1 else 0.0
+                holdout_corr = float(h_c) if not np.isnan(h_c) else 0.0
+                # Conformal from holdout residuals (truest calibration)
+                abs_resid_ho = np.abs(y_holdout - holdout_pred)
+                holdout_q90 = float(np.quantile(abs_resid_ho, 0.90))
+                holdout_q95 = float(np.quantile(abs_resid_ho, 0.95))
+                # Override fold-based conformal with holdout-based (more honest)
+                q90_med = holdout_q90
+                q95_med = holdout_q95
+                pooled_holdout_meta = {
+                    "holdout_rmse": holdout_rmse,
+                    "holdout_mae": holdout_mae,
+                    "holdout_hit_rate": holdout_hit,
+                    "holdout_correlation": holdout_corr,
+                    "holdout_n": int(len(y_holdout)),
+                    "holdout_start_date": str(pd.Timestamp(dates_all[holdout_start])),
+                }
+                logger.info(
+                    "POOLED-%s holdout: rmse=%.4f hit=%.1f%% corr=%.3f n=%d start=%s",
+                    window_name, holdout_rmse, holdout_hit * 100, holdout_corr,
+                    len(y_holdout), pd.Timestamp(dates_all[holdout_start]).date(),
+                )
+                # OOS boundary = holdout start (the first truly unseen date)
+                self._train_cutoff_dates["pooled"].append(pd.Timestamp(dates_all[holdout_start]))
+            else:
+                logger.warning(
+                    "POOLED-%s: not enough data for tail holdout (val_end=%d, n=%d)",
+                    window_name, val_end, n,
+                )
+                # Fallback: use val_end as OOS boundary
+                if val_end < len(dates_all):
+                    self._train_cutoff_dates["pooled"].append(pd.Timestamp(dates_all[val_end - 1]))
+
+            # Trade threshold from PREDICTION distribution, not return distribution.
+            # Model outputs are compressed (regression-to-mean), so std_pred << std_returns.
+            # Using std_returns made the threshold unreachably high (0 trades).
             mean_ret = float(np.mean(y_all))
             std_ret = float(np.std(y_all)) if len(y_all) > 1 else 0.0
-            threshold = mean_ret + TRADE_SIGMA_MULT * std_ret if std_ret > 0 else mean_ret
+            # Compute threshold from last fold's validation predictions
+            val_pred_all = model.predict(X_all[val_start:val_end]) if val_start < val_end else model.predict(X_all[-100:])
+            pred_mean = float(np.mean(val_pred_all))
+            pred_std = float(np.std(val_pred_all)) if len(val_pred_all) > 1 else 0.0
+            threshold = pred_mean + TRADE_SIGMA_MULT * pred_std if pred_std > 0 else float(TRADE_MIN_ALPHA)
             # Persist feature importance for pooled model
             top_features_gain_pooled = []
             try:
@@ -316,7 +405,7 @@ class StockPredictor:
             except Exception:
                 pass
             self.pooled_models[window_name] = model
-            self.pooled_metadata[window_name] = {
+            pooled_meta = {
                 "val_rmse": rmse,
                 "val_mae": mae,
                 "conformal_q90": q90_med,
@@ -331,6 +420,8 @@ class StockPredictor:
                 "std_return": std_ret,
                 "trade_threshold": threshold,
             }
+            pooled_meta.update(pooled_holdout_meta)
+            self.pooled_metadata[window_name] = pooled_meta
             logger.info(
                 "Trained POOLED-%s: rmse=%.4f mae=%.4f n=%d hit_rate=%.1f%% corr=%.3f (folds=%d)",
                 window_name, rmse, mae, n, hit_rate * 100, correlation, n_folds,
@@ -496,6 +587,9 @@ class StockPredictor:
             key = (ticker, window_name)
             self.models[key] = model
             self.scalers[key] = None  # No scaling
+            # Record training cutoff for OOS backtest boundary (ticker bucket)
+            if val_mask.any():
+                self._train_cutoff_dates["ticker"].append(pd.Timestamp(dates_x[val_mask].max()))
             # Persist feature importance for drift/debugging
             top_features_gain = []
             try:
@@ -511,7 +605,10 @@ class StockPredictor:
 
             mean_ret = float(np.mean(y_train))
             std_ret = float(np.std(y_train)) if len(y_train) > 1 else 0.0
-            threshold = mean_ret + TRADE_SIGMA_MULT * std_ret if std_ret > 0 else mean_ret
+            # Threshold from PREDICTION distribution (not returns — model outputs are compressed)
+            pred_mean = float(np.mean(val_pred))
+            pred_std = float(np.std(val_pred)) if len(val_pred) > 1 else 0.0
+            threshold = pred_mean + TRADE_SIGMA_MULT * pred_std if pred_std > 0 else float(TRADE_MIN_ALPHA)
             meta_out = {
                 "feature_columns": feature_cols,
                 "top_features_gain": top_features_gain,
@@ -529,6 +626,8 @@ class StockPredictor:
                     "test_start": int(test_idx_start),
                     "test_end": int(test_idx_end),
                     "gap": int(gap),
+                    "test_start_date_x": str(pd.Timestamp(dates_x[test_idx_start])) if test_idx_start < len(dates_x) else None,
+                    "test_start_date_y": str(pd.Timestamp(dates_y[test_idx_start])) if test_idx_start < len(dates_y) else None,
                 },
             }
             if test_mask.any():
@@ -540,9 +639,8 @@ class StockPredictor:
                 abs_resid_test = np.abs(y_test - test_pred)
                 conformal_q90 = float(np.quantile(abs_resid_test, 0.90))
                 conformal_q95 = float(np.quantile(abs_resid_test, 0.95))
-                # Baselines: naive 0, last-return (momentum), momentum (log_return_1d)
+                # Baselines: naive 0 (predict no alpha)
                 baseline_rmse = float(np.sqrt(np.mean(y_test ** 2)))
-                last_returns = y[test_idx_start - 1 : test_idx_end - 1] if test_idx_start > 0 else np.zeros_like(y_test)
                 # Momentum baseline: predict next return = last 1d return (if feature present)
                 if "log_return_1d" in feature_cols:
                     idx = feature_cols.index("log_return_1d")
@@ -550,6 +648,14 @@ class StockPredictor:
                     baseline_momentum_rmse = float(np.sqrt(np.mean((y_test - mom_pred) ** 2)))
                 else:
                     baseline_momentum_rmse = baseline_rmse
+                # Last-return baseline: use non-overlapping lookback (stride = horizon)
+                # Adjacent samples share (horizon-1)/horizon days → artificially good.
+                # Step back by `horizon` samples for an independent comparison.
+                stride = max(1, horizon)
+                if test_idx_start >= stride:
+                    last_returns = y[test_idx_start - stride : test_idx_end - stride]
+                else:
+                    last_returns = np.zeros_like(y_test)
                 if len(last_returns) == len(y_test):
                     baseline_last_rmse = float(np.sqrt(np.mean((y_test - last_returns) ** 2)))
                 else:
@@ -562,7 +668,7 @@ class StockPredictor:
                 if np.isnan(correlation):
                     correlation = 0.0
                 production_ready = (
-                    beats_naive and beats_last and hit_rate > 0.50
+                    beats_naive and beats_last and hit_rate >= 0.505
                 )
                 meta_out.update({
                     "n_test": int(test_mask.sum()),
@@ -657,7 +763,9 @@ class StockPredictor:
                 }
                 continue
 
-            meta_w = self.metadata.get(key) or self.pooled_metadata.get(window_name, {})
+            # meta_w already selected above (pooled unless ticker prod-ready); don't re-fetch
+            if not meta_w:
+                meta_w = {}
             # No scaling (tree models)
             pred_return = float(model.predict(X)[0])
             pred_price = current_price * math.exp(pred_return)
@@ -669,9 +777,12 @@ class StockPredictor:
             )
             confidence = prob_positive
             
-            # Restore price range
-            price_low = current_price * math.exp(pred_return - 2 * sigma)
-            price_high = current_price * math.exp(pred_return + 2 * sigma)
+            # Restore price range — use conformal q90 for calibrated interval
+            conformal_q = float(meta_w.get("conformal_q90", 0.0))
+            if conformal_q <= 0:
+                conformal_q = 2 * sigma  # fallback to ±2σ if no conformal data
+            price_low = current_price * math.exp(pred_return - conformal_q)
+            price_high = current_price * math.exp(pred_return + conformal_q)
 
             # Skip-trade rule: use regime-adaptive threshold (mean+2*sigma) when available
             raw_threshold = meta_w.get("trade_threshold")
@@ -794,11 +905,11 @@ class StockPredictor:
             
             sqrt2 = math.sqrt(2)
             if sigma > 0:
-                z_scores = preds_ret / (sigma * sqrt2)
-                # erfs = [math.erf(z) for z in z_scores] # Slower but standard
-                # np.erf requires scipy.special usually, or newer numpy? 
-                # Actually math.erf is fast enough for 1000 items.
-                probs = np.array([0.5 * (1 + math.erf(p / (sigma * sqrt2))) for p in preds_ret])
+                try:
+                    from scipy.special import erf as _erf
+                    probs = 0.5 * (1 + _erf(preds_ret / (sigma * sqrt2)))
+                except ImportError:
+                    probs = np.array([0.5 * (1 + math.erf(p / (sigma * sqrt2))) for p in preds_ret])
             else:
                 probs = np.full(len(preds_ret), 0.5)
 

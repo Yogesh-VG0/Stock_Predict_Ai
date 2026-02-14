@@ -752,6 +752,8 @@ const getPredictions = async (req, res) => {
 
         // Transform prediction data structure
         for (const [window, predData] of Object.entries(predictions)) {
+          // Skip _meta — it's metadata, not a prediction window
+          if (window === '_meta') continue;
           if (predData && typeof predData === 'object') {
             // Standardize 'next_day' to '1_day' for frontend compatibility
             const normalizedWindow = window === 'next_day' ? '1_day' : window;
@@ -785,6 +787,8 @@ const getPredictions = async (req, res) => {
         const transformedData = {};
 
         for (const [window, predData] of Object.entries(storedPredictions)) {
+          // Skip _meta — it's metadata, not a prediction window
+          if (window === '_meta') continue;
           if (predData && typeof predData === 'object') {
             // Standardize 'next_day' to '1_day' for frontend compatibility
             const normalizedWindow = window === 'next_day' ? '1_day' : window;

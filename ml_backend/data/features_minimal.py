@@ -38,9 +38,12 @@ def _ensure_date_column(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     if "date" not in df.columns and isinstance(df.index, pd.DatetimeIndex):
+        idx_name = df.index.name  # capture before reset_index() clears it
         df = df.reset_index()
-        if df.index.name == "Date":
+        if "Date" in df.columns:
             df = df.rename(columns={"Date": "date"})
+        elif idx_name == "Date" and "index" in df.columns:
+            df = df.rename(columns={"index": "date"})
         elif "index" in df.columns:
             df = df.rename(columns={"index": "date"})
     if "date" in df.columns:
@@ -145,14 +148,13 @@ class MinimalFeatureEngineer:
             vol_ma = df["volume_ma20"]
             df["volume_ratio"] = (vol / vol_ma.where(vol_ma != 0, np.nan)).replace([np.inf, -np.inf], np.nan)
             df["dollar_volume"] = close * vol
-            # Rolling percentile: today's volume vs last 60 days (rank within window)
-            df["volume_pct_rank"] = (
-                vol.rolling(60, min_periods=20)
-                .apply(lambda x: pd.Series(x).rank(pct=True).iloc[-1], raw=False)
-            ).fillna(0.5)
+            # Volume z-score over 60-day window (replaces slow rolling percentile rank)
+            vol_m60 = vol.rolling(60, min_periods=20).mean()
+            vol_s60 = vol.rolling(60, min_periods=20).std()
+            df["volume_z60"] = ((vol - vol_m60) / vol_s60.replace(0, np.nan)).fillna(0).clip(-5, 5)
 
             # 4. Trend indicators (shifted - use past close only)
-            df["sma_20"] = close.rolling(20, min_periods=5).mean()
+            df["sma_20"] = close.rolling(20, min_periods=20).mean()
             df["sma_50"] = close.rolling(50, min_periods=20).mean()
             sma20 = _to_series(df["sma_20"])
             sma50 = _to_series(df["sma_50"])
@@ -160,6 +162,28 @@ class MinimalFeatureEngineer:
             df["price_vs_sma50"] = (close / sma50 - 1).replace([np.inf, -np.inf], 0)
             df["trend_20d"] = (close > sma20).astype(int)
             df["momentum_5d"] = close.pct_change(5).replace([np.inf, -np.inf], 0)
+
+            # 4b. Additional high-value features (leakage-free)
+            # Momentum acceleration: change in momentum (second derivative)
+            df["momentum_accel"] = _to_series(df["momentum_5d"]).diff().fillna(0)
+            # Volume momentum: 5-day change in volume (demand shifts)
+            df["volume_momentum_5d"] = vol.pct_change(5).replace([np.inf, -np.inf], 0).fillna(0)
+            # Volume/volatility ratio: high volume + low vol = conviction (informed flow)
+            vol_20d = _to_series(df["volatility_20d"])
+            df["volume_vol_ratio"] = (
+                _to_series(df["volume_ratio"]) / (vol_20d + 1e-6)
+            ).replace([np.inf, -np.inf], 0).fillna(0)
+            # Bollinger Band position: where price sits within ±2σ band (-1 to +1)
+            # Use price-space std so numerator/denominator are both in dollars
+            # min_periods=20 for stable BB(20) — matches standard Bollinger Band definition
+            std_20_price = close.rolling(20, min_periods=20).std()
+            # Guard std==0 (illiquid/flat periods) → NaN → fillna(0)
+            bb_raw = (close - sma20) / (2 * std_20_price.replace(0, np.nan))
+            df["bb_position"] = bb_raw.replace([np.inf, -np.inf], 0).clip(-3, 3).fillna(0)
+            # Price/volume divergence: price up + volume down (or vice-versa) = weak move
+            ret_sign = np.sign(_to_series(df["log_return_1d"]))
+            vol_sign = np.sign(vol.pct_change(5).fillna(0))
+            df["price_vol_divergence"] = (ret_sign * vol_sign * -1).fillna(0)  # -1 when divergent
 
             # 5. RSI (14-period, standard)
             delta = close.diff()
@@ -188,9 +212,28 @@ class MinimalFeatureEngineer:
 
             # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
             # SPY_close used for market-neutral target only, not as feature
-            exclude = ["date", "Open", "High", "Low", "Close", "Volume", "Adj Close",
-                      "sma_20", "sma_50", "volume_ma20", "dollar_volume", "SPY_close"]
+            # Exclude raw OHLCV, intermediate helpers, and anything that embeds absolute price level
+            # Also block stray merge artifacts, Mongo metadata, and CV markers
+            exclude = {
+                "date", "date_norm", "macro_date", "date_merge", "timestamp", "_id",
+                "Open", "High", "Low", "Close", "Volume", "Adj Close",
+                "sma_20", "sma_50", "volume_ma20", "dollar_volume",
+                "SPY_close",
+                "split", "fold", "ticker",
+            }
             self.feature_columns = [c for c in df.columns if c not in exclude and df[c].dtype in [np.float64, np.int64, float, int]]
+
+            # Safety: assert no column names that smell like targets/labels/future data
+            # Use startswith/exact-token checks to avoid false positives on legitimate
+            # feature names like volatility_20d, intraday_range, spy_vol_20d
+            _leakage_substrings = ["target", "label", "future", "forward"]
+            _leakage_prefixes = ["y_"]  # catches y_train, y_test, y_pred etc.
+            _bad = [c for c in self.feature_columns
+                    if any(k in c.lower() for k in _leakage_substrings)
+                    or any(c.lower().startswith(p) for p in _leakage_prefixes)]
+            if _bad:
+                logger.error("Potential leakage columns detected in features: %s — removing them", _bad)
+                self.feature_columns = [c for c in self.feature_columns if c not in _bad]
 
             # Stricter warmup: require core features to exist (no fake zeros in warmup)
             core = ["log_return_1d", "volatility_20d", "volume_ratio", "price_vs_sma20", "rsi"]
@@ -371,14 +414,27 @@ class MinimalFeatureEngineer:
         try:
             if mongo_client is None or not hasattr(mongo_client, "db"):
                 return df
-            coll = mongo_client.db.sentiment
-            if coll is None:
-                return df
-            doc = coll.find_one({"ticker": ticker}, sort=[("timestamp", -1)])
-            if not doc:
-                return df
-            fmp = doc.get("fmp_raw_data", {}) or {}
-            earnings = fmp.get("earnings", []) or doc.get("earnings", [])
+
+            # Try dedicated fundamentals_events collection first, fall back to sentiment
+            earnings = []
+            for coll_name in ["fundamentals_events", "sentiment"]:
+                coll = mongo_client.db[coll_name]
+                if coll is None:
+                    continue
+                doc = coll.find_one({"ticker": ticker}, sort=[("timestamp", -1)])
+                if not doc:
+                    continue
+                # Staleness guard: ignore docs older than 180 days
+                doc_ts = doc.get("timestamp")
+                if doc_ts and hasattr(doc_ts, "timestamp"):
+                    age_days = (datetime.utcnow() - doc_ts).days
+                    if age_days > 180:
+                        logger.debug("Skipping stale %s doc for %s (%d days old)", coll_name, ticker, age_days)
+                        continue
+                fmp = doc.get("fmp_raw_data", {}) or {}
+                earnings = fmp.get("earnings", []) or doc.get("earnings", [])
+                if earnings:
+                    break
             if not earnings:
                 return df
             earnings_dates = []

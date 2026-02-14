@@ -109,6 +109,10 @@ class MongoDBClient:
                 [("ticker", ASCENDING), ("timestamp", DESCENDING)],
                 name="idx_ticker_timestamp",
             )
+            preds.create_index(
+                [("ticker", ASCENDING), ("window", ASCENDING), ("timestamp", DESCENDING)],
+                name="idx_ticker_window_timestamp",
+            )
             hist = self.collections[MONGO_COLLECTIONS["historical_data"]]
             try:
                 hist.create_index(
@@ -176,6 +180,9 @@ class MongoDBClient:
             timestamp = datetime.utcnow()
             
             for window, data in predictions.items():
+                # Skip _meta — it's metadata, not a prediction window
+                if window == "_meta":
+                    continue
                 # Store COMPLETE prediction data instead of simplified version
                 document = {
                     "ticker": ticker,
@@ -197,8 +204,8 @@ class MongoDBClient:
                     # Ensemble weights
                     "ensemble_weights": data.get("ensemble_weight", data.get("ensemble_weights", {})),
                     
-                    # Backward compatibility - keep old prediction field
-                    "prediction": float(data.get("price_change", 0.0))
+                    # prediction must remain the model signal (log-return), not dollars
+                    "prediction": float(data.get("prediction", data.get("alpha", 0.0)))
                 }
                 
                 # Add any additional fields that might be present, excluding duplicates
@@ -323,6 +330,9 @@ class MongoDBClient:
             
             for doc in cursor:
                 window = doc["window"]
+                # Skip _meta rows that may exist from older pipeline runs
+                if window == "_meta":
+                    continue
                 
                 # Return COMPLETE prediction data
                 prediction_data = {

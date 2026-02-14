@@ -158,8 +158,13 @@ def main():
         if not predictor.models and not predictor.pooled_models:
              sys.exit(1)
 
-    # 5. Run Backtest
+    # 5. Run Backtest (OOS only — restricted to dates after training cutoff)
     logger.info("Running backtest...")
+    oos_start = predictor.get_oos_start_date()
+    if oos_start:
+        logger.info("OOS backtest start date: %s", oos_start.date())
+    else:
+        logger.warning("No OOS start date available — backtest will use last 20%% fallback.")
     result = run_backtest(
         predictor=predictor,
         historical_data=historical_data,
@@ -169,20 +174,31 @@ def main():
         end_date=args.end,
         max_positions=5,
         horizon=args.horizon,
+        oos_start_date=oos_start,
     )
 
     if "error" in result:
         logger.error("Backtest failed: %s", result["error"])
         sys.exit(1)
 
-    print("\n=== Pipeline Results ===")
+    print("\n=== Pipeline Results (OOS) ===")
+    print(f"OOS start: {result.get('oos_start', 'N/A')}")
     print(f"Period: {result.get('start_date')} to {result.get('end_date')}")
     print(f"Horizon: {args.horizon}")
     print(f"Strategy return: {result.get('total_return', 0):.2%}")
     print(f"Strategy Sharpe: {result.get('sharpe_ratio', 0):.3f}")
+    print(f"Max drawdown: {result.get('max_drawdown', 0):.2%}")
     if result.get("spy_return") is not None:
         print(f"SPY return: {result['spy_return']:.2%}")
-    print("========================\n")
+    ts = result.get("trade_stats", {})
+    if ts.get("n_trades", 0) > 0:
+        print(f"Trades: {ts['n_trades']} ({ts.get('trades_per_year', 0):.0f}/yr)")
+        print(f"Avg return/trade: {ts.get('avg_return_per_trade', 0):.4f}")
+        print(f"Win rate: {ts.get('win_rate', 0):.1%}")
+        print(f"Avg holding: {ts.get('avg_holding_bars', 0):.1f} bars")
+    else:
+        print("Trades: 0 (check filters)")
+    print("==============================\n")
 
     # 6. Save Models
     if args.retrain:

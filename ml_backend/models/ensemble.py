@@ -457,88 +457,10 @@ class EnsemblePredictor:
         col_names = [f'{c}_{i}' for c in columns for i in range(X.shape[1])] + ['Close']
         return pd.DataFrame(df, columns=col_names)
 
-    def train_ensemble(self, X_train, y_train, feature_names=None, ticker=None, mongo_client=None):
-        """Train all models in the ensemble and store feature importance."""
-        try:
-            logger.info("Training ensemble models...")
-            
-            # Convert to numpy array if needed
-            if hasattr(X_train, 'values'):
-                X_train = X_train.values
-            if hasattr(y_train, 'values'):
-                y_train = y_train.values
-            
-            # Store feature names
-            if feature_names is not None:
-                self.feature_names = feature_names
-            
-            # Train individual models
-            self.rf_model.fit(X_train, y_train)
-            self.gb_model.fit(X_train, y_train)
-            self.xgb_model.fit(X_train, y_train)
-            
-            # Train neural network
-            if self.nn_model:
-                self.nn_model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0)
-            
-            logger.info("Ensemble training completed successfully")
-            
-            # Calculate and store feature importance
-            if ticker and mongo_client and feature_names is not None:
-                self._calculate_and_store_feature_importance(ticker, mongo_client)
-                
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error training ensemble: {e}")
-            return False
-    
-    def _calculate_and_store_feature_importance(self, ticker: str, mongo_client):
-        """Calculate combined feature importance from all models and store in MongoDB."""
-        try:
-            feature_importance = {}
-            
-            # Get Random Forest importance
-            if hasattr(self.rf_model, 'feature_importances_'):
-                rf_importance = self.rf_model.feature_importances_
-                for i, importance in enumerate(rf_importance):
-                    if i < len(self.feature_names):
-                        feature_name = self.feature_names[i]
-                        feature_importance[feature_name] = feature_importance.get(feature_name, 0) + importance * 0.3
-            
-            # Get Gradient Boosting importance
-            if hasattr(self.gb_model, 'feature_importances_'):
-                gb_importance = self.gb_model.feature_importances_
-                for i, importance in enumerate(gb_importance):
-                    if i < len(self.feature_names):
-                        feature_name = self.feature_names[i]
-                        feature_importance[feature_name] = feature_importance.get(feature_name, 0) + importance * 0.3
-            
-            # Get XGBoost importance
-            if hasattr(self.xgb_model, 'feature_importances_'):
-                xgb_importance = self.xgb_model.feature_importances_
-                for i, importance in enumerate(xgb_importance):
-                    if i < len(self.feature_names):
-                        feature_name = self.feature_names[i]
-                        feature_importance[feature_name] = feature_importance.get(feature_name, 0) + importance * 0.4
-            
-            # Store in MongoDB using FeatureEngineer's method
-            if feature_importance:
-                from ml_backend.data.features import FeatureEngineer
-                feature_engineer = FeatureEngineer()
-                feature_engineer.store_feature_importance(
-                    ticker=ticker,
-                    feature_scores=feature_importance,
-                    window="ensemble_training",
-                    mongo_client=mongo_client
-                )
-                
-                # Log top 5 features
-                top_features = sorted(feature_importance.items(), key=lambda x: x[1], reverse=True)[:5]
-                logger.info(f"Top 5 features for {ticker}: {[f'{name}: {score:.4f}' for name, score in top_features]}")
-                
-        except Exception as e:
-            logger.error(f"Error calculating feature importance for {ticker}: {e}") 
+    # NOTE: Legacy train_ensemble() and _calculate_and_store_feature_importance()
+    # were removed — they referenced non-existent rf_model/gb_model/nn_model
+    # attributes (never initialized in __init__) and would crash with AttributeError.
+    # Use the working fit() method instead for training.
 
     def store_model_performance(self, ticker: str, window: str, actual_price: float, 
                               predicted_price: float, model_predictions: dict, mongo_client=None):

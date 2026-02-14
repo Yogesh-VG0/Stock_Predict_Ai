@@ -108,6 +108,7 @@ def main():
         end_date=args.end,
         max_positions=args.max_positions,
         horizon=args.horizon,
+        oos_start_date=predictor.get_oos_start_date(),
     )
 
     if "error" in result:
