@@ -80,7 +80,7 @@ jobs:
         run: |
           python - << 'PY'
           import os
-          from datetime import datetime, timedelta, timezone
+          from datetime import datetime, timedelta
           from pymongo import MongoClient
 
           uri = os.getenv("MONGODB_URI")
@@ -93,7 +93,8 @@ jobs:
           db = client["stock_predictor"]
           col = db["stock_predictions"]
 
-          now = datetime.now(timezone.utc)
+          # Use naive UTC (matches MongoDB's naive datetime storage)
+          now = datetime.utcnow()
           cutoff = now - timedelta(hours=3)
 
           # Require at least one doc per ticker per horizon, excluding _meta
