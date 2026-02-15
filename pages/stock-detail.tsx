@@ -527,7 +527,6 @@ export default function StockDetail({ }: StockDetailProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
         >
-          {predictionData && (
             <Card className="flex flex-col">
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2">
@@ -542,6 +541,13 @@ export default function StockDetail({ }: StockDetailProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1">
+              {!predictionData ? (
+                <div className="flex flex-col items-center justify-center py-8 text-center">
+                  <AlertCircle className="h-10 w-10 text-zinc-600 mb-3" />
+                  <p className="text-sm text-zinc-400 font-medium">No predictions available yet</p>
+                  <p className="text-xs text-zinc-500 mt-1">Predictions are generated daily by the ML pipeline.</p>
+                </div>
+              ) : (
                 <div className="grid grid-cols-1 gap-4">
                   {/* 1 Day Prediction */}
                   {(() => {
@@ -660,9 +666,9 @@ export default function StockDetail({ }: StockDetailProps) {
                     )
                   })()}
                 </div>
+              )}
               </CardContent>
             </Card>
-          )}
         </motion.div>
 
         {/* Right Column - News */}
@@ -788,7 +794,6 @@ export default function StockDetail({ }: StockDetailProps) {
         </motion.div>
 
         {/* AI Analysis - Right side (2 columns) */}
-        {predictionData && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -810,7 +815,6 @@ export default function StockDetail({ }: StockDetailProps) {
               />
             </Suspense>
           </motion.div>
-        )}
       </div>
     </div>
   )
