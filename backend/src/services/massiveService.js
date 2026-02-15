@@ -365,48 +365,39 @@ function generateTechnicalSummary(rsi, macd, sma20, sma50) {
   }
 }
 
-// Fallback calculation functions (when API is unavailable)
+// Fallback functions (when API is unavailable) - return null instead of fake data
 async function calculateRSIFromOHLC(symbol) {
-  // Simplified RSI calculation with reasonable defaults
-  const baseRSI = 50 + (Math.random() * 30 - 15); // Random between 35-65
   return {
-    value: parseFloat(baseRSI.toFixed(2)),
-    signal: baseRSI > 70 ? 'Overbought' : baseRSI < 30 ? 'Oversold' : 'Neutral',
+    value: null,
+    signal: 'Unavailable',
     window: 14,
-    source: 'calculated_fallback'
+    source: 'unavailable'
   };
 }
 
 async function calculateMACDFromOHLC(symbol) {
-  const macdValue = Math.random() * 4 - 2; // Random between -2 and 2
-  const signalValue = macdValue + (Math.random() * 1 - 0.5);
-  const histogram = macdValue - signalValue;
-  
   return {
-    value: parseFloat(macdValue.toFixed(3)),
-    signal: parseFloat(signalValue.toFixed(3)),
-    histogram: parseFloat(histogram.toFixed(3)),
-    trend: histogram > 0 ? 'Bullish' : 'Bearish',
-    source: 'calculated_fallback'
+    value: null,
+    signal: null,
+    histogram: null,
+    trend: 'Unavailable',
+    source: 'unavailable'
   };
 }
 
 async function calculateSMAFromOHLC(symbol, window) {
-  // Return a placeholder value
-  const basePrice = 100 + Math.random() * 400; // Reasonable stock price range
   return {
-    value: parseFloat(basePrice.toFixed(2)),
+    value: null,
     window: window,
-    source: 'calculated_fallback'
+    source: 'unavailable'
   };
 }
 
 async function calculateEMAFromOHLC(symbol, window) {
-  const basePrice = 100 + Math.random() * 400;
   return {
-    value: parseFloat(basePrice.toFixed(2)),
+    value: null,
     window: window,
-    source: 'calculated_fallback'
+    source: 'unavailable'
   };
 }
 

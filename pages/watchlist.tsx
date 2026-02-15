@@ -347,7 +347,7 @@ export default function WatchlistPage() {
               value={newSymbol}
               onChange={(e) => setNewSymbol(e.target.value.toUpperCase())}
               className="flex-1 bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              onKeyPress={(e) => e.key === 'Enter' && addToWatchlist(newSymbol)}
+              onKeyDown={(e) => e.key === 'Enter' && addToWatchlist(newSymbol)}
             />
             <button
               onClick={() => addToWatchlist(newSymbol)}

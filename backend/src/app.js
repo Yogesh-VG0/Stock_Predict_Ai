@@ -107,10 +107,10 @@ app.get('/api/v1/sentiment/:ticker', async (req, res) => {
     res.json({
       ticker: ticker.toUpperCase(),
       sentiment: {
-        reddit: sentimentScore + (Math.random() * 0.2 - 0.1),
+        reddit: sentimentScore,
         weighted: sentimentScore,
-        news: sentimentScore + (Math.random() * 0.1 - 0.05),
-        social: sentimentScore + (Math.random() * 0.15 - 0.075)
+        news: sentimentScore,
+        social: sentimentScore
       },
       sentiment_score: sentimentScore,
       fear_greed_index: fearGreedIndex,
@@ -160,18 +160,14 @@ app.get('/api/v1/sentiment', async (req, res) => {
       console.log('Fear & Greed API unavailable, using fallback');
     }
     
-    // Return fallback market sentiment
-    const fearGreedIndex = Math.floor(Math.random() * 30 + 45);
-    
+    // Return fallback market sentiment with null values (no fake data)
     res.json({
       market: 'US',
-      fear_greed_index: fearGreedIndex,
-      fear_greed_label: fearGreedIndex < 25 ? 'Extreme Fear' : 
-                        fearGreedIndex < 45 ? 'Fear' : 
-                        fearGreedIndex < 55 ? 'Neutral' : 
-                        fearGreedIndex < 75 ? 'Greed' : 'Extreme Greed',
-      market_sentiment: fearGreedIndex > 55 ? 'Bullish' : fearGreedIndex < 45 ? 'Bearish' : 'Neutral',
-      last_updated: new Date().toISOString()
+      fear_greed_index: null,
+      fear_greed_label: 'Unavailable',
+      market_sentiment: 'Neutral',
+      last_updated: new Date().toISOString(),
+      source: 'unavailable'
     });
   }
 });

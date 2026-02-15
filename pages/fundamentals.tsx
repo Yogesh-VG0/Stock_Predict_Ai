@@ -112,7 +112,7 @@ export default function FundamentalsPage() {
       {/* Grid of widgets */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Price history */}
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <BarChart3 className="h-4 w-4 text-blue-500" />
@@ -140,7 +140,7 @@ export default function FundamentalsPage() {
         </Card>
 
         {/* Fundamentals comparison chart */}
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Layers className="h-4 w-4 text-purple-500" />
@@ -168,7 +168,7 @@ export default function FundamentalsPage() {
         </Card>
 
         {/* Fundamentals table */}
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <BarChart3 className="h-4 w-4 text-emerald-500" />
@@ -196,7 +196,7 @@ export default function FundamentalsPage() {
         </Card>
 
         {/* SEC filings */}
-        <Card className="bg-zinc-900 border-zinc-800">
+        <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <FileText className="h-4 w-4 text-amber-500" />
@@ -224,7 +224,7 @@ export default function FundamentalsPage() {
         </Card>
 
         {/* Press releases */}
-        <Card className="bg-zinc-900 border-zinc-800 lg:col-span-2">
+        <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Newspaper className="h-4 w-4 text-blue-400" />

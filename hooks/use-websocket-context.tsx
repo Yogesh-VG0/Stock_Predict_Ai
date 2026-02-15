@@ -60,54 +60,21 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const POLL_INTERVAL = 5000 // Poll every 5 seconds (reduced to avoid rate limits)
   const MIN_FETCH_INTERVAL = 2000 // Minimum 2 seconds between API calls
 
-  // Initialize with realistic mock data based on actual stock price ranges
+  // Initialize with empty placeholder data (real prices loaded via API)
   const initializeMockData = useCallback(() => {
-    // Realistic price ranges for major stocks
-    const stockPriceRanges: Record<string, { min: number; max: number }> = {
-      'AAPL': { min: 180, max: 220 },
-      'MSFT': { min: 350, max: 450 },
-      'GOOGL': { min: 140, max: 180 },
-      'AMZN': { min: 140, max: 180 },
-      'TSLA': { min: 200, max: 300 },
-      'NVDA': { min: 800, max: 1200 },
-      'META': { min: 450, max: 550 },
-      'NFLX': { min: 600, max: 700 },
-      'JPM': { min: 180, max: 220 },
-      'V': { min: 250, max: 300 },
-      'JNJ': { min: 150, max: 180 },
-      'WMT': { min: 160, max: 190 },
-      'PG': { min: 150, max: 180 },
-      'UNH': { min: 500, max: 600 },
-      'HD': { min: 350, max: 400 },
-      'MA': { min: 450, max: 550 },
-      'BAC': { min: 35, max: 45 },
-      'XOM': { min: 100, max: 130 },
-      'LLY': { min: 700, max: 900 },
-      'ABBV': { min: 150, max: 180 },
-      'BRK.B': { min: 400, max: 500 },
-      'AVGO': { min: 1200, max: 1600 },
-      'COST': { min: 850, max: 950 },
-      'ORCL': { min: 100, max: 140 },
-      'CRM': { min: 250, max: 350 },
-      'KO': { min: 60, max: 70 }
-    }
-
-    const mockPrices: Record<string, StockPrice> = {}
+    const placeholderPrices: Record<string, StockPrice> = {}
     ALL_TRACKED_STOCKS.forEach(symbol => {
-      const range = stockPriceRanges[symbol] || { min: 50, max: 200 }
-      const basePrice = range.min + Math.random() * (range.max - range.min)
-      const changePercent = (Math.random() - 0.5) * 6 // Random change ±3%
-      mockPrices[symbol] = {
+      placeholderPrices[symbol] = {
         symbol,
-        price: basePrice,
-        change: (basePrice * changePercent) / 100,
-        changePercent,
-        volume: Math.floor(Math.random() * 1000000),
+        price: 0,
+        change: 0,
+        changePercent: 0,
+        volume: 0,
         timestamp: Date.now(),
         lastUpdated: new Date().toLocaleTimeString()
       }
     })
-    setStockPrices(mockPrices)
+    setStockPrices(placeholderPrices)
   }, [])
 
   // Check WebSocket backend status

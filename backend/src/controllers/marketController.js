@@ -18,31 +18,17 @@ const getFearGreedIndex = async (req, res) => {
       notificationService.checkFearGreedNotification(data).catch(() => {});
       res.json(data);
     } else {
-      // Return fallback data if API fails
+      // Return clearly labeled unavailable data if API fails
       res.json({
         fgi: {
-          now: {
-            value: Math.floor(Math.random() * 30 + 45),
-            valueText: 'Neutral'
-          },
-          previousClose: {
-            value: Math.floor(Math.random() * 30 + 45),
-            valueText: 'Neutral'
-          },
-          oneWeekAgo: {
-            value: Math.floor(Math.random() * 30 + 40),
-            valueText: 'Neutral'
-          },
-          oneMonthAgo: {
-            value: Math.floor(Math.random() * 30 + 50),
-            valueText: 'Greed'
-          },
-          oneYearAgo: {
-            value: Math.floor(Math.random() * 30 + 55),
-            valueText: 'Greed'
-          }
+          now: { value: null, valueText: 'Unavailable' },
+          previousClose: { value: null, valueText: 'Unavailable' },
+          oneWeekAgo: { value: null, valueText: 'Unavailable' },
+          oneMonthAgo: { value: null, valueText: 'Unavailable' },
+          oneYearAgo: { value: null, valueText: 'Unavailable' }
         },
-        lastUpdated: new Date().toISOString()
+        lastUpdated: new Date().toISOString(),
+        source: 'unavailable'
       });
     }
   } catch (error) {
@@ -61,43 +47,20 @@ const getMarketSentiment = async (req, res) => {
       return res.json(fgiData);
     }
     
-    // Fallback if API fails - return same structure as real API
-    const fearGreedIndex = Math.floor(Math.random() * 30 + 45);
-    const getValueText = (value) => {
-      if (value < 25) return 'Extreme Fear';
-      if (value < 45) return 'Fear';
-      if (value < 55) return 'Neutral';
-      if (value < 75) return 'Greed';
-      return 'Extreme Greed';
-    };
-    
+    // Fallback if API fails - return null values instead of fake data
     res.json({
       fgi: {
-        now: {
-          value: fearGreedIndex,
-          valueText: getValueText(fearGreedIndex)
-        },
-        previousClose: {
-          value: fearGreedIndex - 2,
-          valueText: getValueText(fearGreedIndex - 2)
-        },
-        oneWeekAgo: {
-          value: fearGreedIndex + 3,
-          valueText: getValueText(fearGreedIndex + 3)
-        },
-        oneMonthAgo: {
-          value: fearGreedIndex + 5,
-          valueText: getValueText(fearGreedIndex + 5)
-        },
-        oneYearAgo: {
-          value: fearGreedIndex - 10,
-          valueText: getValueText(fearGreedIndex - 10)
-        }
+        now: { value: null, valueText: 'Unavailable' },
+        previousClose: { value: null, valueText: 'Unavailable' },
+        oneWeekAgo: { value: null, valueText: 'Unavailable' },
+        oneMonthAgo: { value: null, valueText: 'Unavailable' },
+        oneYearAgo: { value: null, valueText: 'Unavailable' }
       },
       lastUpdated: {
         epochUnixSeconds: Math.floor(Date.now() / 1000),
         humanDate: new Date().toISOString()
-      }
+      },
+      source: 'unavailable'
     });
   } catch (error) {
     console.error('Error in getMarketSentiment:', error);

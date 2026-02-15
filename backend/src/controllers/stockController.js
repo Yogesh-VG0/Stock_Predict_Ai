@@ -457,7 +457,40 @@ const getComprehensiveExplanation = async (req, res) => {
           rss_articles: explanationData.sentiment_summary?.rss_articles || 0,
           marketaux_articles: explanationData.sentiment_summary?.marketaux_articles || 0
         },
-        prediction_summary: explanationData.prediction_data || {},
+        prediction_summary: {
+          '1_day': {
+            predicted_price: explanationData.prediction_data?.['1_day']?.predicted_price || explanationData.prediction_data?.next_day?.predicted_price || 0,
+            confidence: explanationData.prediction_data?.['1_day']?.confidence || explanationData.prediction_data?.next_day?.confidence || 0,
+            price_change: explanationData.prediction_data?.['1_day']?.price_change || explanationData.prediction_data?.next_day?.price_change || 0,
+            price_range: explanationData.prediction_data?.['1_day']?.price_range || explanationData.prediction_data?.next_day?.price_range || {},
+            model_predictions: explanationData.prediction_data?.['1_day']?.model_predictions || explanationData.prediction_data?.next_day?.model_predictions || {},
+            ensemble_weights: explanationData.prediction_data?.['1_day']?.ensemble_weights || explanationData.prediction_data?.next_day?.ensemble_weights || {}
+          },
+          next_day: {
+            predicted_price: explanationData.prediction_data?.next_day?.predicted_price || explanationData.prediction_data?.['1_day']?.predicted_price || 0,
+            confidence: explanationData.prediction_data?.next_day?.confidence || explanationData.prediction_data?.['1_day']?.confidence || 0,
+            price_change: explanationData.prediction_data?.next_day?.price_change || explanationData.prediction_data?.['1_day']?.price_change || 0,
+            price_range: explanationData.prediction_data?.next_day?.price_range || explanationData.prediction_data?.['1_day']?.price_range || {},
+            model_predictions: explanationData.prediction_data?.next_day?.model_predictions || explanationData.prediction_data?.['1_day']?.model_predictions || {},
+            ensemble_weights: explanationData.prediction_data?.next_day?.ensemble_weights || explanationData.prediction_data?.['1_day']?.ensemble_weights || {}
+          },
+          '7_day': {
+            predicted_price: explanationData.prediction_data?.['7_day']?.predicted_price || 0,
+            confidence: explanationData.prediction_data?.['7_day']?.confidence || 0,
+            price_change: explanationData.prediction_data?.['7_day']?.price_change || 0,
+            price_range: explanationData.prediction_data?.['7_day']?.price_range || {},
+            model_predictions: explanationData.prediction_data?.['7_day']?.model_predictions || {},
+            ensemble_weights: explanationData.prediction_data?.['7_day']?.ensemble_weights || {}
+          },
+          '30_day': {
+            predicted_price: explanationData.prediction_data?.['30_day']?.predicted_price || 0,
+            confidence: explanationData.prediction_data?.['30_day']?.confidence || 0,
+            price_change: explanationData.prediction_data?.['30_day']?.price_change || 0,
+            price_range: explanationData.prediction_data?.['30_day']?.price_range || {},
+            model_predictions: explanationData.prediction_data?.['30_day']?.model_predictions || {},
+            ensemble_weights: explanationData.prediction_data?.['30_day']?.ensemble_weights || {}
+          }
+        },
         technical_summary: {
           rsi: explanationData.technical_indicators?.RSI || 0,
           macd_signal: (explanationData.technical_indicators?.MACD_Signal || 0) > 0 ? 'Bullish' : 'Bearish',

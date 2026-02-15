@@ -253,7 +253,7 @@ export default function NewsPage() {
               type="text"
               value={tempSearchTerm}
               onChange={handleSearchChange}
-              onKeyPress={handleSearchKeyPress}
+              onKeyDown={handleSearchKeyPress}
               placeholder="Search news by keyword, ticker, or company... (Press Enter to search)"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-md py-2 pl-9 pr-12 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />

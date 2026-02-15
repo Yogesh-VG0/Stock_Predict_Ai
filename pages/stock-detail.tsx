@@ -145,7 +145,7 @@ export default function StockDetail({ }: StockDetailProps) {
       const details = await getStockDetails(symbol)
       if (details) {
         // Use real price from backend if available, otherwise fallback to details or mock
-        const finalPrice = details.price || currentPrice || 187.68
+        const finalPrice = details.price || currentPrice || 0
         const stockDataWithPrice = {
           ...details,
           price: finalPrice,

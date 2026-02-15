@@ -334,18 +334,9 @@ const subscribeToUpdates = async (req, res) => {
   }
 };
 
-// Generate mock sparkline data
+// Return empty sparkline data (no fake data)
 const generateSparklineData = (currentPrice) => {
-  const data = [];
-  const basePrice = currentPrice * 0.98; // Start slightly lower
-  
-  for (let i = 0; i < 20; i++) {
-    const randomChange = (Math.random() - 0.5) * 0.02; // ±1% change
-    const price = basePrice * (1 + randomChange);
-    data.push(Math.round(price * 100) / 100);
-  }
-  
-  return data;
+  return [];
 };
 
 module.exports = {

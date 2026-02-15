@@ -123,9 +123,13 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     'from-zinc-500/20 to-zinc-500/5 border-zinc-500/30'
 
   const parseExplanation = (text: string) => {
+    // Strip common AI preambles and markdown artifacts
     const clean = text
       .replace(/Of course[\s\S]*?investment decisions\./g, '')
-      .replace(/---+/g, '').replace(/#+\s*/g, '').replace(/\n\s*\n\s*\n/g, '\n\n').trim()
+      .replace(/^```[\s\S]*?```$/gm, '')
+      .replace(/---+/g, '')
+      .replace(/\n\s*\n\s*\n/g, '\n\n')
+      .trim()
 
     const bullish: string[] = []
     const bearish: string[] = []
@@ -133,15 +137,73 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     let outlook = ''
     let levels = ''
 
+    // Track section context for markdown-style headers
+    let currentSection = ''
+
     for (const line of clean.split('\n')) {
       const trimmed = line.trim()
       if (!trimmed) continue
-      if (trimmed.toLowerCase().startsWith('summary:')) summary = trimmed.replace(/^summary:\s*/i, '')
-      else if (trimmed.startsWith('+ ') || trimmed.startsWith('• ')) bullish.push(trimmed.replace(/^[+•]\s*/, ''))
-      else if (trimmed.startsWith('- ') && !trimmed.startsWith('---')) bearish.push(trimmed.replace(/^-\s*/, ''))
-      else if (trimmed.toLowerCase().startsWith('outlook:')) outlook = trimmed.replace(/^outlook:\s*/i, '')
-      else if (trimmed.toLowerCase().startsWith('levels:')) levels = trimmed.replace(/^levels:\s*/i, '')
-      else if (!summary && !trimmed.includes(':')) summary = trimmed
+
+      // Strip markdown formatting for matching
+      const stripped = trimmed.replace(/\*\*/g, '').replace(/^\*\s+/, '').replace(/^#{1,4}\s*/, '')
+
+      // Detect section headers (markdown or plain)
+      const lowerStripped = stripped.toLowerCase()
+      if (lowerStripped.startsWith('summary') || lowerStripped.startsWith('overview')) {
+        currentSection = 'summary'
+        const afterColon = stripped.replace(/^(summary|overview):?\s*/i, '').trim()
+        if (afterColon) summary = afterColon
+        continue
+      }
+      if (lowerStripped.includes('bullish') || lowerStripped.includes('positive') || lowerStripped.includes('upside')) {
+        currentSection = 'bullish'
+        continue
+      }
+      if (lowerStripped.includes('bearish') || lowerStripped.includes('negative') || lowerStripped.includes('risk') || lowerStripped.includes('downside')) {
+        currentSection = 'bearish'
+        continue
+      }
+      if (lowerStripped.startsWith('outlook')) {
+        currentSection = 'outlook'
+        const afterColon = stripped.replace(/^outlook:?\s*/i, '').trim()
+        if (afterColon) outlook = afterColon
+        continue
+      }
+      if (lowerStripped.startsWith('levels') || lowerStripped.startsWith('key levels') || lowerStripped.startsWith('support')) {
+        currentSection = 'levels'
+        const afterColon = stripped.replace(/^(key\s+)?levels:?\s*/i, '').trim()
+        if (afterColon) levels = afterColon
+        continue
+      }
+
+      // Process content based on prefixes or current section
+      const cleanContent = stripped.replace(/^[+•\-*]\s*/, '').trim()
+
+      if (trimmed.startsWith('+ ') || trimmed.startsWith('• ')) {
+        bullish.push(cleanContent)
+      } else if ((trimmed.startsWith('- ') || trimmed.startsWith('* ')) && currentSection === 'bearish') {
+        bearish.push(cleanContent)
+      } else if ((trimmed.startsWith('- ') || trimmed.startsWith('* ')) && currentSection === 'bullish') {
+        bullish.push(cleanContent)
+      } else if (trimmed.startsWith('- ') && !trimmed.startsWith('---')) {
+        bearish.push(cleanContent)
+      } else if (trimmed.toLowerCase().startsWith('summary:')) {
+        summary = trimmed.replace(/^summary:\s*/i, '')
+      } else if (trimmed.toLowerCase().startsWith('outlook:')) {
+        outlook = trimmed.replace(/^outlook:\s*/i, '')
+      } else if (trimmed.toLowerCase().startsWith('levels:')) {
+        levels = trimmed.replace(/^levels:\s*/i, '')
+      } else if (currentSection === 'bullish') {
+        bullish.push(cleanContent)
+      } else if (currentSection === 'bearish') {
+        bearish.push(cleanContent)
+      } else if (currentSection === 'outlook') {
+        outlook = outlook ? `${outlook} ${cleanContent}` : cleanContent
+      } else if (currentSection === 'levels') {
+        levels = levels ? `${levels} ${cleanContent}` : cleanContent
+      } else if (!summary && !trimmed.includes(':') && cleanContent.length > 10) {
+        summary = cleanContent
+      }
     }
 
     return { summary, bullish, bearish, outlook, levels, raw: clean }
