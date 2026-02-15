@@ -24,7 +24,7 @@ function TradingViewTimeline() {
         isTransparent: false,
         displayMode: "regular",
         width: "100%",
-        height: "500",
+        height: "350",
         locale: "en"
       })
       container.appendChild(script)
@@ -43,7 +43,7 @@ function TradingViewTimeline() {
       <div 
         ref={containerRef} 
         className="tradingview-widget-container" 
-        style={{ minHeight: 500 }}
+        style={{ minHeight: 350 }}
       />
     </div>
   )

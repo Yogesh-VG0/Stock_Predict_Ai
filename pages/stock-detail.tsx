@@ -10,12 +10,8 @@ import {
   Info,
   DollarSign,
   BarChart3,
-  Calendar,
   CheckCircle,
   XCircle,
-  Building,
-  Globe,
-  Users,
   Newspaper,
   Search,
   AlertCircle,
@@ -29,6 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 // Lazy load heavy components
 const TradingViewAdvancedChart = lazy(() => import("@/components/tradingview/trading-view-advanced-chart"))
+const TradingViewCompanyProfile = lazy(() => import("@/components/tradingview/TradingViewCompanyProfile"))
 const AIExplanationWidget = lazy(() => import("@/components/market/AIExplanationWidget"))
 const TechnicalIndicators = lazy(() => import("@/components/market/TechnicalIndicators"))
 
@@ -503,55 +500,27 @@ export default function StockDetail({ }: StockDetailProps) {
       {/* Main Content Grid - Top Row (Company, Predictions, News) */}
       {/* Slightly taller side cards for visual balance, without forcing full-height stretch */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column - Company Overview */}
+        {/* Left Column - Company Profile (TradingView Widget) */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
         >
-          <Card className="flex flex-col md:min-h-[280px]">
-            <CardHeader>
+          <Card className="flex flex-col overflow-hidden">
+            <CardHeader className="pb-0">
               <CardTitle className="flex items-center gap-2">
                 <Info className="h-5 w-5 text-blue-500" />
-                Company Overview
+                Company Profile
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4 flex-1">
-              <p className="text-sm text-zinc-300 leading-relaxed">{stockData.description}</p>
-
-              <div className="grid grid-cols-1 gap-4 pt-2">
-                <div className="flex items-start gap-2">
-                  <Building className="h-4 w-4 text-zinc-400 mt-0.5" />
-                  <div>
-                    <div className="text-xs text-zinc-400">Headquarters</div>
-                    <div className="text-sm">{stockData.headquarters}</div>
-                  </div>
+            <CardContent className="p-0 pt-2">
+              <Suspense fallback={
+                <div className="h-[400px] flex items-center justify-center">
+                  <div className="text-zinc-500 text-sm">Loading company profile...</div>
                 </div>
-
-                <div className="flex items-start gap-2">
-                  <Calendar className="h-4 w-4 text-zinc-400 mt-0.5" />
-                  <div>
-                    <div className="text-xs text-zinc-400">Founded</div>
-                    <div className="text-sm">{stockData.founded}</div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2">
-                  <Users className="h-4 w-4 text-zinc-400 mt-0.5" />
-                  <div>
-                    <div className="text-xs text-zinc-400">Employees</div>
-                    <div className="text-sm">{stockData.employees.toLocaleString()}</div>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2">
-                  <Globe className="h-4 w-4 text-zinc-400 mt-0.5" />
-                  <div>
-                    <div className="text-xs text-zinc-400">Website</div>
-                    <div className="text-sm">{stockData.website}</div>
-                  </div>
-                </div>
-              </div>
+              }>
+                <TradingViewCompanyProfile symbol={selectedStock} height={400} />
+              </Suspense>
             </CardContent>
           </Card>
         </motion.div>
