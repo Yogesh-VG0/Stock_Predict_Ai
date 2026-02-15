@@ -823,8 +823,10 @@ const getTechnicalIndicators = async (req, res) => {
     let indicators = null;
     try {
       const explanation = await mongoConnection.getStoredExplanation(upperSymbol, 'comprehensive');
-      if (explanation?.explanation_data?.technical_indicators) {
-        const tech = explanation.explanation_data.technical_indicators;
+      const tech = explanation?.explanation_data?.technical_indicators;
+      // Only use MongoDB data if the object has at least one real indicator value
+      const hasRealData = tech && (tech.RSI !== undefined || tech.MACD !== undefined || tech.SMA_20 !== undefined || tech.Close !== undefined);
+      if (hasRealData) {
         const close = tech.Close || 0;
         const sma20 = tech.SMA_20 || null;
         const sma50 = tech.SMA_50 || null;

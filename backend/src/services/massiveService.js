@@ -8,6 +8,10 @@ const MASSIVE_API_KEY = process.env.MASSIVE_API_KEY || process.env.POLYGON_API_K
 const indicatorCache = new Map();
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
+// Cache for historical price data (shared across indicator calculations)
+const historicalPriceCache = new Map();
+const HIST_CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours
+
 // Rate limiting (5 calls per minute for free tier)
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 12000; // 12 seconds between requests (5 per minute)
@@ -365,8 +369,104 @@ function generateTechnicalSummary(rsi, macd, sma20, sma50) {
   }
 }
 
-// Fallback functions (when API is unavailable) - return null instead of fake data
+// ── Historical Price Fetcher (financialdata.net - free, 300 req/day, no key) ──
+async function fetchHistoricalPrices(symbol) {
+  const cacheKey = `hist-prices-${symbol.toUpperCase()}`;
+  const cached = historicalPriceCache.get(cacheKey);
+  if (cached && Date.now() < cached.expiry) {
+    return cached.data;
+  }
+  try {
+    const url = `https://financialdata.net/api/v1/stock-prices?identifier=${symbol.toUpperCase()}`;
+    console.log(`📊 Fetching historical prices from financialdata.net for ${symbol}...`);
+    const response = await axios.get(url, { timeout: 15000 });
+    const data = response.data;
+    if (Array.isArray(data) && data.length > 0) {
+      // Sort ascending by date
+      data.sort((a, b) => new Date(a.date) - new Date(b.date));
+      historicalPriceCache.set(cacheKey, { data, expiry: Date.now() + HIST_CACHE_TTL });
+      console.log(`✅ Got ${data.length} historical prices for ${symbol} from financialdata.net`);
+      return data;
+    }
+    return null;
+  } catch (error) {
+    console.warn(`⚠️ financialdata.net failed for ${symbol}: ${error.message}`);
+    return null;
+  }
+}
+
+// ── Local Technical Indicator Calculations ──
+function localRSI(closes, window = 14) {
+  if (!closes || closes.length < window + 1) return null;
+  let gains = 0, losses = 0;
+  for (let i = closes.length - window; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  const avgGain = gains / window;
+  const avgLoss = losses / window;
+  if (avgLoss === 0) return 100;
+  return 100 - (100 / (1 + avgGain / avgLoss));
+}
+
+function localEMA(closes, window) {
+  if (!closes || closes.length < window) return null;
+  const k = 2 / (window + 1);
+  let ema = closes.slice(0, window).reduce((a, b) => a + b, 0) / window;
+  for (let i = window; i < closes.length; i++) {
+    ema = closes[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+function localSMA(closes, window) {
+  if (!closes || closes.length < window) return null;
+  const slice = closes.slice(-window);
+  return slice.reduce((a, b) => a + b, 0) / window;
+}
+
+function localMACD(closes) {
+  const ema12 = localEMA(closes, 12);
+  const ema26 = localEMA(closes, 26);
+  if (ema12 === null || ema26 === null) return { value: null, signal: null, histogram: null };
+  const macdVal = ema12 - ema26;
+  // Approximate signal line from recent MACD values
+  const k = 2 / (9 + 1);
+  // For signal line we need MACD series - approximate it
+  const emaValues = [];
+  const shortK = 2 / 13;
+  const longK = 2 / 27;
+  let shortEma = closes.slice(0, 12).reduce((a, b) => a + b, 0) / 12;
+  let longEma = closes.slice(0, 26).reduce((a, b) => a + b, 0) / 26;
+  for (let i = 26; i < closes.length; i++) {
+    shortEma = closes[i] * shortK + shortEma * (1 - shortK);
+    longEma = closes[i] * longK + longEma * (1 - longK);
+    emaValues.push(shortEma - longEma);
+  }
+  if (emaValues.length < 9) return { value: macdVal, signal: null, histogram: null };
+  let signalLine = emaValues.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+  for (let i = 9; i < emaValues.length; i++) {
+    signalLine = emaValues[i] * k + signalLine * (1 - k);
+  }
+  return { value: macdVal, signal: signalLine, histogram: macdVal - signalLine };
+}
+
+// Fallback functions (when Polygon API is unavailable) - calculate from free historical data
 async function calculateRSIFromOHLC(symbol) {
+  const prices = await fetchHistoricalPrices(symbol);
+  if (prices && prices.length > 20) {
+    const closes = prices.map(p => p.close);
+    const rsi = localRSI(closes, 14);
+    if (rsi !== null) {
+      return {
+        value: parseFloat(rsi.toFixed(2)),
+        signal: rsi > 70 ? 'Overbought' : rsi < 30 ? 'Oversold' : 'Neutral',
+        window: 14,
+        source: 'financialdata_calculated'
+      };
+    }
+  }
   return {
     value: null,
     signal: 'Unavailable',
@@ -376,6 +476,20 @@ async function calculateRSIFromOHLC(symbol) {
 }
 
 async function calculateMACDFromOHLC(symbol) {
+  const prices = await fetchHistoricalPrices(symbol);
+  if (prices && prices.length > 35) {
+    const closes = prices.map(p => p.close);
+    const macd = localMACD(closes);
+    if (macd.value !== null) {
+      return {
+        value: parseFloat(macd.value.toFixed(4)),
+        signal: macd.signal !== null ? parseFloat(macd.signal.toFixed(4)) : null,
+        histogram: macd.histogram !== null ? parseFloat(macd.histogram.toFixed(4)) : null,
+        trend: macd.histogram !== null ? (macd.histogram > 0 ? 'Bullish' : 'Bearish') : 'Neutral',
+        source: 'financialdata_calculated'
+      };
+    }
+  }
   return {
     value: null,
     signal: null,
@@ -386,6 +500,18 @@ async function calculateMACDFromOHLC(symbol) {
 }
 
 async function calculateSMAFromOHLC(symbol, window) {
+  const prices = await fetchHistoricalPrices(symbol);
+  if (prices && prices.length >= window) {
+    const closes = prices.map(p => p.close);
+    const sma = localSMA(closes, window);
+    if (sma !== null) {
+      return {
+        value: parseFloat(sma.toFixed(2)),
+        window: window,
+        source: 'financialdata_calculated'
+      };
+    }
+  }
   return {
     value: null,
     window: window,
@@ -394,6 +520,18 @@ async function calculateSMAFromOHLC(symbol, window) {
 }
 
 async function calculateEMAFromOHLC(symbol, window) {
+  const prices = await fetchHistoricalPrices(symbol);
+  if (prices && prices.length >= window) {
+    const closes = prices.map(p => p.close);
+    const ema = localEMA(closes, window);
+    if (ema !== null) {
+      return {
+        value: parseFloat(ema.toFixed(2)),
+        window: window,
+        source: 'financialdata_calculated'
+      };
+    }
+  }
   return {
     value: null,
     window: window,

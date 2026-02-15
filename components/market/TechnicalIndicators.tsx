@@ -113,7 +113,7 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
   // ── Loading ──
   if (isLoading) {
     return (
-      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+      <Card className="overflow-hidden">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-sm">
             <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
@@ -136,7 +136,7 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
   // ── Error ──
   if (error) {
     return (
-      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+      <Card className="overflow-hidden">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-sm">
             <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center">
@@ -163,7 +163,7 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
 
   // ── Main ──
   return (
-    <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+    <Card className="overflow-hidden">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-sm">

@@ -163,6 +163,32 @@ def _build_prompt(
             source_lines.append(f"  {src}: score={data.get('score', 0):.3f}, volume={data.get('volume', 0)}")
     sections.append(f"SENTIMENT (blended={blended:.3f}):\n" + "\n".join(source_lines))
 
+    # ── Recent News Headlines ──
+    news_lines = []
+    # Extract from finviz raw data (list of headline strings)
+    finviz_headlines = sentiment.get("finviz_raw_data", [])
+    if isinstance(finviz_headlines, list):
+        for h in finviz_headlines[:5]:
+            if isinstance(h, str) and h.strip():
+                news_lines.append(f"  - {h.strip()}")
+    # Extract from RSS news raw data (list of dicts with "title")
+    rss_news = sentiment.get("rss_news_raw_data", [])
+    if isinstance(rss_news, list):
+        for item in rss_news[:5]:
+            title = item.get("title", "") if isinstance(item, dict) else str(item)
+            if title.strip() and title.strip() not in [l.strip().lstrip("- ") for l in news_lines]:
+                news_lines.append(f"  - {title.strip()}")
+    # Extract from reddit raw data
+    reddit_posts = sentiment.get("reddit_raw_data", [])
+    if isinstance(reddit_posts, list):
+        for item in reddit_posts[:3]:
+            title = item.get("title", "") if isinstance(item, dict) else str(item)
+            if title.strip():
+                news_lines.append(f"  - [Reddit] {title.strip()}")
+
+    if news_lines:
+        sections.append("RECENT NEWS HEADLINES:\n" + "\n".join(news_lines[:10]))
+
     # ── Technicals ──
     if technicals:
         tech_lines = [f"  {k}: {v}" for k, v in technicals.items() if v is not None]
@@ -188,9 +214,10 @@ def _build_prompt(
 You are a trading dashboard AI. Generate a SHORT analysis for {ticker}.
 STRICT RULES:
 - MAX 600 characters total
+- Reference specific news events if provided (e.g. "Earnings beat" or "AI fears slam sector")
 - Use this EXACT format (no markdown headers, no bold):
 
-Summary: [1 sentence, max 20 words]
+Summary: [1 sentence, max 20 words, mention key news catalyst if any]
 
 + [Bullish factor 1]
 + [Bullish factor 2]
@@ -242,6 +269,20 @@ def generate_explanations(
             start_dt = end_dt - timedelta(days=365)
             hist = mongo.get_historical_data(ticker, start_dt, end_dt)
             technicals = calculate_technicals(hist) if hist is not None and not hist.empty else {}
+            # Fallback: if MongoDB has no historical data, try yfinance directly
+            if not technicals:
+                try:
+                    import yfinance as yf
+                    yf_data = yf.download(ticker, start=start_dt.strftime("%Y-%m-%d"), end=end_dt.strftime("%Y-%m-%d"), progress=False)
+                    if yf_data is not None and not yf_data.empty:
+                        # Flatten MultiIndex columns if present
+                        if hasattr(yf_data.columns, 'levels'):
+                            yf_data.columns = yf_data.columns.get_level_values(0)
+                        technicals = calculate_technicals(yf_data)
+                        if technicals:
+                            logger.info("  ✅ Got technicals from yfinance fallback for %s", ticker)
+                except Exception as yf_err:
+                    logger.warning("  yfinance fallback failed for %s: %s", ticker, yf_err)
         except Exception as e:
             logger.warning("  Technicals failed for %s: %s", ticker, e)
             technicals = {}

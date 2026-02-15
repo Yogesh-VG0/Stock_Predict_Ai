@@ -212,7 +212,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
   // ── Loading ──
   if (isLoading) {
     return (
-      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+      <Card className="overflow-hidden">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-sm">
             <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
@@ -237,7 +237,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
   // ── Empty State ──
   if (!explanation) {
     return (
-      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+      <Card className="overflow-hidden">
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-sm">
             <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
@@ -272,7 +272,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
   // ── Main Widget ──
   return (
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
-      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+      <Card className="overflow-hidden">
         {/* Header */}
         <CardHeader className="pb-2">
           <div className="flex items-center justify-between">

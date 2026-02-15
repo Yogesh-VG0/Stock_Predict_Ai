@@ -411,6 +411,12 @@ export default function StockDetail({ }: StockDetailProps) {
               className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${selectedStock === symbol ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"
                 }`}
             >
+              <img
+                src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                alt={symbol}
+                className="h-4 w-4 object-contain rounded-sm"
+                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+              />
               {symbol}
             </button>
           ))}
@@ -425,8 +431,20 @@ export default function StockDetail({ }: StockDetailProps) {
         className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-zinc-900 to-black p-4 rounded-lg border border-zinc-800"
       >
         <div className="flex items-center gap-4">
-          <div className="h-12 w-12 bg-gradient-to-br from-zinc-700 to-zinc-800 rounded-lg flex items-center justify-center text-xl font-bold">
-            {selectedStock.charAt(0)}
+          <div className="h-12 w-12 rounded-lg overflow-hidden bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">
+            <img
+              src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${selectedStock}.png`}
+              alt={selectedStock}
+              className="h-12 w-12 object-contain"
+              onError={(e) => {
+                // Fallback to first letter if logo not found
+                const target = e.target as HTMLImageElement;
+                target.style.display = 'none';
+                if (target.parentElement) {
+                  target.parentElement.innerHTML = `<span class="text-xl font-bold">${selectedStock.charAt(0)}</span>`;
+                }
+              }}
+            />
           </div>
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
