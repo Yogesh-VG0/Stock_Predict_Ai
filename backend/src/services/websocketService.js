@@ -95,6 +95,27 @@ class WebSocketService {
     }
   }
 
+  // Keepalive ping every 25s to prevent idle disconnects
+  _startPing() {
+    this._stopPing();
+    this._pingInterval = setInterval(() => {
+      if (this.ws && this.isConnected && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.ping();
+        } catch (e) {
+          // Ignore ping errors
+        }
+      }
+    }, 25000);
+  }
+
+  _stopPing() {
+    if (this._pingInterval) {
+      clearInterval(this._pingInterval);
+      this._pingInterval = null;
+    }
+  }
+
   // Rate-limited request helper
   async makeRateLimitedRequest(url) {
     return new Promise((resolve, reject) => {
@@ -175,6 +196,9 @@ class WebSocketService {
         if (symbols.length > 0) {
           this.subscribeToSymbols(symbols);
         }
+
+        // Start keepalive ping to prevent idle disconnects
+        this._startPing();
       });
 
       this.ws.on('message', (data) => {
@@ -201,6 +225,7 @@ class WebSocketService {
       this.ws.on('close', () => {
         console.log('WebSocket connection closed');
         this.isConnected = false;
+        this._stopPing();
         // Only reconnect if not shutting down
         if (!this.isShuttingDown) {
           this.scheduleReconnect();

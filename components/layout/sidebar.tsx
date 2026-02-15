@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo } from "react"
+import { useMemo, useState, useCallback } from "react"
 import { Link, useLocation } from "react-router-dom"
 import { motion } from "framer-motion"
 import {
@@ -53,6 +53,37 @@ const TOP_STOCKS_CONFIG = [
   { symbol: "KO", name: "Coca-Cola Co." },
   { symbol: "CRM", name: "Salesforce Inc." },
 ] as const
+
+// Compact stock logo for sidebar - uses GitHub-hosted ticker logos with letter fallback
+function StockLogo({ symbol, isLoading }: { symbol: string; isLoading: boolean }) {
+  const [imgError, setImgError] = useState(false)
+  const handleError = useCallback(() => setImgError(true), [])
+
+  if (isLoading) {
+    return <div className="w-6 h-6 rounded-full bg-zinc-800 animate-pulse flex-shrink-0" />
+  }
+
+  if (imgError) {
+    return (
+      <div className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center flex-shrink-0">
+        <span className="text-[10px] font-bold text-zinc-400">{symbol[0]}</span>
+      </div>
+    )
+  }
+
+  return (
+    <img
+      src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+      alt={symbol}
+      width={24}
+      height={24}
+      loading="lazy"
+      decoding="async"
+      className="w-6 h-6 rounded-full bg-zinc-900 object-contain flex-shrink-0"
+      onError={handleError}
+    />
+  )
+}
 
 interface SidebarProps {
   onClose: () => void
@@ -147,12 +178,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
                 onClick={handleNavigate}
               >
                 <div className="flex items-center gap-2">
-                  <div className={cn(
-                    "w-1.5 h-6 rounded-sm",
-                    stock.isLoading 
-                      ? "bg-gradient-to-b from-zinc-700 to-zinc-800 animate-pulse" 
-                      : "bg-gradient-to-b from-emerald-500 to-emerald-600"
-                  )}></div>
+                  <StockLogo symbol={stock.symbol} isLoading={stock.isLoading} />
                   <div className="flex flex-col">
                     <span className="font-medium text-sm">{stock.symbol}</span>
                     {stock.isLoading ? (
