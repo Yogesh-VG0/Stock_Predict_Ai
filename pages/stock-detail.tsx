@@ -723,7 +723,7 @@ export default function StockDetail({ }: StockDetailProps) {
             </CardHeader>
             <CardContent>
               {/* Compact news list - show ~2 items then scroll, without stretching the whole card too tall */}
-              <div className="space-y-3 max-h-52 overflow-y-auto pr-2">
+              <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
                 {stockNews.map((item: any, index: number) => {
                   const sentiment = item.sentiment || "neutral"
 
@@ -802,9 +802,9 @@ export default function StockDetail({ }: StockDetailProps) {
       {/* Advanced Technical & AI Analysis Header (only for tracked stocks) */}
       {isTrackedStock && (
       <>
-      <div className="flex items-center justify-between pt-2">
-        <h2 className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
-          <BarChart3 className="h-4 w-4 text-emerald-500" />
+      <div className="flex items-center justify-between pt-4">
+        <h2 className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
+          <BarChart3 className="h-5 w-5 text-emerald-500" />
           Advanced Technical & AI Analysis
         </h2>
       </div>

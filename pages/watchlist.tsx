@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import StockLogo from "@/components/market/StockLogo"
 import { motion } from "framer-motion"
 import { Link } from "react-router-dom"
 import { Star, TrendingUp, TrendingDown, Plus, MoreHorizontal, Bell, Trash2, MoveVertical, Wifi, WifiOff, AlertTriangle, CheckCircle, Clock } from "lucide-react"
@@ -477,6 +478,8 @@ export default function WatchlistPage() {
                     <div className="cursor-move opacity-0 group-hover:opacity-100 transition-opacity">
                       <MoveVertical className="h-4 w-4 text-zinc-500" />
                     </div>
+
+                    <StockLogo symbol={stock.symbol} size={32} />
 
                     <div className="flex flex-col">
                       <Link
