@@ -9,6 +9,7 @@ import Navbar from "./navbar"
 import TradingViewScriptLoader from "../tradingview/trading-view-script-loader"
 import TickerTapeWidget from "../tradingview/ticker-tape-widget"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { usePrefetch } from "@/hooks/use-prefetch"
 
 interface LayoutProps {
   children: React.ReactNode
@@ -19,6 +20,9 @@ export default function Layout({ children }: LayoutProps) {
   const [isMobile, setIsMobile] = useState(false)
   const location = useLocation()
   const pathname = location.pathname
+
+  // Pre-fetch stock data for priority stocks in the background
+  usePrefetch()
 
   useEffect(() => {
     const checkMobile = () => {

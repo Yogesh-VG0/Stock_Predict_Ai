@@ -13,6 +13,7 @@ import {
   getBatchExplanationStatus,
   getComprehensiveAIExplanation,
 } from "@/lib/api"
+import { getCachedData, setCachedData } from "@/hooks/use-prefetch"
 
 interface StockPrediction {
   symbol: string
@@ -63,7 +64,10 @@ export default function Predictions() {
 
       const results = await Promise.allSettled(
         tickersToFetch.map(async (symbol: string) => {
-          const explanation = await getComprehensiveAIExplanation(symbol)
+          // Use prefetch cache if available
+          const cached = getCachedData<any>(`explanation-${symbol}`)
+          const explanation = cached || await getComprehensiveAIExplanation(symbol)
+          if (!cached && explanation) setCachedData(`explanation-${symbol}`, explanation)
           return { symbol, explanation }
         })
       )

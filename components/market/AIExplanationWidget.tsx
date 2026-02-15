@@ -20,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { AIExplanation, getComprehensiveAIExplanation, getStoredAIExplanation, generateAIExplanation } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { getCachedData, setCachedData } from "@/hooks/use-prefetch"
 
 interface AIExplanationWidgetProps {
   ticker: string;
@@ -44,7 +45,11 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     setIsLoading(true)
     setError(null)
     try {
-      let aiExplanation = await getComprehensiveAIExplanation(ticker)
+      // Check prefetch cache first for instant loading
+      const cached = getCachedData<AIExplanation>(`explanation-${ticker}`)
+      let aiExplanation = cached || await getComprehensiveAIExplanation(ticker)
+      if (!cached && aiExplanation) setCachedData(`explanation-${ticker}`, aiExplanation)
+
       if (!aiExplanation) {
         const stored = await getStoredAIExplanation(ticker)
         if (stored) aiExplanation = stored
@@ -350,33 +355,6 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
               </div>
             </div>
           </div>
-
-          {/* ── Model Breakdown ── */}
-          {nextDay?.model_predictions && (
-            <div className="rounded-lg p-3 bg-zinc-900/60 border border-zinc-800/50">
-              <h4 className="text-[11px] text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <Brain className="h-3 w-3 text-purple-400" /> Model Predictions
-              </h4>
-              <div className="grid grid-cols-3 gap-2">
-                {Object.entries(nextDay.model_predictions).map(([model, prediction]) => {
-                  const val = prediction as number
-                  const weights = nextDay?.ensemble_weights
-                  const weight = weights ? weights[model as keyof typeof weights] : undefined
-                  return (
-                    <div key={model} className="rounded-md bg-zinc-800/60 p-2 text-center border border-zinc-700/30">
-                      <div className="text-[10px] text-zinc-500 mb-0.5">{model.toUpperCase()}</div>
-                      <div className={cn("text-sm font-bold", val >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-                        {val >= 0 ? '+' : ''}{val.toFixed(2)}%
-                      </div>
-                      {weight !== undefined && (
-                        <div className="text-[9px] text-zinc-600 mt-0.5">w: {(weight * 100).toFixed(0)}%</div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
 
           {/* ── Expandable Analysis ── */}
           <AnimatePresence>

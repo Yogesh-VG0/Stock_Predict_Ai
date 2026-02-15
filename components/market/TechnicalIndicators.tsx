@@ -17,6 +17,7 @@ import {
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
+import { getCachedData, setCachedData } from "@/hooks/use-prefetch"
 
 interface TechnicalIndicatorsProps {
   symbol: string
@@ -64,6 +65,14 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
   const [error, setError] = useState<string | null>(null)
 
   const fetchIndicators = async () => {
+    // Check prefetch cache first for instant loading
+    const cached = getCachedData<any>(`indicators-${symbol}`)
+    if (cached && cached.success !== false) {
+      setIndicators(cached.data || cached)
+      setIsLoading(false)
+      return
+    }
+
     setIsLoading(true)
     setError(null)
     try {
@@ -71,6 +80,8 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
       const data = await response.json()
       if (data.success && data.data) {
         setIndicators(data.data)
+        // Cache the response for future visits
+        setCachedData(`indicators-${symbol}`, data, 10 * 60 * 1000)
       } else {
         throw new Error(data.message || 'Failed to fetch indicators')
       }

@@ -50,6 +50,7 @@ import {
 } from "@/lib/api"
 import { useToast } from "@/hooks/use-toast"
 import { useWebSocket, useStockPrice } from "@/hooks/use-websocket-context"
+import { getCachedData, setCachedData } from "@/hooks/use-prefetch"
 
 type StockDetailProps = {}
 
@@ -141,9 +142,15 @@ export default function StockDetail({ }: StockDetailProps) {
   const loadStockData = async (symbol: string) => {
     setIsLoading(true)
     try {
-      // Load stock details
-      const details = await getStockDetails(symbol)
+      // Check prefetch cache first for instant loading
+      const cachedDetails = getCachedData<StockDetails>(`stock-details-${symbol}`)
+
+      // Load stock details (from cache or API)
+      const details = cachedDetails || await getStockDetails(symbol)
       if (details) {
+        // Cache for future use if fetched from API
+        if (!cachedDetails) setCachedData(`stock-details-${symbol}`, details)
+
         // Use real price from backend if available, otherwise fallback to details or mock
         const finalPrice = details.price || currentPrice || 0
         const stockDataWithPrice = {
@@ -161,9 +168,11 @@ export default function StockDetail({ }: StockDetailProps) {
       let priceData = null
 
       try {
-        // Use the same function that AIExplanationWidget uses to get real data from MongoDB
-        aiExplanation = await getComprehensiveAIExplanation(symbol)
-        console.log(`✅ Loaded AI explanation for ${symbol}:`, aiExplanation ? 'Real data from MongoDB' : 'No stored data')
+        // Check prefetch cache first, then fall back to API
+        const cachedExplanation = getCachedData<any>(`explanation-${symbol}`)
+        aiExplanation = cachedExplanation || await getComprehensiveAIExplanation(symbol)
+        if (!cachedExplanation && aiExplanation) setCachedData(`explanation-${symbol}`, aiExplanation)
+        console.log(`✅ Loaded AI explanation for ${symbol}:`, aiExplanation ? (cachedExplanation ? 'Prefetch cache' : 'API') : 'No stored data')
       } catch (error) {
         console.log(`No AI explanation available for ${symbol}, will use enhanced mock`)
         aiExplanation = null
@@ -403,7 +412,7 @@ export default function StockDetail({ }: StockDetailProps) {
           </button>
         </form>
 
-        <div className="flex items-center gap-3 overflow-x-auto pb-2">
+        <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-2 scrollbar-hide -mx-1 px-1">
           {availableStocks.slice(0, 8).map((symbol) => (
             <button
               key={symbol}
@@ -447,9 +456,9 @@ export default function StockDetail({ }: StockDetailProps) {
             />
           </div>
           <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              {stockData.name}
-              <span className="text-lg text-zinc-400">({selectedStock})</span>
+            <h1 className="text-lg sm:text-2xl font-bold flex items-center gap-2 flex-wrap">
+              <span className="truncate max-w-[200px] sm:max-w-none">{stockData.name}</span>
+              <span className="text-sm sm:text-lg text-zinc-400">({selectedStock})</span>
             </h1>
             <div className="flex items-center gap-2 text-sm">
               <span className="text-zinc-400">{stockData.sector}</span>
@@ -479,7 +488,9 @@ export default function StockDetail({ }: StockDetailProps) {
       {/* TradingView Chart */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
         <Suspense fallback={<ChartSkeleton />}>
-          <TradingViewAdvancedChart symbol={selectedStock} height={500} />
+          <div className="h-[350px] sm:h-[500px]">
+            <TradingViewAdvancedChart symbol={selectedStock} height={typeof window !== 'undefined' && window.innerWidth < 640 ? 350 : 500} />
+          </div>
         </Suspense>
       </motion.div>
 
