@@ -1012,7 +1012,7 @@ const searchStocks = async (req, res) => {
       );
       if (response.data?.result) {
         finnhubResults = response.data.result
-          .filter(r => r.type === 'Common Stock' || r.type === 'ETP')
+          .filter(r => (r.type === 'Common Stock' || r.type === 'ETP') && !r.symbol.includes('.'))
           .slice(0, 10)
           .map(r => ({
             symbol: r.symbol,

@@ -35,9 +35,10 @@ export default function SearchWidget() {
       
       if (!searchResults) return []
       
-      // Enhance results with price data
+      // Enhance tracked results with price data (skip untracked to avoid unnecessary API calls)
       const enhancedResults = await Promise.all(
         searchResults.map(async (stock) => {
+          if (!stock.isTracked) return stock
           const priceData = await getStockPrice(stock.symbol)
           return {
             ...stock,

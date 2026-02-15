@@ -135,7 +135,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
         </Link>
       </SidebarHeader>
 
-      <SidebarContent className="overflow-hidden">
+      <SidebarContent className="overflow-hidden flex flex-col">
         <SidebarMenu>
           {navItems.map((item) => (
             <SidebarMenuItem key={item.path}>
@@ -153,11 +153,11 @@ export default function Sidebar({ onClose }: SidebarProps) {
           ))}
         </SidebarMenu>
 
-        <div className="mt-6 px-3">
+        <div className="mt-6 px-3 flex-1 flex flex-col min-h-0">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-semibold text-zinc-400">TOP STOCKS</h3>
           </div>
-          <div className="space-y-1 max-h-[calc(100vh-350px)] overflow-y-scroll [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
+          <div className="space-y-1 flex-1 overflow-y-scroll [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             {topStocks.map((stock) => (
               <Link
                 key={stock.symbol}
