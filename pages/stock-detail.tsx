@@ -509,7 +509,7 @@ export default function StockDetail({ }: StockDetailProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
         >
-          <Card className="flex flex-col md:min-h-[240px]">
+          <Card className="flex flex-col md:min-h-[280px]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Info className="h-5 w-5 text-blue-500" />
@@ -714,7 +714,7 @@ export default function StockDetail({ }: StockDetailProps) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
         >
-          <Card className="flex flex-col md:min-h-[240px]">
+          <Card className="flex flex-col md:min-h-[280px]">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Newspaper className="h-5 w-5 text-amber-500" />
@@ -723,7 +723,7 @@ export default function StockDetail({ }: StockDetailProps) {
             </CardHeader>
             <CardContent>
               {/* Compact news list - show ~2 items then scroll, without stretching the whole card too tall */}
-              <div className="space-y-3 max-h-40 overflow-y-auto pr-2">
+              <div className="space-y-3 max-h-52 overflow-y-auto pr-2">
                 {stockNews.map((item: any, index: number) => {
                   const sentiment = item.sentiment || "neutral"
 

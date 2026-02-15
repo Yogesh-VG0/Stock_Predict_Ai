@@ -79,7 +79,7 @@ function FinlogixEarningsCalendar() {
       <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden">
         <div 
           className="w-full flex items-center justify-center" 
-          style={{ minHeight: 500, backgroundColor: '#18181b' }}
+          style={{ minHeight: 650, backgroundColor: '#18181b' }}
         >
           <div className="text-zinc-500 text-sm">Loading earnings calendar...</div>
         </div>
@@ -93,7 +93,7 @@ function FinlogixEarningsCalendar() {
       <div 
         ref={containerRef}
         className="finlogix-container w-full" 
-        style={{ minHeight: 500, backgroundColor: '#18181b' }} 
+        style={{ minHeight: 650, backgroundColor: '#18181b' }} 
       />
     </div>
   )

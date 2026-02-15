@@ -5,7 +5,6 @@ import { motion } from "framer-motion"
 import { Clock, BarChart3, Activity, Newspaper } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import MarketSentimentBanner from "@/components/market/market-sentiment-banner"
-import EnhancedQuickPredictionWidget from "@/components/market/EnhancedQuickPredictionWidget"
 import { getMarketStatus, MarketStatus } from "@/lib/api"
 import { TradingHoursBar } from "@/components/market/TradingHoursBar"
 
@@ -99,8 +98,6 @@ export default function HomePage() {
         </div>
 
         <div className="space-y-6">
-          <EnhancedQuickPredictionWidget />
-
           {/* Market Overview */}
           <Card className="hover:border-zinc-700 transition-colors" style={{ minHeight: 540 }}>
             <CardHeader className="pb-2">
