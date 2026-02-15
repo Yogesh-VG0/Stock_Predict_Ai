@@ -786,7 +786,91 @@ const getTechnicalIndicators = async (req, res) => {
 
     console.log(`📊 Fetching technical indicators for ${upperSymbol}`);
 
-    const indicators = await massiveService.getAllIndicators(upperSymbol);
+    // PRIORITY 1: Read pre-computed indicators from MongoDB (instant, no API calls)
+    let indicators = null;
+    try {
+      const explanation = await mongoConnection.getStoredExplanation(upperSymbol, 'comprehensive');
+      if (explanation?.explanation_data?.technical_indicators) {
+        const tech = explanation.explanation_data.technical_indicators;
+        const close = tech.Close || 0;
+        const sma20 = tech.SMA_20 || null;
+        const sma50 = tech.SMA_50 || null;
+        const ema12 = tech.EMA_12 || null;
+        const ema26 = tech.EMA_26 || null;
+        const rsiVal = tech.RSI || null;
+        const macdVal = tech.MACD || null;
+        const macdSig = tech.MACD_Signal || null;
+        const histogram = macdVal !== null && macdSig !== null ? macdVal - macdSig : null;
+
+        // RSI interpretation
+        let rsiSignal = 'Neutral';
+        let rsiInterp = 'Neutral - No clear direction';
+        if (rsiVal !== null) {
+          if (rsiVal >= 70) { rsiSignal = 'Overbought'; rsiInterp = 'Overbought - Consider taking profits'; }
+          else if (rsiVal <= 30) { rsiSignal = 'Oversold'; rsiInterp = 'Oversold - Consider buying opportunity'; }
+          else if (rsiVal >= 60) { rsiInterp = 'Bullish momentum - Uptrend likely'; }
+          else if (rsiVal <= 40) { rsiInterp = 'Bearish momentum - Downtrend likely'; }
+        }
+
+        // MACD interpretation
+        const macdTrend = histogram !== null ? (histogram > 0 ? 'Bullish' : 'Bearish') : 'Neutral';
+        let macdInterp = 'Neutral - Watch for crossover';
+        if (histogram !== null && macdVal !== null && macdSig !== null) {
+          if (histogram > 0 && macdVal > macdSig) macdInterp = 'Bullish momentum increasing';
+          else if (histogram > 0) macdInterp = 'Bullish momentum weakening';
+          else if (histogram < 0 && macdVal < macdSig) macdInterp = 'Bearish momentum increasing';
+          else macdInterp = 'Bearish momentum weakening';
+        }
+
+        // Summary signal
+        let bullish = 0, bearish = 0;
+        if (rsiVal !== null) {
+          if (rsiVal < 30) bullish += 2;
+          else if (rsiVal < 40) bullish += 1;
+          else if (rsiVal > 70) bearish += 2;
+          else if (rsiVal > 60) bearish += 1;
+        }
+        if (macdTrend === 'Bullish') bullish += 2; else if (macdTrend === 'Bearish') bearish += 2;
+        if (sma20 && sma50) { if (sma20 > sma50) bullish += 1; else bearish += 1; }
+
+        const total = bullish + bearish;
+        const bullPct = total > 0 ? (bullish / total) * 100 : 50;
+        let summarySignal = 'Neutral', summaryDesc = 'Mixed signals - wait for confirmation', summaryStr = 50;
+        if (bullPct >= 70) { summarySignal = 'Strong Buy'; summaryStr = bullPct; summaryDesc = 'Multiple indicators confirm bullish trend'; }
+        else if (bullPct >= 55) { summarySignal = 'Buy'; summaryStr = bullPct; summaryDesc = 'Technical indicators lean bullish'; }
+        else if (bullPct <= 30) { summarySignal = 'Strong Sell'; summaryStr = 100 - bullPct; summaryDesc = 'Multiple indicators confirm bearish trend'; }
+        else if (bullPct <= 45) { summarySignal = 'Sell'; summaryStr = 100 - bullPct; summaryDesc = 'Technical indicators lean bearish'; }
+
+        indicators = {
+          symbol: upperSymbol,
+          timestamp: explanation.timestamp || new Date().toISOString(),
+          indicators: {
+            rsi: { value: rsiVal, signal: rsiSignal, window: 14, interpretation: rsiInterp },
+            macd: { value: macdVal, signal: macdSig, histogram, trend: macdTrend, interpretation: macdInterp },
+            sma: {
+              sma20, sma50,
+              trend: sma20 && sma50 ? (sma20 > sma50 ? 'Bullish (Golden Cross potential)' : 'Bearish (Death Cross potential)') : 'Unknown'
+            },
+            ema: {
+              ema12, ema26,
+              trend: ema12 && ema26 ? (ema12 > ema26 ? 'Bullish' : 'Bearish') : 'Unknown'
+            }
+          },
+          summary: { signal: summarySignal, strength: summaryStr, description: summaryDesc },
+          source: 'mongodb_pipeline',
+          cached: true
+        };
+        console.log(`✅ Technical indicators for ${upperSymbol} loaded from MongoDB (instant)`);
+      }
+    } catch (mongoErr) {
+      console.warn(`⚠️ MongoDB technical indicators lookup failed for ${upperSymbol}:`, mongoErr.message);
+    }
+
+    // PRIORITY 2: Fall back to Massive API (slow but real-time)
+    if (!indicators) {
+      console.log(`⚠️ No MongoDB indicators for ${upperSymbol}, falling back to Massive API...`);
+      indicators = await massiveService.getAllIndicators(upperSymbol);
+    }
 
     res.json({
       success: true,

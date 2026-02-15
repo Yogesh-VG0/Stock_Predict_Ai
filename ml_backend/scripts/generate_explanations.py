@@ -185,17 +185,23 @@ def _build_prompt(
 
     # ── Instructions ──
     sections.append(f"""
-ANALYSIS INSTRUCTIONS:
-Generate a concise AI analysis for {ticker} for a trading dashboard.
-Format using markdown. Keep under 2000 characters.
+You are a trading dashboard AI. Generate a SHORT analysis for {ticker}.
+STRICT RULES:
+- MAX 600 characters total
+- Use this EXACT format (no markdown headers, no bold):
 
-Include:
-- Summary (1-2 sentences)
-- 2-3 Positive Factors
-- 2-3 Risk Factors
-- Outlook (Bullish/Bearish/Neutral) with confidence
-- Key support/resistance levels
+Summary: [1 sentence, max 20 words]
 
++ [Bullish factor 1]
++ [Bullish factor 2]
+
+- [Risk factor 1]
+- [Risk factor 2]
+
+Outlook: [Bullish/Bearish/Neutral] | Confidence: [value]
+Levels: Support $[price] | Resistance $[price]
+
+Do NOT add disclaimers, caveats, or "not financial advice" text.
 Use ONLY the provided data. Do NOT invent numbers.
 """)
     return "\n\n".join(sections)

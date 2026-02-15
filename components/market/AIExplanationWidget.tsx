@@ -12,12 +12,14 @@ import {
   ChevronUp,
   Loader2,
   RefreshCw,
+  Shield,
+  Target,
+  Zap,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
 import { AIExplanation, getComprehensiveAIExplanation, getStoredAIExplanation, generateAIExplanation } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
 interface AIExplanationWidgetProps {
   ticker: string;
@@ -41,34 +43,22 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
   const loadAIExplanation = async () => {
     setIsLoading(true)
     setError(null)
-    
     try {
-      // PRIORITY 1: Get stored explanation from MongoDB (fast, no regeneration)
       let aiExplanation = await getComprehensiveAIExplanation(ticker)
-      
-      // PRIORITY 2: Fallback to older stored explanation method if needed
       if (!aiExplanation) {
-        console.log(`No stored explanation available for ${ticker}, trying legacy stored...`)
         const stored = await getStoredAIExplanation(ticker)
-        if (stored) {
-          aiExplanation = stored
-        }
+        if (stored) aiExplanation = stored
       }
-      
-      // PRIORITY 3: Final fallback — no stored data, show empty state with generate button
       if (!aiExplanation) {
-        console.log(`No stored explanation available for ${ticker}. Click ✨ to generate real AI analysis.`)
-        setError('No AI analysis found in database. Click ✨ to generate fresh analysis with Gemini 2.5 Pro.')
-        // Still null — widget will show empty state with "Try Again" button
+        setError('No AI analysis available. Click generate to create one.')
       } else {
         setError(null)
       }
-      
       setExplanation(aiExplanation)
       setLastUpdated(new Date())
     } catch (err) {
       console.error('Error loading AI explanation:', err)
-      setError('Failed to load AI analysis. Click ✨ to generate fresh analysis.')
+      setError('Failed to load AI analysis.')
     } finally {
       setIsLoading(false)
     }
@@ -77,153 +67,135 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
   const generateFreshExplanation = async () => {
     setIsGenerating(true)
     setError(null)
-    
     try {
-      console.log(`🔥 Generating fresh AI explanation for ${ticker} using Gemini 2.5 Pro...`)
-      
       const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-      
-      // In development, try ML backend directly first (faster)
       if (isLocalDev) {
         try {
           const targetDate = new Date().toISOString().split('T')[0]
           const response = await fetch(`http://127.0.0.1:8000/api/v1/explain/${ticker}/${targetDate}`)
-          
           if (response.ok) {
             const result = await response.json()
-            
             if (result.ai_explanation) {
-              const freshExplanation = {
-                ticker: ticker,
-                date: targetDate,
+              setExplanation({
+                ticker, date: targetDate,
                 explanation: result.ai_explanation,
-                data_summary: result.sentiment_summary || {},
-                prediction_summary: result.prediction_data || {},
-                technical_summary: result.technical_indicators || {},
-                metadata: {
-                  data_sources: result.data_sources_used || [],
-                  quality_score: 0.95,
-                  processing_time: "Gemini 2.5 Pro - Fresh Generated",
-                  api_version: "v2.5-live"
-                }
-              }
-              
-              setExplanation(freshExplanation)
+                data_summary: result.sentiment_summary || {} as any,
+                prediction_summary: result.prediction_data || {} as any,
+                technical_summary: result.technical_indicators || {} as any,
+                metadata: { data_sources: result.data_sources_used || [], quality_score: 0.95, processing_time: "Gemini 2.5 Flash", api_version: "v2.5-live" }
+              })
               setLastUpdated(new Date())
-              setError(null)
               setIsGenerating(false)
               return
             }
           }
-        } catch (localError) {
-          console.log('ML backend not available locally, trying Node.js backend...')
-        }
+        } catch { /* fallback below */ }
       }
-      
-      // Production path: use Node.js backend → ML backend proxy
-      const freshExplanation = await generateAIExplanation(ticker)
-      if (freshExplanation) {
-        setExplanation(freshExplanation)
-        setLastUpdated(new Date())
-        setError(null)
-      } else {
-        throw new Error('No explanation returned from backend')
-      }
+      const fresh = await generateAIExplanation(ticker)
+      if (fresh) { setExplanation(fresh); setLastUpdated(new Date()); setError(null); }
+      else { throw new Error('No explanation returned') }
     } catch (err) {
-      console.error('Error generating fresh AI explanation:', err)
-      setError('Failed to generate fresh AI analysis. The ML backend may be unavailable.')
+      console.error('Error generating AI explanation:', err)
+      setError('ML backend unavailable.')
     } finally {
       setIsGenerating(false)
     }
   }
 
-  const refreshExplanation = async () => {
-    await loadAIExplanation()
+  // ── Helpers ──
+  const nextDay = explanation?.prediction_summary?.next_day
+  const confidence = nextDay?.confidence ?? 0
+  const blended = explanation?.data_summary?.blended_sentiment ?? 0
+  const dataSources = explanation?.metadata?.data_sources ?? []
+
+  const getSentimentLabel = (v: number) => v > 0.1 ? 'Bullish' : v < -0.1 ? 'Bearish' : 'Neutral'
+  const getSentimentGradient = (v: number) =>
+    v > 0.1 ? 'from-emerald-500/20 to-emerald-500/5 border-emerald-500/30' :
+    v < -0.1 ? 'from-red-500/20 to-red-500/5 border-red-500/30' :
+    'from-amber-500/20 to-amber-500/5 border-amber-500/30'
+  const getSentimentIcon = (v: number) =>
+    v > 0.1 ? <TrendingUp className="h-4 w-4 text-emerald-400" /> :
+    v < -0.1 ? <TrendingDown className="h-4 w-4 text-red-400" /> :
+    <Target className="h-4 w-4 text-amber-400" />
+  const getConfidenceGradient = (c: number) =>
+    c >= 0.7 ? 'from-purple-500/20 to-violet-500/5 border-purple-500/30' :
+    c >= 0.5 ? 'from-blue-500/20 to-indigo-500/5 border-blue-500/30' :
+    'from-zinc-500/20 to-zinc-500/5 border-zinc-500/30'
+
+  const parseExplanation = (text: string) => {
+    const clean = text
+      .replace(/Of course[\s\S]*?investment decisions\./g, '')
+      .replace(/---+/g, '').replace(/#+\s*/g, '').replace(/\n\s*\n\s*\n/g, '\n\n').trim()
+
+    const bullish: string[] = []
+    const bearish: string[] = []
+    let summary = ''
+    let outlook = ''
+    let levels = ''
+
+    for (const line of clean.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      if (trimmed.toLowerCase().startsWith('summary:')) summary = trimmed.replace(/^summary:\s*/i, '')
+      else if (trimmed.startsWith('+ ') || trimmed.startsWith('• ')) bullish.push(trimmed.replace(/^[+•]\s*/, ''))
+      else if (trimmed.startsWith('- ') && !trimmed.startsWith('---')) bearish.push(trimmed.replace(/^-\s*/, ''))
+      else if (trimmed.toLowerCase().startsWith('outlook:')) outlook = trimmed.replace(/^outlook:\s*/i, '')
+      else if (trimmed.toLowerCase().startsWith('levels:')) levels = trimmed.replace(/^levels:\s*/i, '')
+      else if (!summary && !trimmed.includes(':')) summary = trimmed
+    }
+
+    return { summary, bullish, bearish, outlook, levels, raw: clean }
   }
 
-  const formatPercentage = (value: number) => {
-    const sign = value >= 0 ? '+' : ''
-    return `${sign}${value.toFixed(2)}%`
-  }
-
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 0.8) return 'text-emerald-500'
-    if (confidence >= 0.6) return 'text-amber-500'
-    return 'text-red-500'
-  }
-
-  const getConfidenceLabel = (confidence: number) => {
-    if (confidence >= 0.8) return 'High'
-    if (confidence >= 0.6) return 'Medium'
-    return 'Low'
-  }
-
-  const getSentimentColor = (sentiment: number) => {
-    if (sentiment > 0.1) return 'text-emerald-500'
-    if (sentiment < -0.1) return 'text-red-500'
-    return 'text-amber-500'
-  }
-
-  const parseMarkdown = (text: string) => {
-    // Clean up the text first - remove disclaimers and unnecessary formatting
-    let cleanText = text
-      // Remove the disclaimer paragraph (use [\s\S] instead of . with s flag)
-      .replace(/Of course\. Here is a comprehensive analysis[\s\S]*?Please conduct your own due diligence before making any investment decisions\./g, '')
-      // Remove horizontal rules and markdown artifacts
-      .replace(/---+/g, '')
-      .replace(/#+\s*/g, '')
-      // Clean up excessive line breaks
-      .replace(/\n\s*\n\s*\n/g, '\n\n')
-      .trim()
-
-    // Simple markdown parsing for headers and bold text
-    return cleanText
-      .replace(/## (.*$)/gim, '<h3 class="text-lg font-semibold mb-3 text-white">$1</h3>')
-      .replace(/\*\*(.*)\*\*/gim, '<strong class="font-semibold text-white">$1</strong>')
-      .replace(/- (.*$)/gim, '<li class="ml-4 text-zinc-300">• $1</li>')
-      .replace(/\n/g, '<br/>')
-  }
-
+  // ── Loading ──
   if (isLoading) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Brain className="h-5 w-5 text-purple-500" />
+      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+              <Brain className="h-4 w-4 text-white" />
+            </div>
             AI Market Intelligence
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-6 w-6 animate-spin text-purple-500" />
-            <span className="ml-2 text-zinc-400">Analyzing market data...</span>
+          <div className="flex flex-col items-center justify-center py-10 gap-3">
+            <div className="relative">
+              <div className="h-10 w-10 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
+              <Brain className="h-4 w-4 text-purple-400 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+            </div>
+            <span className="text-xs text-zinc-500">Analyzing {ticker}...</span>
           </div>
         </CardContent>
       </Card>
     )
   }
 
+  // ── Empty State ──
   if (!explanation) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Brain className="h-5 w-5 text-purple-500" />
+      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm">
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center">
+              <Brain className="h-4 w-4 text-white" />
+            </div>
             AI Market Intelligence
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="text-center py-8">
-            <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
-            <p className="text-zinc-400 mb-4">{error || 'No AI analysis available'}</p>
+            <AlertTriangle className="h-8 w-8 text-amber-500/60 mx-auto mb-3" />
+            <p className="text-sm text-zinc-400 mb-4">{error || 'No AI analysis available'}</p>
             <div className="flex gap-2 justify-center">
-              <Button onClick={loadAIExplanation} variant="outline" size="sm">
-                <RefreshCw className="h-4 w-4 mr-2" />
-                Reload
+              <Button onClick={loadAIExplanation} variant="outline" size="sm" className="border-zinc-700 hover:border-zinc-600 text-xs">
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Reload
               </Button>
-              <Button onClick={generateFreshExplanation} variant="outline" size="sm" disabled={isGenerating}>
-                <Sparkles className={`h-4 w-4 mr-2 ${isGenerating ? 'animate-pulse text-purple-500' : ''}`} />
-                {isGenerating ? 'Generating...' : 'Generate with Gemini'}
+              <Button onClick={generateFreshExplanation} size="sm" disabled={isGenerating}
+                className="bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500 border-0 text-xs">
+                <Sparkles className={`h-3.5 w-3.5 mr-1.5 ${isGenerating ? 'animate-pulse' : ''}`} />
+                {isGenerating ? 'Generating...' : 'Generate'}
               </Button>
             </div>
           </div>
@@ -232,147 +204,198 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     )
   }
 
+  // ── Parse the explanation text into structured sections ──
+  const parsed = parseExplanation(explanation.explanation)
+
+  // ── Main Widget ──
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-    >
-      <Card>
-        <CardHeader className="pb-3">
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
+      <Card className="overflow-hidden border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+        {/* Header */}
+        <CardHeader className="pb-2">
           <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              <Brain className="h-5 w-5 text-purple-500" />
-              AI Market Intelligence
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-purple-500 to-violet-600 flex items-center justify-center shadow-lg shadow-purple-500/20">
+                <Brain className="h-4 w-4 text-white" />
+              </div>
+              <span>AI Market Intelligence</span>
+              <span className="text-[10px] text-zinc-600 font-normal ml-1">Gemini 2.5</span>
             </CardTitle>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={generateFreshExplanation}
-                disabled={isGenerating || isLoading}
-                title="Generate fresh AI analysis"
-              >
-                <Sparkles className={`h-4 w-4 ${isGenerating ? 'animate-pulse text-purple-500' : ''}`} />
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="sm" onClick={generateFreshExplanation} disabled={isGenerating || isLoading}
+                className="h-7 w-7 p-0 hover:bg-purple-500/10" title="Generate fresh analysis">
+                <Sparkles className={cn("h-3.5 w-3.5", isGenerating && "animate-pulse text-purple-400")} />
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={refreshExplanation}
-                disabled={isLoading || isGenerating}
-                title="Refresh current analysis"
-              >
-                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              <Button variant="ghost" size="sm" onClick={loadAIExplanation} disabled={isLoading || isGenerating}
+                className="h-7 w-7 p-0 hover:bg-zinc-800" title="Refresh">
+                <RefreshCw className={cn("h-3.5 w-3.5", isLoading && "animate-spin")} />
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setIsExpanded(!isExpanded)}
-              >
-                {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              <Button variant="ghost" size="sm" onClick={() => setIsExpanded(!isExpanded)} className="h-7 w-7 p-0 hover:bg-zinc-800">
+                {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </div>
-          
           {isGenerating && (
-            <div className="flex items-center gap-1 text-xs text-purple-400">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Generating fresh analysis...
+            <div className="flex items-center gap-1.5 text-[11px] text-purple-400 mt-1">
+              <Loader2 className="h-3 w-3 animate-spin" /> Generating fresh analysis...
             </div>
           )}
         </CardHeader>
 
-        <CardContent className="space-y-4">
-          {/* Intelligent Summary */}
-          <div className="grid grid-cols-3 gap-4 mb-4">
-            <div className="bg-gradient-to-br from-blue-500/10 to-purple-500/5 rounded-lg p-3 border border-blue-500/20">
-              <div className="text-xs text-blue-400 mb-1">Sentiment</div>
-              <div className={`text-sm font-bold ${getSentimentColor(explanation.data_summary.blended_sentiment)}`}>
-                {(explanation.data_summary.blended_sentiment * 100).toFixed(0)}%
+        <CardContent className="space-y-3 pt-0">
+          {/* ── Metric Cards ── */}
+          <div className="grid grid-cols-3 gap-2">
+            {/* Sentiment */}
+            <div className={cn("rounded-lg p-2.5 border bg-gradient-to-br transition-all", getSentimentGradient(blended))}>
+              <div className="flex items-center gap-1.5 mb-1">
+                {getSentimentIcon(blended)}
+                <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Sentiment</span>
               </div>
-              <div className="text-xs text-zinc-400">
-                {explanation.data_summary.total_data_points.toLocaleString()} points
+              <div className="text-lg font-bold text-white leading-none">
+                {getSentimentLabel(blended)}
               </div>
-            </div>
-
-            <div className="bg-gradient-to-br from-amber-500/10 to-orange-500/5 rounded-lg p-3 border border-amber-500/20">
-              <div className="text-xs text-amber-400 mb-1">Confidence</div>
-              <div className={`text-sm font-bold ${getConfidenceColor(explanation.prediction_summary.next_day.confidence)}`}>
-                {getConfidenceLabel(explanation.prediction_summary.next_day.confidence)}
-              </div>
-              <div className="text-xs text-zinc-400">
-                {(explanation.prediction_summary.next_day.confidence * 100).toFixed(0)}%
+              <div className="text-[10px] text-zinc-500 mt-0.5">
+                Score: {(blended * 100).toFixed(0)}%
               </div>
             </div>
 
-            <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/5 rounded-lg p-3 border border-emerald-500/20">
-              <div className="text-xs text-emerald-400 mb-1">Data Sources</div>
-              <div className="text-sm font-bold text-white">
-                {explanation.metadata.data_sources.length}
+            {/* Confidence */}
+            <div className={cn("rounded-lg p-2.5 border bg-gradient-to-br transition-all", getConfidenceGradient(confidence))}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <Shield className="h-4 w-4 text-purple-400" />
+                <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Confidence</span>
+              </div>
+              <div className="text-lg font-bold text-white leading-none">
+                {(confidence * 100).toFixed(0)}%
+              </div>
+              <div className="mt-1.5 h-1 bg-zinc-800 rounded-full overflow-hidden">
+                <div className="h-full rounded-full bg-gradient-to-r from-purple-500 to-violet-400 transition-all duration-700"
+                  style={{ width: `${confidence * 100}%` }} />
+              </div>
+            </div>
+
+            {/* Sources */}
+            <div className="rounded-lg p-2.5 border border-zinc-700/50 bg-gradient-to-br from-zinc-800/50 to-zinc-900/50">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Zap className="h-4 w-4 text-amber-400" />
+                <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Sources</span>
+              </div>
+              <div className="text-lg font-bold text-white leading-none">
+                {dataSources.length}
+              </div>
+              <div className="text-[10px] text-zinc-500 mt-0.5 truncate">
+                {dataSources.slice(0, 2).join(', ')}
               </div>
             </div>
           </div>
 
-          {/* Model Breakdown (if available) */}
-          {explanation.prediction_summary.next_day.model_predictions && (
-            <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
-              <h4 className="text-sm font-medium mb-3 flex items-center gap-2">
-                <Brain className="h-4 w-4 text-purple-500" />
-                AI Model Breakdown
+          {/* ── Model Breakdown ── */}
+          {nextDay?.model_predictions && (
+            <div className="rounded-lg p-3 bg-zinc-900/60 border border-zinc-800/50">
+              <h4 className="text-[11px] text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <Brain className="h-3 w-3 text-purple-400" /> Model Predictions
               </h4>
-              
-              <div className="grid grid-cols-3 gap-3">
-                {Object.entries(explanation.prediction_summary.next_day.model_predictions).map(([model, prediction]) => (
-                  <div key={model} className="bg-zinc-800 rounded-lg p-3 text-center">
-                    <div className="text-xs text-zinc-400 mb-1">{model.toUpperCase()}</div>
-                    <div className={`text-sm font-bold ${(prediction as number) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-                      {((prediction as number) >= 0 ? '+' : '')}{(prediction as number).toFixed(2)}%
-                    </div>
-                    {explanation.prediction_summary.next_day.ensemble_weights && (
-                      <div className="text-xs text-zinc-500 mt-1">
-                        Weight: {(explanation.prediction_summary.next_day.ensemble_weights[model as keyof typeof explanation.prediction_summary.next_day.ensemble_weights] * 100).toFixed(0)}%
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(nextDay.model_predictions).map(([model, prediction]) => {
+                  const val = prediction as number
+                  const weights = nextDay?.ensemble_weights
+                  const weight = weights ? weights[model as keyof typeof weights] : undefined
+                  return (
+                    <div key={model} className="rounded-md bg-zinc-800/60 p-2 text-center border border-zinc-700/30">
+                      <div className="text-[10px] text-zinc-500 mb-0.5">{model.toUpperCase()}</div>
+                      <div className={cn("text-sm font-bold", val >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                        {val >= 0 ? '+' : ''}{val.toFixed(2)}%
                       </div>
-                    )}
-                  </div>
-                ))}
+                      {weight !== undefined && (
+                        <div className="text-[9px] text-zinc-600 mt-0.5">w: {(weight * 100).toFixed(0)}%</div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
 
-          {/* Clean up expandable section only - remove metadata clutter */}
-
-          {/* Expandable Detailed Analysis */}
+          {/* ── Expandable Analysis ── */}
           <AnimatePresence>
             {isExpanded && (
               <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
-                transition={{ duration: 0.3 }}
+                transition={{ duration: 0.25 }}
               >
-                <Separator className="my-4" />
-                
-                <div className="space-y-4">
-                  <h4 className="text-sm font-medium flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-purple-500" />
-                    Comprehensive Analysis
-                  </h4>
-                  
-                  <div 
-                    className="prose prose-invert prose-sm max-w-none text-zinc-300 leading-relaxed"
-                    dangerouslySetInnerHTML={{ 
-                      __html: parseMarkdown(explanation.explanation) 
-                    }}
-                  />
-                  
+                <div className="space-y-2.5 pt-1">
+                  {/* Summary */}
+                  {parsed.summary && (
+                    <p className="text-sm text-zinc-200 leading-relaxed">{parsed.summary}</p>
+                  )}
 
+                  {/* Bullish / Bearish columns */}
+                  {(parsed.bullish.length > 0 || parsed.bearish.length > 0) && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {parsed.bullish.length > 0 && (
+                        <div className="rounded-lg p-2.5 bg-emerald-500/5 border border-emerald-500/15">
+                          <div className="text-[10px] text-emerald-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                            <TrendingUp className="h-3 w-3" /> Bullish
+                          </div>
+                          <ul className="space-y-1">
+                            {parsed.bullish.map((item, i) => (
+                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                <span className="text-emerald-500 mt-0.5 shrink-0">+</span>
+                                <span>{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {parsed.bearish.length > 0 && (
+                        <div className="rounded-lg p-2.5 bg-red-500/5 border border-red-500/15">
+                          <div className="text-[10px] text-red-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                            <TrendingDown className="h-3 w-3" /> Bearish
+                          </div>
+                          <ul className="space-y-1">
+                            {parsed.bearish.map((item, i) => (
+                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
+                                <span className="text-red-500 mt-0.5 shrink-0">&minus;</span>
+                                <span>{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Outlook + Levels */}
+                  {(parsed.outlook || parsed.levels) && (
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      {parsed.outlook && (
+                        <span className="px-2 py-1 rounded-md bg-zinc-800/80 border border-zinc-700/40 text-zinc-300">
+                          {parsed.outlook}
+                        </span>
+                      )}
+                      {parsed.levels && (
+                        <span className="px-2 py-1 rounded-md bg-zinc-800/80 border border-zinc-700/40 text-zinc-300">
+                          {parsed.levels}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Fallback: if parsing found nothing structured, show raw cleaned text */}
+                  {!parsed.summary && !parsed.bullish.length && !parsed.bearish.length && (
+                    <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-line">
+                      {parsed.raw}
+                    </p>
+                  )}
                 </div>
               </motion.div>
             )}
           </AnimatePresence>
 
           {error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-400 text-xs">
+            <div className="rounded-md bg-red-500/10 border border-red-500/20 px-3 py-2 text-[11px] text-red-400">
               {error}
             </div>
           )}
