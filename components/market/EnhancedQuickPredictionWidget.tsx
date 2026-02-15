@@ -148,49 +148,16 @@ export default function EnhancedQuickPredictionWidget() {
           isRealMLPrediction: true
         })
       } else {
-        // Fallback to enhanced mock predictions with real current price
-        console.log(`⚠️ No real ML predictions found for ${symbol.toUpperCase()}, using MOCK data`)
-        const mockPredictions = generateEnhancedMockPrediction(symbol.toUpperCase(), priceData.price)
-        setPrediction(mockPredictions)
+        // No real ML predictions available
+        console.log(`⚠️ No real ML predictions found for ${symbol.toUpperCase()}`)
+        setPrediction(null)
+        setError("No ML predictions available for this ticker yet. Predictions are generated daily.")
       }
     } catch (error) {
       console.error("Prediction error:", error)
       setError(error instanceof Error ? error.message : "Failed to generate prediction")
     } finally {
       setIsLoading(false)
-    }
-  }
-
-  const generateEnhancedMockPrediction = (symbol: string, currentPrice: number): PredictionData => {
-    // Enhanced mock predictions that consider market volatility and trends
-    const volatility = Math.random() * 0.1 + 0.02 // 2-12% volatility
-
-    const predictions = {
-      "1_day": {
-        predicted_price: currentPrice * (1 + (Math.random() * 0.06 - 0.03)), // ±3%
-        predicted_change: Math.random() * 6 - 3,
-        current_price: currentPrice
-      },
-      "7_day": {
-        predicted_price: currentPrice * (1 + (Math.random() * 0.15 - 0.075)), // ±7.5%
-        predicted_change: Math.random() * 15 - 7.5,
-        current_price: currentPrice
-      },
-      "30_day": {
-        predicted_price: currentPrice * (1 + (Math.random() * 0.25 - 0.125)), // ±12.5%
-        predicted_change: Math.random() * 25 - 12.5,
-        current_price: currentPrice
-      }
-    }
-
-    return {
-      symbol,
-      currentPrice,
-      predictions: predictions as any,
-      confidence: volatility > 0.08 ? "Low" : volatility > 0.05 ? "Medium" : "High",
-      lastUpdated: new Date().toISOString(),
-      isRealTimePrice: false,
-      isRealMLPrediction: false
     }
   }
 
@@ -329,13 +296,22 @@ export default function EnhancedQuickPredictionWidget() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-zinc-800 rounded-lg">
                     <div>
-                      <div className="text-sm text-zinc-400">Predicted Price</div>
+                      <div className="text-sm text-zinc-400">
+                        {(currentPrediction as any).is_market_neutral ? "Alpha-Implied Price" : "Predicted Price"}
+                      </div>
                       <div className="text-lg font-bold text-white">
                         ${currentPrediction.predicted_price.toFixed(2)}
                       </div>
+                      {(currentPrediction as any).prob_positive != null && (
+                        <div className="text-xs text-zinc-500 mt-0.5">
+                          P(up) {((currentPrediction as any).prob_positive * 100).toFixed(0)}%
+                        </div>
+                      )}
                     </div>
                     <div className="text-right">
-                      <div className="text-sm text-zinc-400">Change</div>
+                      <div className="text-sm text-zinc-400">
+                        {(currentPrediction as any).is_market_neutral ? "Alpha vs SPY" : "Change"}
+                      </div>
                       <div className={cn("text-lg font-bold flex items-center gap-1",
                         calculatedChange >= 0 ? "text-green-500" : "text-red-500"
                       )}>

@@ -66,5 +66,7 @@ models/
 
 # ML pipeline logs & temp data
 pipeline_log*.txt
+sentiment_cron_log.txt
+build_output.txt
 ml_backend/data_cache/
 ml_backend/scripts/smoke_data/

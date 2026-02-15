@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import { AIExplanation, getComprehensiveAIExplanation, getStoredAIExplanation, generateMockAIExplanation, generateAIExplanation } from "@/lib/api"
+import { AIExplanation, getComprehensiveAIExplanation, getStoredAIExplanation, generateAIExplanation } from "@/lib/api"
 
 interface AIExplanationWidgetProps {
   ticker: string;
@@ -55,11 +55,11 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
         }
       }
       
-      // PRIORITY 3: Final fallback to mock data for demo (don't generate fresh automatically)
+      // PRIORITY 3: Final fallback — no stored data, show empty state with generate button
       if (!aiExplanation) {
-        console.log(`No stored explanation available for ${ticker}, using mock data. Click ✨ to generate real AI analysis.`)
-        aiExplanation = await generateMockAIExplanation(ticker)
+        console.log(`No stored explanation available for ${ticker}. Click ✨ to generate real AI analysis.`)
         setError('No AI analysis found in database. Click ✨ to generate fresh analysis with Gemini 2.5 Pro.')
+        // Still null — widget will show empty state with "Try Again" button
       } else {
         setError(null)
       }
@@ -68,11 +68,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
       setLastUpdated(new Date())
     } catch (err) {
       console.error('Error loading AI explanation:', err)
-      setError('Failed to load AI analysis')
-      // Still show mock data on error
-      const mockExplanation = await generateMockAIExplanation(ticker)
-      setExplanation(mockExplanation)
-      setLastUpdated(new Date())
+      setError('Failed to load AI analysis. Click ✨ to generate fresh analysis.')
     } finally {
       setIsLoading(false)
     }
@@ -85,57 +81,57 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     try {
       console.log(`🔥 Generating fresh AI explanation for ${ticker} using Gemini 2.5 Pro...`)
       
-      // Only available in development mode (ML backend runs locally)
       const isLocalDev = typeof window !== 'undefined' && window.location.hostname === 'localhost'
-      if (!isLocalDev) {
-        setError('AI explanation generation is only available in development mode')
-        setIsGenerating(false)
-        return
-      }
       
-      // Call the GENERATION endpoint (not the stored retrieval endpoint)
-      const targetDate = new Date().toISOString().split('T')[0]
-      const response = await fetch(`http://127.0.0.1:8000/api/v1/explain/${ticker}/${targetDate}`)
-      
-      if (response.ok) {
-        const result = await response.json()
-        
-        if (result.ai_explanation) {
-          const freshExplanation = {
-            ticker: ticker,
-            date: targetDate,
-            explanation: result.ai_explanation,
-            data_summary: result.sentiment_summary || {},
-            prediction_summary: result.prediction_data || {},
-            technical_summary: result.technical_indicators || {},
-            metadata: {
-              data_sources: result.data_sources_used || [],
-              quality_score: 0.95,
-              processing_time: "Gemini 2.5 Pro - Fresh Generated",
-              api_version: "v2.5-live"
+      // In development, try ML backend directly first (faster)
+      if (isLocalDev) {
+        try {
+          const targetDate = new Date().toISOString().split('T')[0]
+          const response = await fetch(`http://127.0.0.1:8000/api/v1/explain/${ticker}/${targetDate}`)
+          
+          if (response.ok) {
+            const result = await response.json()
+            
+            if (result.ai_explanation) {
+              const freshExplanation = {
+                ticker: ticker,
+                date: targetDate,
+                explanation: result.ai_explanation,
+                data_summary: result.sentiment_summary || {},
+                prediction_summary: result.prediction_data || {},
+                technical_summary: result.technical_indicators || {},
+                metadata: {
+                  data_sources: result.data_sources_used || [],
+                  quality_score: 0.95,
+                  processing_time: "Gemini 2.5 Pro - Fresh Generated",
+                  api_version: "v2.5-live"
+                }
+              }
+              
+              setExplanation(freshExplanation)
+              setLastUpdated(new Date())
+              setError(null)
+              setIsGenerating(false)
+              return
             }
           }
-          
-          setExplanation(freshExplanation)
-          setLastUpdated(new Date())
-          setError(null)
-        } else {
-          throw new Error('No explanation in response')
+        } catch (localError) {
+          console.log('ML backend not available locally, trying Node.js backend...')
         }
+      }
+      
+      // Production path: use Node.js backend → ML backend proxy
+      const freshExplanation = await generateAIExplanation(ticker)
+      if (freshExplanation) {
+        setExplanation(freshExplanation)
+        setLastUpdated(new Date())
+        setError(null)
       } else {
-        // Fallback to Node.js backend
-        const freshExplanation = await generateAIExplanation(ticker)
-        if (freshExplanation) {
-          setExplanation(freshExplanation)
-          setLastUpdated(new Date())
-          setError(null)
-        } else {
-          throw new Error('Failed to generate fresh explanation')
-        }
+        throw new Error('No explanation returned from backend')
       }
     } catch (err) {
       console.error('Error generating fresh AI explanation:', err)
-      setError('Failed to generate fresh AI analysis. Check if ML backend is running.')
+      setError('Failed to generate fresh AI analysis. The ML backend may be unavailable.')
     } finally {
       setIsGenerating(false)
     }
@@ -219,11 +215,17 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
         <CardContent>
           <div className="text-center py-8">
             <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
-            <p className="text-zinc-400 mb-4">No AI analysis available</p>
-            <Button onClick={loadAIExplanation} variant="outline" size="sm">
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Try Again
-            </Button>
+            <p className="text-zinc-400 mb-4">{error || 'No AI analysis available'}</p>
+            <div className="flex gap-2 justify-center">
+              <Button onClick={loadAIExplanation} variant="outline" size="sm">
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Reload
+              </Button>
+              <Button onClick={generateFreshExplanation} variant="outline" size="sm" disabled={isGenerating}>
+                <Sparkles className={`h-4 w-4 mr-2 ${isGenerating ? 'animate-pulse text-purple-500' : ''}`} />
+                {isGenerating ? 'Generating...' : 'Generate with Gemini'}
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

@@ -176,8 +176,7 @@ export default function StockDetail({ }: StockDetailProps) {
         }
       } catch (error) {
         console.log(`Error fetching price for ${symbol}:`, error)
-        priceData = { price: Math.random() * 500 + 50, change: 0, changePercent: 0 }
-        setCurrentPrice(priceData.price)
+        priceData = null
       }
 
       // Fetch news
@@ -238,14 +237,14 @@ export default function StockDetail({ }: StockDetailProps) {
           setPredictionData(realPredictionData)
           setIsUsingRealData(true)
         } else {
-          console.log(`⚠️ No real prediction data available for ${symbol}, using enhanced mock`)
-          setPredictionData(generateEnhancedPrediction(symbol, priceData?.price || 0))
+          console.log(`⚠️ No real prediction data available for ${symbol}`)
+          setPredictionData(null)
           setIsUsingRealData(false)
         }
       }
     } catch (error) {
       console.error('Error loading stock data:', error)
-      setPredictionData(generateEnhancedPrediction(symbol, 100))
+      setPredictionData(null)
       setStockNews([])
     } finally {
       setIsLoading(false)
@@ -275,34 +274,7 @@ export default function StockDetail({ }: StockDetailProps) {
     }
   }
 
-  const generateEnhancedPrediction = (symbol: string, currentPrice: number): PredictionTimeframes => {
-    const volatility = Math.random() * 0.1 + 0.02
-    const getConfidence = () => volatility > 0.08 ? 0.6 : volatility > 0.05 ? 0.75 : 0.85
 
-    return {
-      next_day: {
-        predicted_price: currentPrice * (1 + (Math.random() * 0.04 - 0.02)),
-        predicted_change: Math.random() * 4 - 2,
-        current_price: currentPrice,
-        confidence: getConfidence(),
-        price_change: Math.random() * 4 - 2
-      },
-      '7_day': {
-        predicted_price: currentPrice * (1 + (Math.random() * 0.08 - 0.04)),
-        predicted_change: Math.random() * 8 - 4,
-        current_price: currentPrice,
-        confidence: getConfidence() - 0.1,
-        price_change: Math.random() * 8 - 4
-      },
-      '30_day': {
-        predicted_price: currentPrice * (1 + (Math.random() * 0.15 - 0.075)),
-        predicted_change: Math.random() * 15 - 7.5,
-        current_price: currentPrice,
-        confidence: getConfidence() - 0.2,
-        price_change: Math.random() * 15 - 7.5
-      }
-    }
-  }
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -566,6 +538,7 @@ export default function StockDetail({ }: StockDetailProps) {
                       💾 Real Data
                     </span>
                   )}
+                  <span className="text-xs text-zinc-500 font-normal ml-1">(alpha vs SPY)</span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1">

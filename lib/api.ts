@@ -9,6 +9,11 @@ export interface Prediction {
   current_price: number;
   confidence: number;
   price_change?: number;
+  // Alpha-based fields (market-neutral model)
+  alpha_pct?: number;            // predicted excess return vs SPY (%)
+  alpha_implied_price?: number;  // current_price * (1 + alpha_pct)
+  prob_positive?: number;        // P(return > 0) from sign classifier
+  is_market_neutral?: boolean;   // whether model targets alpha vs abs return
 }
 
 export interface PredictionTimeframes {
@@ -232,18 +237,28 @@ export async function getStockPrice(symbol: string): Promise<{ price: number; ch
       }
     }
 
-    console.log(`🔍 getStockPrice using fallback mock for ${symbol}`);
-    const mockPrices: Record<string, any> = {
-      'AAPL': { price: 255.45, change: 1.34, changePercent: 0.52 },
-      'MSFT': { price: 425.85, change: -1.22, changePercent: -0.28 },
-      'NVDA': { price: 885.28, change: 10.45, changePercent: 1.22 },
+    console.log(`🔍 getStockPrice: no real-time data for ${symbol}, fetching from predictions`);
+    
+    // Try to get price from stored predictions
+    try {
+      const predResponse = await fetch(`${API_BASE_URL}/api/stock/${symbol.toUpperCase()}/predictions`, { cache: 'no-store' });
+      if (predResponse.ok) {
+        const predData = await predResponse.json();
+        const preds = predData[symbol.toUpperCase()] || {};
+        const firstWindow = preds['1_day'] || preds.next_day || preds['7_day'] || preds['30_day'];
+        if (firstWindow?.current_price) {
+          return {
+            price: firstWindow.current_price,
+            change: 0,
+            changePercent: 0,
+          };
+        }
+      }
+    } catch (predErr) {
+      console.log(`Prediction-based price fallback failed for ${symbol}`);
     }
 
-    return mockPrices[symbol.toUpperCase()] || {
-      price: Math.random() * 500 + 50,
-      change: Math.random() * 20 - 10,
-      changePercent: Math.random() * 10 - 5
-    }
+    return null;
   } catch (error) {
     console.error('Error fetching stock price:', error);
     return null;
@@ -526,103 +541,6 @@ export async function getStoredAIExplanation(ticker: string, window: string = 'c
     console.error('Error fetching stored AI explanation:', error);
     return null;
   }
-}
-
-export async function generateMockAIExplanation(ticker: string): Promise<AIExplanation> {
-  // Generate a realistic mock explanation for demo purposes
-  const currentDate = new Date().toISOString().split('T')[0];
-  const currentPrice = await getStockPrice(ticker);
-  const basePrice = currentPrice?.price || 150;
-
-  return {
-    ticker,
-    date: currentDate,
-    explanation: `
-## Executive Summary
-
-Based on comprehensive analysis of ${ticker}, our AI models predict moderate volatility with ${Math.random() > 0.5 ? 'bullish' : 'bearish'} bias over the next 30 days. Key drivers include technical momentum, earnings sentiment, and broader market conditions.
-
-## Sentiment Intelligence Analysis
-
-**Overall Sentiment Score:** ${(Math.random() * 0.4 - 0.2).toFixed(3)}
-
-Our analysis processed ${Math.floor(Math.random() * 200 + 50)} data points across multiple sources:
-- **News Sentiment:** ${Math.floor(Math.random() * 15 + 5)} articles show mixed sentiment with focus on recent earnings
-- **Social Media:** ${Math.floor(Math.random() * 50 + 20)} Reddit posts indicate ${Math.random() > 0.5 ? 'growing bullish' : 'cautious bearish'} sentiment
-- **Institutional Flow:** Recent analyst coverage suggests ${Math.random() > 0.5 ? 'accumulation' : 'profit-taking'} patterns
-
-## Technical Analysis
-
-**Key Indicators:**
-- **RSI(14):** ${(Math.random() * 40 + 30).toFixed(1)} - ${Math.random() > 0.5 ? 'Neutral territory with room for movement' : 'Approaching oversold levels'}
-- **MACD:** ${Math.random() > 0.5 ? 'Bullish crossover' : 'Bearish divergence'} indicating ${Math.random() > 0.5 ? 'momentum building' : 'potential reversal'}
-- **Volume:** ${Math.random() > 0.5 ? 'Above average' : 'Below average'} confirming ${Math.random() > 0.5 ? 'strong conviction' : 'lack of participation'}
-
-## Risk Assessment
-
-**Primary Risks:**
-- Market volatility remains elevated
-- ${Math.random() > 0.5 ? 'Earnings guidance uncertainty' : 'Sector rotation pressures'}
-- ${Math.random() > 0.5 ? 'Fed policy implications' : 'Economic data sensitivity'}
-
-**Catalysts:**
-- Upcoming earnings announcement
-- ${Math.random() > 0.5 ? 'Product launch cycle' : 'Regulatory clarity'}
-- Sector performance trends
-
-## Actionable Insights
-
-**Entry Levels:** Consider positions near $${(basePrice * 0.98).toFixed(2)} support
-**Target Levels:** Initial target $${(basePrice * 1.05).toFixed(2)}, extended $${(basePrice * 1.12).toFixed(2)}
-**Stop Loss:** Below $${(basePrice * 0.94).toFixed(2)} for risk management
-
-*This analysis incorporates ${Math.floor(Math.random() * 10 + 5)} data sources and ${Math.floor(Math.random() * 50 + 100)} individual data points for comprehensive assessment.*
-    `,
-    data_summary: {
-      blended_sentiment: Math.random() * 0.4 - 0.2,
-      total_data_points: Math.floor(Math.random() * 200 + 50),
-      finviz_articles: Math.floor(Math.random() * 15 + 5),
-      reddit_posts: Math.floor(Math.random() * 50 + 20),
-      rss_articles: Math.floor(Math.random() * 25 + 10),
-      marketaux_articles: Math.floor(Math.random() * 10 + 3)
-    },
-    prediction_summary: {
-      next_day: {
-        predicted_price: basePrice * (1 + (Math.random() * 0.04 - 0.02)),
-        confidence: Math.random() * 0.3 + 0.7,
-        price_change: (Math.random() * 4 - 2)
-      },
-      '7_day': {
-        predicted_price: basePrice * (1 + (Math.random() * 0.08 - 0.04)),
-        confidence: Math.random() * 0.3 + 0.6,
-        price_change: (Math.random() * 8 - 4)
-      },
-      '30_day': {
-        predicted_price: basePrice * (1 + (Math.random() * 0.15 - 0.075)),
-        confidence: Math.random() * 0.3 + 0.5,
-        price_change: (Math.random() * 15 - 7.5)
-      }
-    },
-    technical_summary: {
-      rsi: Math.random() * 40 + 30,
-      macd_signal: Math.random() > 0.5 ? 'Bullish' : 'Bearish',
-      bollinger_position: ['Upper Band', 'Mid-range', 'Lower Band'][Math.floor(Math.random() * 3)] as any,
-      volume_trend: ['High', 'Normal', 'Low'][Math.floor(Math.random() * 3)] as any
-    },
-    metadata: {
-      data_sources: [
-        'Finviz News Headlines',
-        'Reddit Social Sentiment',
-        'RSS News Feeds',
-        'MarketAux Premium News',
-        'Technical Indicators',
-        'ML Feature Importance'
-      ],
-      quality_score: Math.random() * 0.3 + 0.7,
-      processing_time: new Date().toISOString(),
-      api_version: '2.0.0'
-    }
-  };
 }
 
 // Batch AI Explanation Functions

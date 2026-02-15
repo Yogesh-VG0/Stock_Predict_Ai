@@ -244,9 +244,9 @@ export default function Predictions() {
                   <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 rounded-lg p-4 border border-purple-500/20">
                     <div className="flex justify-between items-center mb-2">
                       <span className="text-sm font-medium text-purple-400">
-                        {getTimeframeLabel(selectedTimeframe)} Target
+                        {getTimeframeLabel(selectedTimeframe)} Forecast
                       </span>
-                      <span className="text-xs text-zinc-400">AI Prediction</span>
+                      <span className="text-xs text-zinc-400">AI Alpha Model</span>
                     </div>
                     
                     <div className="flex items-center gap-2 mb-2">

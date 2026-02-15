@@ -31,14 +31,14 @@ router.get('/:symbol/predictions', getPredictions);
 // Get technical indicators (RSI, MACD, SMA, EMA)
 router.get('/:symbol/indicators', getTechnicalIndicators);
 
-// Get stock details (company info + basic AI analysis)
-// This is last because it matches any single parameter
-router.get('/:symbol', getStockDetails);
-
-// Get batch explanation status
+// Get batch explanation status — MUST be before /:symbol catch-all
 router.get('/batch/status', getBatchExplanationStatus);
 
-// Get available stocks with explanations
+// Get available stocks with explanations — MUST be before /:symbol catch-all
 router.get('/batch/available', getAvailableStocksWithExplanations);
+
+// Get stock details (company info + basic AI analysis)
+// This is LAST because it matches any single parameter
+router.get('/:symbol', getStockDetails);
 
 module.exports = router; 

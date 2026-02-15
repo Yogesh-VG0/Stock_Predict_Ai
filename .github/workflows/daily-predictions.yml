@@ -16,7 +16,7 @@ env:
 jobs:
   update-predictions:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -34,7 +34,45 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ml_backend/requirements-prod.txt
 
-      - name: Run ML Pipeline (sequential batches)
+      - name: Run sentiment cron (populate sentiment data)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: "StockPredictAI/1.0"
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "===== Running sentiment cron ====="
+          python -m ml_backend.sentiment_cron || echo "Sentiment cron failed (non-fatal)"
+
+      - name: Train pooled model on all 100 tickers
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+          MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: "StockPredictAI/1.0"
+          PYTHONPATH: ${{ github.workspace }}
+          GITHUB_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -e
+          echo "===== Training pooled model on ALL 100 tickers ====="
+          # Train on the full S&P 100 cross-section so the pooled model
+          # sees all tickers.  --no-predict skips storing predictions
+          # (handled in the batch loop below).
+          python -m ml_backend.scripts.run_pipeline --all-tickers --no-predict
+
+      - name: Generate predictions (sequential batches)
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
@@ -52,7 +90,8 @@ jobs:
         run: |
           set -e
 
-          # 10 batches × 10 tickers = 100 stocks (single job, one install)
+          # 10 batches × 10 tickers = 100 stocks
+          # Models are already trained above; --predict-only loads them from disk.
           BATCHES=(
             "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
             "CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX"
@@ -76,7 +115,7 @@ jobs:
             SUCCESS=0
             for attempt in 1 2 3; do
               echo "  Attempt $attempt..."
-              if python -m ml_backend.scripts.run_pipeline --tickers $BATCH; then
+              if python -m ml_backend.scripts.run_pipeline --predict-only --tickers $BATCH; then
                 SUCCESS=1
                 break
               fi
@@ -164,6 +203,66 @@ jobs:
           print("Freshness verified")
           PY
 
+      - name: Generate SHAP feature importance
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "===== Running SHAP analysis for all 100 tickers ====="
+          # Process in batches of 10 to avoid timeouts
+          TICKER_BATCHES=(
+            "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
+            "CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX"
+            "LOW SBUX NKE MCD DIS BKNG TGT JPM V MA"
+            "BAC WFC GS MS AXP BLK SCHW C COF BK"
+            "MET AIG USB XOM CVX COP JNJ UNH LLY PFE"
+            "ABBV ABT TMO DHR MRK AMGN GILD ISRG MDT BMY"
+            "CVS WMT COST PG KO PEP MDLZ CL MO CAT"
+            "HON UNP BA RTX LMT DE GE GD EMR FDX"
+            "UPS MMM CMCSA VZ T CHTR BRK-B ACN IBM PYPL"
+            "LIN NEE SO DUK AMT SPG PLTR TMUS PM AMAT"
+          )
+          SHAP_FAILED=0
+          for batch in "${TICKER_BATCHES[@]}"; do
+            python -m ml_backend.explain.shap_analysis --tickers $batch || {
+              echo "SHAP batch failed: $batch"
+              SHAP_FAILED=$((SHAP_FAILED + 1))
+            }
+          done
+          echo "SHAP batches failed: $SHAP_FAILED / ${#TICKER_BATCHES[@]}"
+          if [ "$SHAP_FAILED" -gt 5 ]; then
+            echo "Too many SHAP failures"
+            exit 1
+          fi
+
+      - name: Generate AI explanations (Gemini)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_MODEL: gemini-2.5-flash
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "===== Generating Gemini AI explanations (model=$GEMINI_MODEL) ====="
+          python -m ml_backend.scripts.generate_explanations || echo "Explanation generation failed (non-fatal)"
+
+      - name: Evaluate stored predictions (last 60 days)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "===== Running evaluate_models --stored ====="
+          python -m ml_backend.scripts.evaluate_models --stored --days 60 \
+            | tee eval_report.txt || echo "Evaluation failed (non-fatal)"
+
+      - name: Run drift monitor
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "===== Running drift_monitor ====="
+          python -m ml_backend.scripts.drift_monitor \
+            | tee drift_report.txt || echo "Drift monitor failed (non-fatal)"
+
       - name: Upload logs/artifacts (always)
         if: always()
         uses: actions/upload-artifact@v4
@@ -172,4 +271,6 @@ jobs:
           path: |
             ml_backend/**/*.log
             **/*.log
+            eval_report.txt
+            drift_report.txt
           if-no-files-found: ignore

@@ -52,6 +52,8 @@ class StockPredictor:
         self.metadata = {}  # {(ticker, window): dict}
         self.pooled_models = {}  # {window: lgb.LGBMRegressor}
         self.pooled_metadata = {}  # {window: dict}
+        self.sign_models = {}  # {(ticker, window): lgb.LGBMClassifier}
+        self.pooled_sign_models = {}  # {window: lgb.LGBMClassifier}
         self.prediction_windows = list(PREDICTION_WINDOWS.keys())
         # Track the latest training cutoff date across all tickers/windows
         # so the backtest can restrict itself to OOS dates only.
@@ -499,6 +501,57 @@ class StockPredictor:
                 "std_return": std_ret,
                 "trade_threshold": threshold,
             }
+
+            # --- Sign classifier (calibrated P(up)) ---
+            try:
+                sign_y = (y_all > 0).astype(int)
+                sign_params = {
+                    "objective": "binary",
+                    "metric": "binary_logloss",
+                    "boosting_type": "gbdt",
+                    "n_estimators": 100,
+                    "max_depth": 3,
+                    "learning_rate": 0.05,
+                    "num_leaves": 8,
+                    "min_child_samples": 50,
+                    "reg_alpha": 0.3,
+                    "reg_lambda": 0.3,
+                    "subsample": 0.8,
+                    "colsample_bytree": 0.8,
+                    "random_state": 42,
+                    "verbosity": -1,
+                    "n_jobs": -1,
+                }
+                # Reuse the same time-based split as the last fold
+                if val_start < val_end and val_start < n:
+                    sign_X_train = X_all[:train_end]
+                    sign_y_train = sign_y[:train_end]
+                    sign_X_val = X_all[val_start:val_end]
+                    sign_y_val = sign_y[val_start:val_end]
+                    if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
+                        w_sign = np.exp(np.linspace(-2.0, 0.0, len(sign_y_train))).astype(np.float32)
+                        sign_clf = lgb.LGBMClassifier(**sign_params)
+                        sign_clf.fit(
+                            sign_X_train,
+                            sign_y_train,
+                            sample_weight=w_sign,
+                            eval_set=[(sign_X_val, sign_y_val)],
+                            callbacks=[
+                                lgb.early_stopping(15, verbose=False),
+                                lgb.log_evaluation(0),
+                            ],
+                        )
+                        self.pooled_sign_models[window_name] = sign_clf
+                        # Evaluate on val set
+                        sign_proba = sign_clf.predict_proba(sign_X_val)[:, 1]
+                        sign_acc = float(np.mean((sign_proba > 0.5) == sign_y_val))
+                        pooled_meta["sign_classifier_accuracy"] = sign_acc
+                        logger.info(
+                            "POOLED-%s sign classifier: accuracy=%.1f%%",
+                            window_name, sign_acc * 100,
+                        )
+            except Exception as e:
+                logger.warning("Could not train pooled sign classifier for %s: %s", window_name, e)
             pooled_meta.update(pooled_holdout_meta)
             self.pooled_metadata[window_name] = pooled_meta
             logger.info(
@@ -676,6 +729,29 @@ class StockPredictor:
             key = (ticker, window_name)
             self.models[key] = model
             self.scalers[key] = None  # No scaling
+
+            # --- Per-ticker sign classifier ---
+            try:
+                sign_y_train = (y_train > 0).astype(int)
+                sign_y_val = (y_val > 0).astype(int)
+                if len(np.unique(sign_y_train)) == 2 and len(X_train) >= 60:
+                    sign_params_tk = {
+                        "objective": "binary", "metric": "binary_logloss",
+                        "boosting_type": "gbdt", "n_estimators": 80,
+                        "max_depth": 3, "learning_rate": 0.05, "num_leaves": 8,
+                        "min_child_samples": 30, "reg_alpha": 0.3, "reg_lambda": 0.3,
+                        "subsample": 0.8, "colsample_bytree": 0.8,
+                        "random_state": 42, "verbosity": -1, "n_jobs": -1,
+                    }
+                    sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk)
+                    sign_clf_tk.fit(
+                        X_train, sign_y_train, sample_weight=w,
+                        eval_set=[(X_val, sign_y_val)],
+                        callbacks=[lgb.early_stopping(15, verbose=False), lgb.log_evaluation(0)],
+                    )
+                    self.sign_models[key] = sign_clf_tk
+            except Exception as e:
+                logger.debug("Could not train sign classifier for %s-%s: %s", ticker, window_name, e)
             # Record training cutoff for OOS backtest boundary (ticker bucket)
             if val_mask.any():
                 self._train_cutoff_dates["ticker"].append(pd.Timestamp(dates_x[val_mask].max()))
@@ -837,8 +913,11 @@ class StockPredictor:
                 # logger.warning(f"No model for {ticker}-{window_name}") # Too noisy
                 results[window_name] = {
                     "prediction": 0.0,
+                    "alpha": 0.0,
+                    "alpha_pct": 0.0,
                     "price_change": 0.0,
                     "predicted_price": current_price,
+                    "alpha_implied_price": current_price,
                     "confidence": 0.0,
                     "current_price": current_price,
                     "prob_positive": 0.5,
@@ -849,6 +928,7 @@ class StockPredictor:
                     "horizon_days": TARGET_CONFIG.get(window_name, {}).get("horizon", 1),
                     "min_return_for_profit": ROUND_TRIP_COST_BPS / 10000,
                     "covers_transaction_cost": False,
+                    "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
                     "reason": "no_model" 
                 }
                 continue
@@ -860,13 +940,30 @@ class StockPredictor:
             model_cols = meta_w.get("feature_columns")
             X_pred = self._select_features(X_full, current_cols, model_cols)
             pred_return = float(model.predict(X_pred)[0])
-            pred_price = current_price * math.exp(pred_return)
-            price_change = pred_price - current_price
+            # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
+            # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true
+            # price forecast — it's current_price * exp(alpha), useful only as a
+            # directional/magnitude proxy.  Do NOT present it as an absolute price target.
+            alpha_implied_price = current_price * math.exp(pred_return)
+            price_change = alpha_implied_price - current_price
+            alpha_pct = pred_return * 100  # alpha as percentage for readability
             
             sigma = float(meta_w.get("val_rmse", 0.0))
-            prob_positive = (
-                0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
-            )
+            # --- Calibrated P(up) from sign classifier, fallback to Gaussian CDF ---
+            sign_model = self.pooled_sign_models.get(window_name)
+            if ticker_meta is not None and ticker_meta.get("production_ready", False):
+                sign_model = self.sign_models.get(key, sign_model)
+            if sign_model is not None:
+                try:
+                    prob_positive = float(sign_model.predict_proba(X_pred)[0, 1])
+                except Exception:
+                    prob_positive = (
+                        0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
+                    )
+            else:
+                prob_positive = (
+                    0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
+                )
             confidence = prob_positive
             
             # Restore price range — use conformal q90 for calibrated interval
@@ -899,22 +996,25 @@ class StockPredictor:
             covers_transaction_cost = abs(pred_return) >= min_return_for_profit
 
             # Normalized return for horizon selection (compound-equivalent daily log return)
-            # For log returns, pred_return/horizon_days is correct (Losing Loonies v4: don't divide raw R by days)
             horizon = TARGET_CONFIG.get(window_name, {}).get("horizon", 1)
             horizon_days = max(1, horizon)
             normalized_return = pred_return / horizon_days
 
             results[window_name] = {
                 "prediction": pred_return,
+                "alpha": pred_return,
+                "alpha_pct": float(alpha_pct),
                 "price_change": float(price_change),
-                "predicted_price": float(pred_price),
+                # alpha_implied_price: current_price * exp(alpha).  NOT a true price
+                # forecast when target is market-neutral.  Kept for backward compat.
+                "predicted_price": float(alpha_implied_price),
+                "alpha_implied_price": float(alpha_implied_price),
                 "confidence": float(confidence),
                 "current_price": current_price,
                 "price_range": {
                     "low": price_low,
                     "high": price_high,
                 },
-                "alpha": pred_return,
                 "prob_positive": float(prob_positive),
                 "prob_above_threshold": float(prob_above_threshold),
                 "trade_recommended": trade_recommended,
@@ -923,6 +1023,7 @@ class StockPredictor:
                 "horizon_days": int(horizon_days),
                 "min_return_for_profit": min_return_for_profit,
                 "covers_transaction_cost": covers_transaction_cost,
+                "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
             }
 
         # Add best_window: highest normalized_return among trade_recommended, else highest normalized_return
@@ -996,19 +1097,27 @@ class StockPredictor:
             min_alpha = max(raw_threshold, TRADE_MIN_ALPHA)
 
             # Prob positive (vectorized)
-            # erf is not vectorized in math, use scipy or numpy approx if available, 
-            # OR just loop since N ~ 1000 is fast in python loop compared to repeated feature eng
-            # We'll use a simple numpy approx for speed or just list comp
-            
-            sqrt2 = math.sqrt(2)
-            if sigma > 0:
+            # Use sign classifier when available, else Gaussian CDF fallback.
+            sign_model = self.pooled_sign_models.get(window_name)
+            if ticker_meta is not None and ticker_meta.get("production_ready", False):
+                sign_model = self.sign_models.get(key, sign_model)
+
+            if sign_model is not None:
                 try:
-                    from scipy.special import erf as _erf
-                    probs = 0.5 * (1 + _erf(preds_ret / (sigma * sqrt2)))
-                except ImportError:
-                    probs = np.array([0.5 * (1 + math.erf(p / (sigma * sqrt2))) for p in preds_ret])
-            else:
-                probs = np.full(len(preds_ret), 0.5)
+                    probs = sign_model.predict_proba(X_pred)[:, 1].astype(np.float64)
+                except Exception:
+                    sign_model = None  # fall through to Gaussian
+
+            if sign_model is None:
+                sqrt2 = math.sqrt(2)
+                if sigma > 0:
+                    try:
+                        from scipy.special import erf as _erf
+                        probs = 0.5 * (1 + _erf(preds_ret / (sigma * sqrt2)))
+                    except ImportError:
+                        probs = np.array([0.5 * (1 + math.erf(p / (sigma * sqrt2))) for p in preds_ret])
+                else:
+                    probs = np.full(len(preds_ret), 0.5)
 
             # Trade recommended mask
             trade_mask = (preds_ret >= min_alpha) & (probs >= TRADE_MIN_PROB_POSITIVE)
@@ -1049,11 +1158,16 @@ class StockPredictor:
                     for w in self.prediction_windows:
                         if w in f:
                             try:
-                                self.pooled_models[w] = joblib.load(
-                                    os.path.join(pooled_path, f)
-                                )
+                                if f.startswith("sign_"):
+                                    self.pooled_sign_models[w] = joblib.load(
+                                        os.path.join(pooled_path, f)
+                                    )
+                                elif f.startswith("lgb_"):
+                                    self.pooled_models[w] = joblib.load(
+                                        os.path.join(pooled_path, f)
+                                    )
                             except Exception as e:
-                                logger.warning("Could not load pooled %s: %s", w, e)
+                                logger.warning("Could not load pooled %s: %s", f, e)
             if self.pooled_models:
                 logger.info("Loaded %d pooled models", len(self.pooled_models))
             meta_path = os.path.join(pooled_path, "metadata.json")
@@ -1094,13 +1208,16 @@ class StockPredictor:
                             key = (ticker, w)
                             path = os.path.join(ticker_path, f)
                             try:
-                                self.models[key] = joblib.load(path)
-                                scaler_path = path.replace(".joblib", "_scaler.joblib")
-                                if os.path.exists(scaler_path):
-                                    self.scalers[key] = joblib.load(scaler_path)
+                                if f.startswith("sign_"):
+                                    self.sign_models[key] = joblib.load(path)
+                                elif f.startswith("lgb_"):
+                                    self.models[key] = joblib.load(path)
+                                    scaler_path = path.replace(".joblib", "_scaler.joblib")
+                                    if os.path.exists(scaler_path):
+                                        self.scalers[key] = joblib.load(scaler_path)
                             except Exception as e:
                                 logger.warning(f"Could not load {path}: {e}")
-        logger.info(f"Loaded {len(self.models)} models")
+        logger.info(f"Loaded {len(self.models)} models + {len(self.sign_models)} sign classifiers")
 
     def save_models(self) -> None:
         """Save models to disk (per-ticker + pooled)."""
@@ -1113,6 +1230,12 @@ class StockPredictor:
                     joblib.dump(model, os.path.join(pooled_path, f"lgb_{window}.joblib"))
                 except Exception as e:
                     logger.warning("Could not save pooled %s: %s", window, e)
+            # Save pooled sign classifiers
+            for window, sign_clf in self.pooled_sign_models.items():
+                try:
+                    joblib.dump(sign_clf, os.path.join(pooled_path, f"sign_{window}.joblib"))
+                except Exception as e:
+                    logger.warning("Could not save pooled sign %s: %s", window, e)
             if self.pooled_metadata:
                 try:
                     with open(os.path.join(pooled_path, "metadata.json"), "w") as f:
@@ -1134,6 +1257,10 @@ class StockPredictor:
                 scaler = self.scalers.get((ticker, window))
                 if scaler is not None:
                     joblib.dump(scaler, os.path.join(path, f"lgb_{window}_scaler.joblib"))
+                # Save per-ticker sign classifier
+                sign_clf = self.sign_models.get((ticker, window))
+                if sign_clf is not None:
+                    joblib.dump(sign_clf, os.path.join(path, f"sign_{window}.joblib"))
             except Exception as e:
                 logger.warning(f"Could not save {ticker}-{window}: {e}")
         # Save per-ticker metadata

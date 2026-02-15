@@ -1598,33 +1598,65 @@ async def fetch_sentiment(ticker: Optional[str] = None):
 
 @app.get("/optimization/insights/{ticker}")
 async def get_optimization_insights(ticker: str):
-    """Get optimization insights and feature importance for a ticker."""
+    """Get optimization insights and feature importance for a ticker.
+
+    Reads from the ``feature_importance`` collection populated by
+    ``ml_backend.explain.shap_analysis``.
+    """
     try:
         # Use shared MongoDB client
         if not hasattr(app.state, 'mongo_client') or app.state.mongo_client is None:
             raise HTTPException(status_code=500, detail="Database connection not available")
         mongo_client = app.state.mongo_client
-        
-        # Get feature importance
-        feature_importance_doc = mongo_client.db['feature_importance'].find_one(
-            {'ticker': ticker.upper()},
-            sort=[('timestamp', -1)]
+        ticker_upper = ticker.upper()
+
+        # ── Fetch latest feature_importance docs (one per horizon) ──
+        fi_docs = list(
+            mongo_client.db['feature_importance']
+            .find({'ticker': ticker_upper})
+            .sort('timestamp', -1)
+            .limit(3)
         )
+
+        # Build per-horizon explainability payloads
+        horizons_data = {}
+        for doc in fi_docs:
+            window = doc.get("window", "unknown")
+            horizons_data[window] = {
+                "predicted_value": doc.get("predicted_value"),
+                "predicted_price": doc.get("predicted_price"),
+                "prob_up": doc.get("prob_up"),
+                "current_price": doc.get("current_price"),
+                "model_type": doc.get("model_type"),
+                "is_market_neutral": doc.get("is_market_neutral", True),
+                "sanity_ok": doc.get("sanity_ok", True),
+                "base_value": doc.get("base_value"),
+                "top_positive_contrib": doc.get("top_positive_contrib", []),
+                "top_negative_contrib": doc.get("top_negative_contrib", []),
+                "shap_top_features": doc.get("shap_top_features", {}),
+                "global_gain_importance": doc.get("global_gain_importance", []),
+                "feature_list_hash": doc.get("feature_list_hash"),
+                "n_features": doc.get("n_features", 0),
+                "date": doc.get("date"),
+            }
+
+        # Legacy compat: pick the latest doc for flat fields
+        latest_doc = fi_docs[0] if fi_docs else None
         
         # Get data utilization stats
         collections_stats = {}
-        for collection_name in ['sentiment_data', 'sec_filings', 'short_interest_data', 'seeking_alpha_sentiment']:
+        for collection_name in ['sentiment', 'insider_transactions']:
             try:
-                count = mongo_client.db[collection_name].count_documents({'ticker': ticker.upper()})
+                count = mongo_client.db[collection_name].count_documents({'ticker': ticker_upper})
                 collections_stats[collection_name] = count
-            except:
+            except Exception:
                 collections_stats[collection_name] = 0
         
         # Get API cache efficiency
         cache_stats = mongo_client.db['api_cache'].aggregate([
             {
                 '$match': {
-                    'cache_key': {'$regex': ticker.upper()}
+                    'cache_key': {'$regex': ticker_upper}
                 }
             },
             {
@@ -1646,15 +1678,17 @@ async def get_optimization_insights(ticker: str):
         cache_efficiency = list(cache_stats)
         
         optimization_insights = {
-            'ticker': ticker.upper(),
-            'feature_importance': feature_importance_doc.get('feature_scores', {}) if feature_importance_doc else {},
-            'total_features_tracked': feature_importance_doc.get('total_features', 0) if feature_importance_doc else 0,
-            'last_optimization': feature_importance_doc.get('timestamp') if feature_importance_doc else None,
+            'ticker': ticker_upper,
+            # ── Per-horizon explainability ──
+            'horizons': horizons_data,
+            # ── Legacy flat fields (from latest doc) ──
+            'feature_importance': latest_doc.get('shap_top_features', {}) if latest_doc else {},
+            'total_features_tracked': latest_doc.get('n_features', 0) if latest_doc else 0,
+            'last_optimization': latest_doc.get('timestamp') if latest_doc else None,
+            'feature_list_hash': latest_doc.get('feature_list_hash') if latest_doc else None,
             'data_utilization': {
-                'sentiment_records': collections_stats.get('sentiment_data', 0),
-                'sec_filings': collections_stats.get('sec_filings', 0),
-                'short_interest_records': collections_stats.get('short_interest_data', 0),
-                'seeking_alpha_records': collections_stats.get('seeking_alpha_sentiment', 0),
+                'sentiment_records': collections_stats.get('sentiment', 0),
+                'insider_transactions': collections_stats.get('insider_transactions', 0),
             },
             'cache_efficiency': {
                 'total_cached_requests': cache_efficiency[0].get('total_cached_requests', 0) if cache_efficiency else 0,
@@ -1664,19 +1698,24 @@ async def get_optimization_insights(ticker: str):
         }
         
         # Add optimization recommendations
-        if collections_stats.get('sentiment_data', 0) < 10:
+        if collections_stats.get('sentiment', 0) < 10:
             optimization_insights['optimization_recommendations'].append(
                 "Low sentiment data volume - consider increasing sentiment analysis frequency"
             )
         
-        if collections_stats.get('sec_filings', 0) == 0:
+        if collections_stats.get('insider_transactions', 0) == 0:
             optimization_insights['optimization_recommendations'].append(
-                "No SEC filings data found - this is a valuable data source for prediction accuracy"
+                "No insider transaction data - run sentiment cron to populate"
             )
         
-        if feature_importance_doc and len(feature_importance_doc.get('feature_scores', {})) < 20:
+        if latest_doc and latest_doc.get('n_features', 0) < 20:
             optimization_insights['optimization_recommendations'].append(
                 "Low feature count - consider adding more external data sources"
+            )
+        
+        if latest_doc and not latest_doc.get('sanity_ok', True):
+            optimization_insights['optimization_recommendations'].append(
+                "SHAP sanity check failed - feature misalignment detected, retrain models"
             )
         
         # Don't close shared connection
@@ -2097,23 +2136,42 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
             logger.warning(f"Error getting technical data for {ticker}: {e}")
             technicals = {}
         
-        # 4. Get SHAP feature importance from the predictor
+        # 4. Get SHAP feature importance from MongoDB feature_importance collection
         shap_factors = {}
+        shap_contrib_data = {}
         try:
-            if hasattr(app.state, 'stock_predictor') and app.state.stock_predictor:
-                # Get features for explanation
-                if hasattr(app.state, 'feature_engineer') and app.state.feature_engineer:
-                    features_df = historical_data.tail(60) if not historical_data.empty else None
-                    if features_df is not None:
-                        features, _ = app.state.feature_engineer.prepare_features(features_df, ticker=ticker, mongo_client=app.state.mongo_client)
-                        if features is not None and len(features) > 0:
-                            latest_features = features[-1:].reshape(1, -1)
-                            shap_result = getattr(app.state.stock_predictor, 'explain_prediction', lambda *a, **k: None)(latest_features, 'next_day', ticker)
-                            
-                            # Get top 10 most important features
-                            if shap_result:
-                                sorted_factors = sorted(shap_result.items(), key=lambda x: abs(x[1]), reverse=True)
-                                shap_factors = dict(sorted_factors[:10])
+            # Prefer pre-computed SHAP from feature_importance collection
+            fi_doc = app.state.mongo_client.db['feature_importance'].find_one(
+                {'ticker': ticker},
+                sort=[('timestamp', -1)]
+            )
+            if fi_doc:
+                shap_factors = fi_doc.get('shap_top_features', {})
+                shap_contrib_data = {
+                    'top_positive_contrib': fi_doc.get('top_positive_contrib', []),
+                    'top_negative_contrib': fi_doc.get('top_negative_contrib', []),
+                    'global_gain_importance': fi_doc.get('global_gain_importance', []),
+                    'prob_up': fi_doc.get('prob_up'),
+                    'predicted_value': fi_doc.get('predicted_value'),
+                    'sanity_ok': fi_doc.get('sanity_ok', True),
+                    'feature_list_hash': fi_doc.get('feature_list_hash'),
+                    'is_market_neutral': fi_doc.get('is_market_neutral', True),
+                }
+                logger.info(f"Loaded SHAP data from feature_importance for {ticker} (hash={fi_doc.get('feature_list_hash')})")
+            else:
+                logger.info(f"No pre-computed SHAP data for {ticker}, falling back to live")
+                # Fallback: try live computation if predictor is available
+                if hasattr(app.state, 'stock_predictor') and app.state.stock_predictor:
+                    if hasattr(app.state, 'feature_engineer') and app.state.feature_engineer:
+                        features_df = historical_data.tail(60) if not historical_data.empty else None
+                        if features_df is not None:
+                            features, _ = app.state.feature_engineer.prepare_features(features_df, ticker=ticker, mongo_client=app.state.mongo_client)
+                            if features is not None and len(features) > 0:
+                                latest_features = features[-1:].reshape(1, -1)
+                                shap_result = getattr(app.state.stock_predictor, 'explain_prediction', lambda *a, **k: None)(latest_features, 'next_day', ticker)
+                                if shap_result:
+                                    sorted_factors = sorted(shap_result.items(), key=lambda x: abs(x[1]), reverse=True)
+                                    shap_factors = dict(sorted_factors[:10])
         except Exception as e:
             logger.warning(f"Error getting SHAP factors for {ticker}: {e}")
         
@@ -2177,6 +2235,7 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
             },
             "technical_indicators": technicals,
             "feature_importance": shap_factors,
+            "shap_contrib": shap_contrib_data if shap_contrib_data else None,
             "ai_explanation": gemini_explanation,
             "data_sources_used": [
                 "Finviz News Headlines",
@@ -2237,8 +2296,13 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
         logger.error(f"Error generating comprehensive AI explanation for {ticker}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate explanation: {str(e)}")
 
+# Default model: gemini-2.5-flash (free tier, higher rate limits)
+# Override: set GEMINI_MODEL=gemini-2.5-pro for higher quality
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+
 async def call_google_gemini_api(prompt: str, ticker: str) -> str:
-    """Call Google Gemini 2.5 Pro API with the comprehensive prompt"""
+    """Call Google Gemini API with the comprehensive prompt."""
     try:
         from google import genai
         from google.genai import types
@@ -2253,35 +2317,33 @@ async def call_google_gemini_api(prompt: str, ticker: str) -> str:
         # Initialize new Gemini client
         client = genai.Client(api_key=api_key)
         
-        # Generate response using Gemini 2.5 Pro
-        logger.info(f"Calling Gemini 2.5 Pro API for {ticker} with prompt length: {len(prompt)}")
+        logger.info(f"Calling {GEMINI_MODEL} for {ticker} with prompt length: {len(prompt)}")
         
         # Run in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
             lambda: client.models.generate_content(
-                model="gemini-2.5-pro",
+                model=GEMINI_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
-                    # Enable thinking for enhanced financial analysis
                     thinking_config=types.ThinkingConfig(thinking_budget=1000)
                 )
             )
         )
         
         if response and response.text:
-            logger.info(f"Received Gemini 2.5 Pro response for {ticker}: {len(response.text)} characters")
+            logger.info(f"Received {GEMINI_MODEL} response for {ticker}: {len(response.text)} characters")
             return response.text
         else:
-            logger.warning(f"Empty response from Gemini 2.5 Pro for {ticker}")
+            logger.warning(f"Empty response from {GEMINI_MODEL} for {ticker}")
             return "AI explanation unavailable: Empty response from API"
             
     except ImportError as e:
         logger.error(f"Google Generative AI library not installed or outdated: {e}")
         return "AI explanation unavailable: Required library not installed or needs update"
     except Exception as e:
-        logger.error(f"Error calling Gemini 2.5 Pro API for {ticker}: {e}")
+        logger.error(f"Error calling {GEMINI_MODEL} for {ticker}: {e}")
         return f"AI explanation unavailable: {str(e)}"
 
 def calculate_comprehensive_technicals(df: pd.DataFrame) -> Dict:
@@ -2727,7 +2789,7 @@ async def get_stored_ai_explanation(ticker: str, window: str = "comprehensive"):
     """
     try:
         # Query MongoDB for stored explanation
-        collection = mongodb_client.db['prediction_explanations']
+        collection = app.state.mongo_client.db['prediction_explanations']
         
         stored_doc = collection.find_one(
             {"ticker": ticker.upper(), "window": window},
@@ -2983,7 +3045,7 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
             "tickers_processed": TOP_100_TICKERS,
             "detailed_results": results,
             "api_info": {
-                "google_gemini_model": "gemini-2.5-pro",
+                "google_gemini_model": GEMINI_MODEL,
                 "mongodb_collections_used": [
                     "prediction_explanations",
                     "sentiment_data", 

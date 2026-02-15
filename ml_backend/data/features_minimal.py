@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ..utils.tickers import get_ticker_id
-from ..config.feature_config_v1 import FEATURE_CONFIG_V1
+from ..config.feature_config_v1 import FEATURE_CONFIG_V1, USE_SENTIMENT_FEATURES
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +124,8 @@ class MinimalFeatureEngineer:
 
         self.price_cache = FrameCache(max_items=64)
         self._macro_frame_cache = {}
+        # Sector rank table: computed once, reused across all tickers in same run
+        self._sector_rank_table: Optional[pd.DataFrame] = None
 
     def prepare_features(
         self,
@@ -223,6 +225,37 @@ class MinimalFeatureEngineer:
             rs = gain / loss.where(loss != 0, np.nan)
             df["rsi"] = (100 - (100 / (1 + rs))).fillna(50)
 
+            # 5a. RSI divergence: compare 14-day slope of price vs RSI
+            # Bullish divergence (price down, RSI up) = +1
+            # Bearish divergence (price up, RSI down) = -1
+            # Neutral = 0
+            def _linear_slope(x):
+                """OLS slope of x against [0..n-1], normalised by mean."""
+                n = len(x)
+                if n < 2:
+                    return 0.0
+                y = np.asarray(x, dtype=float)
+                x_idx = np.arange(n, dtype=float)
+                denom = np.sum((x_idx - x_idx.mean()) ** 2)
+                if denom == 0:
+                    return 0.0
+                return np.sum((x_idx - x_idx.mean()) * (y - y.mean())) / denom
+
+            price_slope = close.rolling(14, min_periods=5).apply(_linear_slope, raw=True)
+            rsi_slope = _to_series(df["rsi"]).rolling(14, min_periods=5).apply(_linear_slope, raw=True)
+            # Divergence: sign(rsi_slope) != sign(price_slope)
+            p_sign = np.sign(price_slope).fillna(0)
+            r_sign = np.sign(rsi_slope).fillna(0)
+            divergence = np.where(
+                (p_sign > 0) & (r_sign < 0), -1,   # bearish divergence
+                np.where(
+                    (p_sign < 0) & (r_sign > 0), 1, # bullish divergence
+                    0,
+                ),
+            )
+            # shift(1) for PIT safety: use yesterday's divergence signal
+            df["rsi_divergence"] = pd.Series(divergence, index=df.index).shift(1).fillna(0).astype(float)
+
             # 5b. Sector and ticker IDs for pooled model (deterministic; stable across runs)
             sector = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
             df["sector_id"] = SECTOR_ID.get(sector, 1)
@@ -235,6 +268,9 @@ class MinimalFeatureEngineer:
             df = self._add_macro_features(df, mc)
 
             # 7b. Cross-asset features: VIX proxy + sector ETF returns (lagged)
+            # PIT SHIFT POLICY: each adapter (macro, VIX, sector, sentiment)
+            # shifts its own external data by 1 day internally.
+            # Do NOT add a global shift — that would double-shift external features.
             df = self._add_cross_asset_features(df, ticker, mc)
 
             # 8. Regime flags (quantile uses prior window only - no self-referential threshold)
@@ -243,6 +279,31 @@ class MinimalFeatureEngineer:
 
             # 9. Earnings proximity (days to/since - safe, no outcomes)
             df = self._add_earnings_proximity(df, ticker, mc)
+
+            # 10. Sentiment features (lagged rolling scores from MongoDB)
+            # Controlled by USE_SENTIMENT_FEATURES toggle in feature_config_v1.
+            # When disabled, columns are still created (all zeros) to keep feature
+            # dimensions stable across A/B runs.
+            if USE_SENTIMENT_FEATURES:
+                df = self._add_sentiment_features(df, ticker, mc)
+            else:
+                for _sc in ("sent_mean_1d", "sent_mean_7d", "sent_mean_30d",
+                            "sent_momentum", "sent_std_7d", "news_count_1d",
+                            "news_count_7d", "news_spike_1d"):
+                    df[_sc] = 0.0
+
+            # 11. Insider-transaction features (rolling aggregates from MongoDB)
+            # Uses insider_features.py adapter — same shift(1) PIT pattern.
+            if USE_SENTIMENT_FEATURES:  # gated by same toggle (insider = alternative data)
+                df = self._add_insider_features(df, ticker, mc)
+            else:
+                for _ic in ("insider_net_shares_30d", "insider_net_shares_90d",
+                            "insider_buy_count_30d", "insider_sell_count_30d",
+                            "insider_buy_ratio_30d", "insider_buy_value_30d",
+                            "insider_sell_value_30d", "insider_net_value_30d",
+                            "insider_activity_z_90d", "insider_net_value_z_90d",
+                            "insider_cluster_buying"):
+                    df[_ic] = 0.0
 
             # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
             # SPY_close used for market-neutral target only, not as feature
@@ -451,7 +512,11 @@ class MinimalFeatureEngineer:
         _ca_defaults = {
             "vix_return_1d": 0.0, "vix_vol_20d": 0.0, "vix_level": 20.0,
             "sector_etf_return_1d": 0.0, "sector_etf_return_5d": 0.0,
+            "sector_etf_return_20d": 0.0, "sector_etf_return_60d": 0.0,
+            "sector_etf_vol_20d": 0.0,
+            "excess_vs_sector_5d": 0.0, "excess_vs_sector_20d": 0.0,
             "macro_spread_chg": 0.0, "macro_ff_chg": 0.0,
+            "sector_momentum_rank": 0.5,
         }
         try:
             from .cache_fetch import fetch_price_df_mongo_first
@@ -500,7 +565,14 @@ class MinimalFeatureEngineer:
                     etf_close = _to_series(etf_df["Close"])
                     etf_df["sector_etf_return_1d"] = np.log(etf_close / etf_close.shift(1))
                     etf_df["sector_etf_return_5d"] = np.log(etf_close / etf_close.shift(5))
-                    etf_merge = etf_df[["date_norm", "sector_etf_return_1d", "sector_etf_return_5d"]].copy()
+                    etf_df["sector_etf_return_20d"] = np.log(etf_close / etf_close.shift(20))
+                    etf_df["sector_etf_return_60d"] = np.log(etf_close / etf_close.shift(60))
+                    etf_df["sector_etf_vol_20d"] = etf_df["sector_etf_return_1d"].rolling(20, min_periods=5).std()
+                    etf_merge = etf_df[[
+                        "date_norm", "sector_etf_return_1d", "sector_etf_return_5d",
+                        "sector_etf_return_20d", "sector_etf_return_60d",
+                        "sector_etf_vol_20d",
+                    ]].copy()
                     df = df.merge(etf_merge, on="date_norm", how="left", suffixes=("", "_etf_dup"))
                     # Drop any duplicate columns from merge
                     dup_cols = [c for c in df.columns if c.endswith("_etf_dup")]
@@ -508,12 +580,34 @@ class MinimalFeatureEngineer:
                         df = df.drop(columns=dup_cols)
                     df["sector_etf_return_1d"] = df["sector_etf_return_1d"].shift(1).fillna(0)
                     df["sector_etf_return_5d"] = df["sector_etf_return_5d"].shift(1).fillna(0)
+                    df["sector_etf_return_20d"] = df["sector_etf_return_20d"].shift(1).fillna(0)
+                    df["sector_etf_return_60d"] = df["sector_etf_return_60d"].shift(1).fillna(0)
+                    df["sector_etf_vol_20d"] = df["sector_etf_vol_20d"].shift(1).ffill().fillna(0)
+                    # Excess vs sector: stock return minus sector return
+                    df["excess_vs_sector_5d"] = (
+                        df.get("log_return_5d", pd.Series(0, index=df.index)).fillna(0)
+                        - df["sector_etf_return_5d"]
+                    )
+                    df["excess_vs_sector_20d"] = (
+                        df.get("log_return_21d", pd.Series(0, index=df.index)).fillna(0)
+                        - df["sector_etf_return_20d"]
+                    )
                 else:
                     df["sector_etf_return_1d"] = 0.0
                     df["sector_etf_return_5d"] = 0.0
+                    df["sector_etf_return_20d"] = 0.0
+                    df["sector_etf_return_60d"] = 0.0
+                    df["sector_etf_vol_20d"] = 0.0
+                    df["excess_vs_sector_5d"] = 0.0
+                    df["excess_vs_sector_20d"] = 0.0
             else:
                 df["sector_etf_return_1d"] = 0.0
                 df["sector_etf_return_5d"] = 0.0
+                df["sector_etf_return_20d"] = 0.0
+                df["sector_etf_return_60d"] = 0.0
+                df["sector_etf_vol_20d"] = 0.0
+                df["excess_vs_sector_5d"] = 0.0
+                df["excess_vs_sector_20d"] = 0.0
 
             df = df.drop(columns=["date_norm"], errors="ignore")
 
@@ -527,11 +621,74 @@ class MinimalFeatureEngineer:
             else:
                 df["macro_ff_chg"] = 0.0
 
+            # --- Sector momentum rank: percentile of stock's sector among all 11 sectors ---
+            # Computed once per MinimalFeatureEngineer instance, reused across all tickers.
+            # Uses shift(1) for PIT safety.
+            try:
+                sector_etf = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
+
+                # Build rank table once and cache on instance
+                if self._sector_rank_table is None:
+                    all_etfs = sorted(set(SECTOR_ID.keys()))
+                    etf_mom = {}
+                    for etf_sym in all_etfs:
+                        edf = fetch_price_df_mongo_first(
+                            mongo_client, etf_sym, start, end,
+                            cache=self.price_cache, allow_fallback_yfinance=True,
+                        )
+                        if edf is not None and not edf.empty:
+                            edf = _ensure_date_column(edf)
+                            edf = _ensure_ohlcv(edf, etf_sym)
+                            edf = edf.sort_values("date").drop_duplicates("date", keep="last")
+                            edf["date_norm"] = pd.to_datetime(_to_series(edf["date"])).dt.normalize()
+                            ec = _to_series(edf["Close"])
+                            edf["mom20"] = np.log(ec / ec.shift(20))
+                            etf_mom[etf_sym] = edf[["date_norm", "mom20"]].copy()
+
+                    if len(etf_mom) >= 3:
+                        mom_frames = []
+                        for sym, mdf in etf_mom.items():
+                            tmp = mdf.rename(columns={"mom20": sym})
+                            mom_frames.append(tmp.set_index("date_norm"))
+                        wide = pd.concat(mom_frames, axis=1).sort_index()
+                        self._sector_rank_table = wide.rank(axis=1, pct=True)
+                    else:
+                        # Not enough ETFs — empty DF so we don't retry
+                        self._sector_rank_table = pd.DataFrame()
+
+                # Look up this ticker's sector from the cached rank table
+                if (self._sector_rank_table is not None
+                        and not self._sector_rank_table.empty
+                        and sector_etf in self._sector_rank_table.columns):
+                    rank_col = self._sector_rank_table[[sector_etf]].copy()
+                    rank_col = rank_col.rename(columns={sector_etf: "sector_momentum_rank"})
+                    rank_col = rank_col.reset_index()
+                    df["date_norm_tmp"] = pd.to_datetime(_to_series(df["date"])).dt.normalize()
+                    df = df.merge(rank_col, left_on="date_norm_tmp", right_on="date_norm",
+                                  how="left", suffixes=("", "_rank_dup"))
+                    dup_cols = [c for c in df.columns if c.endswith("_rank_dup")]
+                    if dup_cols:
+                        df = df.drop(columns=dup_cols)
+                    df = df.drop(columns=["date_norm", "date_norm_tmp"], errors="ignore")
+                    # shift(1) for PIT safety
+                    df["sector_momentum_rank"] = df["sector_momentum_rank"].shift(1).ffill().fillna(0.5)
+                else:
+                    df["sector_momentum_rank"] = 0.5
+            except Exception as e_rank:
+                logger.debug("Could not compute sector_momentum_rank: %s", e_rank)
+                df["sector_momentum_rank"] = 0.5
+
         except Exception as e:
             logger.warning("Could not add cross-asset features: %s", e)
-            for col, default in _ca_defaults.items():
-                if col not in df.columns:
-                    df[col] = default
+
+        # Enforce: every key in _ca_defaults exists and has no NaN.
+        # Handles partial failures (e.g. VIX fetched but sector ETF failed),
+        # successful merges that left NaN rows, and full exceptions.
+        for col, default in _ca_defaults.items():
+            if col not in df.columns:
+                df[col] = default
+            else:
+                df[col] = df[col].fillna(default)
         return df
 
     def _add_earnings_proximity(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
@@ -584,4 +741,59 @@ class MinimalFeatureEngineer:
             df["days_since_earnings"] = days_since
         except Exception as e:
             logger.warning(f"Could not add earnings proximity: {e}")
+        return df
+
+    def _add_sentiment_features(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
+        """Add rolling sentiment features from MongoDB sentiment collection.
+
+        Delegates to sentiment_features.make_sentiment_features which handles
+        MongoDB querying, rolling window computation, and shift(1) for
+        point-in-time safety.  Falls back to neutral zeros if unavailable.
+        """
+        _sent_defaults = {
+            "sent_mean_1d": 0.0, "sent_mean_7d": 0.0, "sent_mean_30d": 0.0,
+            "sent_momentum": 0.0, "sent_std_7d": 0.0,
+            "news_count_1d": 0.0, "news_count_7d": 0.0,
+            "news_spike_1d": 0.0,
+        }
+        try:
+            from .sentiment_features import make_sentiment_features
+
+            sent_df = make_sentiment_features(df, ticker, mongo_client)
+            for col in sent_df.columns:
+                df[col] = sent_df[col].values
+        except Exception as e:
+            logger.warning("Could not add sentiment features for %s: %s", ticker, e)
+            for col, default in _sent_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
+        return df
+
+    def _add_insider_features(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
+        """Add rolling insider-transaction features from MongoDB.
+
+        Delegates to insider_features.make_insider_features which handles
+        MongoDB querying, rolling window computation, and shift(1) for
+        point-in-time safety.  Falls back to neutral defaults if unavailable.
+        """
+        _insider_defaults = {
+            "insider_net_shares_30d": 0.0, "insider_net_shares_90d": 0.0,
+            "insider_buy_count_30d": 0.0, "insider_sell_count_30d": 0.0,
+            "insider_buy_ratio_30d": 0.5,
+            "insider_buy_value_30d": 0.0, "insider_sell_value_30d": 0.0,
+            "insider_net_value_30d": 0.0,
+            "insider_activity_z_90d": 0.0, "insider_net_value_z_90d": 0.0,
+            "insider_cluster_buying": 0.0,
+        }
+        try:
+            from .insider_features import make_insider_features
+
+            ins_df = make_insider_features(df, ticker, mongo_client)
+            for col in ins_df.columns:
+                df[col] = ins_df[col].values
+        except Exception as e:
+            logger.warning("Could not add insider features for %s: %s", ticker, e)
+            for col, default in _insider_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
         return df

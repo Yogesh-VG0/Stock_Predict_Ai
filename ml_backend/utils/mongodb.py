@@ -8,13 +8,15 @@ from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime, timedelta
 import os
+import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 try:
     from ml_backend.config.constants import (
         MONGO_COLLECTIONS,
         RETRY_CONFIG,
-        PREDICTION_WINDOWS
+        PREDICTION_WINDOWS,
+        ARTICLE_COUNT_VOLUME_KEYS,
     )
 except ImportError:
     # Fallback for direct script usage
@@ -26,7 +28,8 @@ except ImportError:
     from constants import (
         MONGO_COLLECTIONS,
         RETRY_CONFIG,
-        PREDICTION_WINDOWS
+        PREDICTION_WINDOWS,
+        ARTICLE_COUNT_VOLUME_KEYS,
     )
 
 # Load environment variables
@@ -113,6 +116,11 @@ class MongoDBClient:
                 [("ticker", ASCENDING), ("window", ASCENDING), ("timestamp", DESCENDING)],
                 name="idx_ticker_window_timestamp",
             )
+            # History index: one prediction per ticker-window-day (asof_date upsert key)
+            preds.create_index(
+                [("ticker", ASCENDING), ("window", ASCENDING), ("asof_date", DESCENDING)],
+                name="idx_ticker_window_asof",
+            )
             hist = self.collections[MONGO_COLLECTIONS["historical_data"]]
             try:
                 hist.create_index(
@@ -135,6 +143,11 @@ class MongoDBClient:
             sent.create_index(
                 [("ticker", ASCENDING), ("last_updated", DESCENDING)],
                 name="idx_ticker_last_updated",
+            )
+            # Sentiment timeseries index (for ML feature queries by date range)
+            sent.create_index(
+                [("ticker", ASCENDING), ("date", ASCENDING)],
+                name="idx_ticker_date_sent",
             )
             model_versions = self.collections[MONGO_COLLECTIONS["model_versions"]]
             model_versions.create_index(
@@ -171,13 +184,22 @@ class MongoDBClient:
             logger.warning(f"Could not set up schema validation: {e}")
 
     def store_predictions(self, ticker: str, predictions: Dict[str, Dict[str, float]]) -> bool:
-        """Store complete predictions data in MongoDB with all details."""
+        """Store complete predictions data in MongoDB with all details.
+
+        Each document is keyed on {ticker, window, asof_date} so we retain
+        one prediction per ticker-window-day (history) while still allowing
+        fast "get latest" queries via the existing timestamp index.
+        """
         try:
             collection = self.collections[MONGO_COLLECTIONS["predictions"]]
             
             # Prepare documents for bulk insert
             documents = []
             timestamp = datetime.utcnow()
+            # asof_date = calendar day the prediction was generated (midnight UTC).
+            # This becomes part of the upsert key so re-runs on the same day
+            # update in-place but different days accumulate history.
+            asof_date = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
             
             for window, data in predictions.items():
                 # Skip _meta — it's metadata, not a prediction window
@@ -187,6 +209,7 @@ class MongoDBClient:
                 document = {
                     "ticker": ticker,
                     "window": window,
+                    "asof_date": asof_date,
                     "timestamp": timestamp,
                     
                     # Core prediction data
@@ -229,12 +252,13 @@ class MongoDBClient:
                 
                 documents.append(document)
             
-            # Upsert: replace the existing doc for each ticker+window
-            # so only the latest prediction is kept (no unbounded growth).
+            # Upsert: replace the existing doc for each ticker+window+asof_date.
+            # This keeps one prediction per day (history) while preventing
+            # unbounded growth from multiple intra-day reruns.
             from pymongo import UpdateOne as _UpdateOne
             ops = [
                 _UpdateOne(
-                    {"ticker": doc["ticker"], "window": doc["window"]},
+                    {"ticker": doc["ticker"], "window": doc["window"], "asof_date": doc["asof_date"]},
                     {"$set": doc},
                     upsert=True,
                 )
@@ -311,11 +335,32 @@ class MongoDBClient:
         collection = self.db['sentiment']
         sentiment['ticker'] = ticker
         sentiment['last_updated'] = datetime.utcnow()
-        sentiment['date'] = sentiment['timestamp'].replace(hour=0, minute=0, second=0, microsecond=0)
+        # Respect pre-set trading-day-aligned date from get_combined_sentiment().
+        # Only fall back to UTC midnight if caller didn't set it.
+        if 'date' not in sentiment or sentiment['date'] is None:
+            sentiment['date'] = sentiment['timestamp'].replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+
+        # Stale fields from disabled sources (alphavantage, alpha_earnings_call)
+        # linger in existing docs after $set upserts.  Explicitly remove them so
+        # the stored document only contains live-source data.
+        _stale_fields = [
+            "alphavantage_sentiment", "alphavantage_volume", "alphavantage_confidence",
+            "alpha_earnings_call_sentiment", "alpha_earnings_call_volume",
+            "alpha_earnings_call_confidence",
+        ]
+        # Strip stale keys from the $set payload (shouldn't be there but guard)
+        for k in _stale_fields:
+            sentiment.pop(k, None)
+
         # Upsert on {ticker, date} so only the latest sentiment per ticker per day is kept
         collection.update_one(
             {"ticker": ticker, "date": sentiment["date"]},
-            {"$set": sentiment},
+            {
+                "$set": sentiment,
+                "$unset": {k: "" for k in _stale_fields},
+            },
             upsert=True,
         )
 
@@ -380,6 +425,117 @@ class MongoDBClient:
         except Exception as e:
             logger.error(f"Error getting latest predictions for {ticker}: {str(e)}")
             return {}
+
+    def get_prediction_history(
+        self,
+        ticker: str,
+        window: str,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        limit: int = 90,
+    ) -> list:
+        """Return prediction history for a ticker-window pair, newest first.
+
+        Each document includes asof_date, prediction, confidence,
+        predicted_price, etc.  Used for drift detection and accuracy tracking.
+        """
+        try:
+            collection = self.collections[MONGO_COLLECTIONS["predictions"]]
+            query: Dict[str, Any] = {"ticker": ticker, "window": window}
+            if start_date or end_date:
+                date_filter: Dict[str, Any] = {}
+                if start_date:
+                    date_filter["$gte"] = start_date
+                if end_date:
+                    date_filter["$lte"] = end_date
+                query["asof_date"] = date_filter
+
+            cursor = (
+                collection.find(query, {"_id": 0})
+                .sort("asof_date", DESCENDING)
+                .limit(limit)
+            )
+            return list(cursor)
+        except Exception as e:
+            logger.error("Error getting prediction history for %s-%s: %s", ticker, window, e)
+            return []
+
+    def get_sentiment_timeseries(
+        self,
+        ticker: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> pd.DataFrame:
+        """Return daily sentiment rows for a ticker in [start_date, end_date].
+
+        Returns DataFrame with columns: date, composite_sentiment, news_count.
+        Used by the ML feature engine to build sentiment features.
+        """
+        try:
+            collection = self.db["sentiment"]
+            cursor = collection.find(
+                {
+                    "ticker": ticker,
+                    "date": {"$gte": start_date, "$lte": end_date},
+                },
+                sort=[("date", ASCENDING)],
+            )
+            rows = []
+            for doc in cursor:
+                # Prefer the explicit composite_sentiment field (written by
+                # get_combined_sentiment) which is the weighted blend.
+                if "composite_sentiment" in doc and isinstance(doc["composite_sentiment"], (int, float)):
+                    composite = float(doc["composite_sentiment"])
+                elif "blended_sentiment" in doc and isinstance(doc["blended_sentiment"], (int, float)):
+                    composite = float(doc["blended_sentiment"])
+                else:
+                    # Fallback: average per-source *_sentiment keys.
+                    # Exclude the aggregate keys so we don't double-count.
+                    _exclude = {"blended_sentiment", "composite_sentiment", "sentiment_confidence"}
+                    sent_fields = [
+                        v for k, v in doc.items()
+                        if k.endswith("_sentiment")
+                        and k not in _exclude
+                        and isinstance(v, (int, float))
+                    ]
+                    if sent_fields:
+                        composite = float(np.mean(sent_fields))
+                    elif "sources" in doc and isinstance(doc["sources"], dict):
+                        scores = [
+                            s["sentiment_score"]
+                            for s in doc["sources"].values()
+                            if isinstance(s, dict) and "sentiment_score" in s
+                        ]
+                        composite = float(np.mean(scores)) if scores else 0.0
+                    else:
+                        composite = 0.0
+
+                # Prefer the explicit news_count field.
+                if "news_count" in doc and isinstance(doc["news_count"], (int, float)):
+                    news_count = int(doc["news_count"])
+                else:
+                    # Fallback: allowlist-only (single source of truth).
+                    # ARTICLE_COUNT_VOLUME_KEYS lives in config/constants.py.
+                    count_fields = [
+                        v for k, v in doc.items()
+                        if k in ARTICLE_COUNT_VOLUME_KEYS
+                        and isinstance(v, (int, float))
+                    ]
+                    news_count = int(sum(count_fields)) if count_fields else 1
+
+                rows.append({
+                    "date": pd.Timestamp(doc["date"]).normalize(),
+                    "composite_sentiment": composite,
+                    "news_count": news_count,
+                })
+            if not rows:
+                return pd.DataFrame(columns=["date", "composite_sentiment", "news_count"])
+            df = pd.DataFrame(rows)
+            df = df.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
+            return df
+        except Exception as e:
+            logger.error("Error getting sentiment timeseries for %s: %s", ticker, e)
+            return pd.DataFrame(columns=["date", "composite_sentiment", "news_count"])
 
     def get_historical_data(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Get historical data for a ticker within date range from the single collection."""

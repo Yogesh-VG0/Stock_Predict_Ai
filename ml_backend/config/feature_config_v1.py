@@ -1,28 +1,6 @@
 """
 Minimal V1 Feature Configuration - Leakage-proof, hard to overfit.
-Data source ranking: KEEP / REDUCE / REMOVE
 """
-
-# =============================================================================
-# DATA SOURCE RANKING (for reference - implemented in features_minimal.py)
-# =============================================================================
-# KEEP: OHLCV, returns, volatility, relative strength (SPY/sector), volume
-# KEEP: 1 news sentiment source, earnings proximity (days to/since, NOT outcomes)
-# REDUCE: Short interest (ratio + days_to_cover only, use change)
-# REDUCE: Macro (Fed Funds, 2Y-10Y spread, CPI YoY, Unemployment - lagged)
-# REMOVE: Seeking Alpha comments, Finviz, VADER, RoBERTa Large, redundant sentiment
-# REMOVE: Event actuals (use existence/density only), most macro indicators
-# =============================================================================
-
-# Minimal macro indicators (V1 engine uses only spread + Fed Funds; CPI/unemployment excluded)
-MINIMAL_MACRO_INDICATORS = [
-    "FEDERAL_FUNDS_RATE",
-    "TREASURY_10Y",
-    "TREASURY_2Y",
-]
-
-# Sector ETFs for relative strength (keep simple)
-MINIMAL_SECTOR_ETFS = ["XLK", "XLF", "SPY"]  # Tech, Financial, Market
 
 # Feature config - strict time-based evaluation
 FEATURE_CONFIG_V1 = {
@@ -45,6 +23,10 @@ TARGET_CONFIG = {
 # Market-neutral target: predict alpha (stock return - SPY return) instead of absolute return
 # Focuses model on cross-sectional ranking; removes market direction; random pick ~ net-0
 USE_MARKET_NEUTRAL_TARGET = True
+
+# Sentiment features toggle: set False to run A/B comparison without sentiment.
+# When False, sentiment columns are filled with zeros (preserves feature dimensions).
+USE_SENTIMENT_FEATURES = True
 
 # Walk-forward folds: 0 = single split; 3-4 = rolling folds, report median metrics (credibility upgrade)
 WALK_FORWARD_FOLDS = 3
@@ -96,6 +78,23 @@ FEATURE_PRUNING = {
         "sector_id", "ticker_id",
         "vix_return_1d", "vix_level",             # cross-asset regime
         "sector_etf_return_1d",                    # sector rotation
+        # Sector regime (v2)
+        "sector_etf_return_20d",                   # sector momentum
+        "excess_vs_sector_5d",                     # stock vs sector excess
+        "sector_etf_vol_20d",                      # sector volatility
+        "sector_momentum_rank",                    # cross-sector rotation rank (v3)
+        # Sentiment (v2)
+        "sent_mean_7d",                            # rolling sentiment
+        "sent_momentum",                           # sentiment regime change
+        "news_count_7d",                           # news flow intensity
+        "news_spike_1d",                           # unusual coverage burst detector
+        # Insider (v4) — direct transaction features
+        "insider_net_value_30d",                   # dollar flow direction
+        "insider_buy_ratio_30d",                   # buy/sell balance
+        "insider_cluster_buying",                  # cluster-buying alpha signal
+        "insider_activity_z_90d",                  # abnormal activity detector
+        # Technical (v4)
+        "rsi_divergence",                          # bullish/bearish RSI divergence
     ],
     "min_features": 15,                # Don't prune below this many features
 }

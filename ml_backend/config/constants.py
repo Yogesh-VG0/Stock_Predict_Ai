@@ -170,62 +170,11 @@ _ALL_TICKERS = sorted(set(TOP_100_TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"S
 TICKER_TO_ID = {ticker: i for i, ticker in enumerate(_ALL_TICKERS)}
 
 
-
-# Utility imports to keep back-compatibility if needed, but better to import from utils
-# from ..utils.tickers import get_ticker_id  <-- No, avoided circular imports.
-
-
-# RSS Feeds - Removed general market feeds since we use stock-specific RSS feeds
-# Stock-specific RSS feeds are generated dynamically in sentiment.py:
-# - Yahoo Finance: https://feeds.finance.yahoo.com/rss/2.0/headline?s={ticker}&region=US&lang=en-US
-# - SeekingAlpha: https://seekingalpha.com/api/sa/combined/{ticker}.xml
-RSS_FEEDS = {}
-
-# Model Configuration
-MODEL_CONFIG = {
-    "lstm_units": 128,  # Increased from 64 for better capacity
-    "dense_units": 64,  # Increased from 32
-    "dropout_rate": 0.2,  # Reduced from 0.3 for better learning
-    "batch_size": 32,  # Reduced from 64 for better gradient updates
-    "epochs": 25,  # Increased from 15 for better convergence
-    "early_stopping_patience": 7,  # Increased from 5
-    "learning_rate": 0.0005,  # Reduced from 0.001 for more stable training
-    "n_trials": 25,  # Increased from 15 for better hyperparameter search
-    "attention_dim": 64,  # New parameter for attention mechanism
-    "default_hyperparameters": {
-        "lstm_units": 128,
-        "dense_units": 64,
-        "dropout_rate": 0.2,
-        "learning_rate": 0.0005,
-        "l2_reg": 5e-4,  # Reduced regularization
-        "batch_size": 32,
-        "attention_dim": 64,
-        # New parameters for enhanced model
-        "recurrent_dropout": 0.1,
-        "gradient_clip_norm": 1.0,
-        "use_attention": True,
-        "use_bidirectional": True
-    }
-}
-
 # Prediction Windows
 PREDICTION_WINDOWS = {
     "next_day": 1,
     "7_day": 7,
     "30_day": 30
-}
-
-# Technical Indicators
-TECHNICAL_INDICATORS = {
-    "sma_periods": [5, 10, 20, 50, 200],
-    "ema_periods": [5, 10, 20, 50, 200],
-    "rsi_period": 14,
-    "macd_fast": 12,
-    "macd_slow": 26,
-    "macd_signal": 9,
-    "bollinger_period": 20,
-    "bollinger_std": 2,
-    "atr_period": 14
 }
 
 # MongoDB Collections
@@ -246,19 +195,28 @@ MONGO_COLLECTIONS = {
     "api_cache": "api_cache"
 }
 
+# Sentiment volume keys that represent actual article/headline counts.
+# Single source of truth — used in:
+#   sentiment.py  → news_count computation
+#   mongodb.py    → get_sentiment_timeseries() fallback
+#   cron          → per-source health logging
+# Everything NOT in this set (finnhub_volume = shares, short_interest_volume,
+# economic_event_volume, sentiment_volume = aggregate, any future key) is
+# IGNORED when computing news_count.
+#
+# alphavantage_volume REMOVED: source explicitly disabled (free tier
+# insufficient — 25 req/day for 100 tickers).  Always contributed 0.
+ARTICLE_COUNT_VOLUME_KEYS = frozenset({
+    "rss_news_volume",
+    "marketaux_volume",
+    "finviz_volume",
+})
+
 # Retry Configuration
 RETRY_CONFIG = {
     "max_retries": 3,
     "base_delay": 1,
     "max_delay": 10
-}
-
-# Feature Engineering
-FEATURE_CONFIG = {
-    "lookback_days": 60,
-    "sequence_length": 30,
-    "train_test_split": 0.8,
-    "validation_split": 0.1
 }
 
 # Ticker mapping for yfinance special cases
@@ -268,20 +226,3 @@ TICKER_YFINANCE_MAP = {
 
 # Canary tickers for data freshness checks
 CANARY_TICKERS = ["AAPL", "MSFT", "SPY"]
-
-# Hyperparameter Search Space - Optimized for Financial Time Series
-HYPERPARAM_SEARCH_SPACE = {
-    "lstm_units": (64, 256),  # Wider range, higher max
-    "dense_units": (32, 128),  # Wider range
-    "dropout_rate": (0.1, 0.3),  # Lower minimum
-    "learning_rate": (0.0001, 0.002),  # Better range for financial data
-    "l2_reg": (1e-5, 1e-3),  # Wider regularization range
-    "batch_size": [16, 32, 64],  # More options
-    "attention_dim": (32, 128),  # New parameter
-    "recurrent_dropout": (0.0, 0.2),  # New parameter
-    # Model architecture choices
-    "use_attention": [True, False],
-    "use_bidirectional": [True, False],
-    "activation": ['relu', 'swish', 'gelu'],  # Modern activation functions
-    "optimizer": ['adam', 'adamw', 'rmsprop']  # Optimizer choices
-} 

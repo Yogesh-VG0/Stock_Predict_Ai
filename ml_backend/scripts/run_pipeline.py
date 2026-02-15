@@ -23,21 +23,32 @@ from ml_backend.backtest import run_backtest, DEFAULT_BACKTEST_TICKERS
 from ml_backend.models.predictor import StockPredictor
 from ml_backend.data.features_minimal import MinimalFeatureEngineer
 from ml_backend.utils.mongodb import MongoDBClient
+from ml_backend.config.constants import TOP_100_TICKERS
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description="Run StockPredict ML Pipeline")
-    parser.add_argument("--tickers", nargs="+", default=None, help="Tickers to process")
+    parser.add_argument("--tickers", nargs="+", default=None, help="Tickers to process (for prediction)")
     parser.add_argument("--horizon", default="next_day", choices=["next_day", "7_day", "30_day"])
     parser.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
     parser.add_argument("--end", default=None, help="End date YYYY-MM-DD")
     parser.add_argument("--no-mongo", action="store_true", help="Use yfinance instead of MongoDB")
     parser.add_argument("--retrain", action="store_true", help="Force retrain models")
+    parser.add_argument("--predict-only", action="store_true",
+                        help="Skip training; load saved models and only generate predictions")
+    parser.add_argument("--all-tickers", action="store_true",
+                        help="Train on ALL 100 tickers (pooled model uses full cross-section)")
+    parser.add_argument("--no-predict", action="store_true",
+                        help="Train only — skip prediction storage (used for training step)")
     args = parser.parse_args()
 
     tickers = args.tickers or DEFAULT_BACKTEST_TICKERS
+    # When --all-tickers is set, training uses all 100 tickers but prediction
+    # uses only --tickers (or defaults).  This ensures the pooled model is
+    # trained on the full S&P 100 cross-section instead of a small batch.
+    train_tickers = list(TOP_100_TICKERS) if args.all_tickers else tickers
     mongo_client = None
     
     # 1. Setup MongoDB or Fallback
@@ -66,11 +77,15 @@ def main():
     if args.start:
         start_date = datetime.strptime(args.start, "%Y-%m-%d")
 
+    # Determine which tickers to fetch data for.
+    # For training we need ALL train_tickers; for predict-only we only need --tickers.
+    fetch_tickers = list(set(train_tickers) | set(tickers)) if not args.predict_only else tickers
+
     historical_data = {}
     spy_data = None
 
     if not args.no_mongo and mongo_client:
-        for t in tickers:
+        for t in fetch_tickers:
             try:
                 df = mongo_client.get_historical_data(t, start_date, end_date)
                 if df is not None and not df.empty:
@@ -82,12 +97,15 @@ def main():
         except Exception:
             pass
     
-    if not historical_data: # Fallback to yfinance if Mongo empty or disabled
-        logger.info("Using yfinance to fetch data...")
+    # Backfill any missing tickers via yfinance (covers --no-mongo, partial
+    # MongoDB coverage, and the common case where only a few tickers have
+    # been ingested but --all-tickers requests the full 100 cross-section).
+    missing_tickers = [t for t in fetch_tickers if t not in historical_data]
+    if missing_tickers or not historical_data:
         import yfinance as yf
-        
-        # Download tickers
-        for t in tickers:
+        logger.info("Fetching %d tickers from yfinance...", len(missing_tickers) if missing_tickers else len(fetch_tickers))
+        dl_tickers = missing_tickers if missing_tickers else fetch_tickers
+        for t in dl_tickers:
             try:
                 logger.info(f"Downloading {t}...")
                 df = yf.download(t, start=start_date, end=end_date, progress=False, auto_adjust=True)
@@ -109,7 +127,9 @@ def main():
             except Exception as e:
                 logger.warning("Could not download %s: %s", t, e)
 
-        # Download SPY
+    # Ensure SPY is available (for relative-strength features)
+    if spy_data is None or (hasattr(spy_data, 'empty') and spy_data.empty):
+        import yfinance as yf
         try:
              spy_df = yf.download("SPY", start=start_date, end=end_date, progress=False, auto_adjust=True)
              if spy_df is not None and not spy_df.empty:
@@ -142,71 +162,80 @@ def main():
          except Exception as e:
             logger.warning(f"Could not inject SPY data: {e}")
 
-    # 4. Train Models
-    logger.info("Training models...")
-    # We can pass the historical data directly to train_all_models which might expect a slightly different format 
-    # or we can train one by one. StockPredictor.train_all_models takes a dict of DataFrames.
-    try:
-        # StockPredictor.train_all_models will try to fetch SPY data internally via feature_engineer
-        # Since we fixed cache_fetch.py, it should fallback to yfinance correctly now.
-        predictor.train_all_models(historical_data)
-        logger.info("Training completed.")
-    except Exception as e:
-        logger.error("Training failed: %s", e)
-        # Continue if some models trained? 
-        # If train_all_models fails completely, we can't backtest.
-        if not predictor.models and not predictor.pooled_models:
-             sys.exit(1)
-
-    # 5. Run Backtest (OOS only — restricted to dates after training cutoff)
-    logger.info("Running backtest...")
-    oos_start = predictor.get_oos_start_date()
-    if oos_start:
-        logger.info("OOS backtest start date: %s", oos_start.date())
+    # 4. Train or Load Models
+    if args.predict_only:
+        # --predict-only: skip training, load models from disk
+        logger.info("Predict-only mode: loading saved models...")
+        predictor.load_models()
+        if not predictor.pooled_models and not predictor.models:
+            logger.error("No saved models found. Run training first (without --predict-only).")
+            sys.exit(1)
+        logger.info("Loaded %d pooled + %d per-ticker models.",
+                     len(predictor.pooled_models), len(predictor.models))
     else:
-        logger.warning("No OOS start date available — backtest will use last 20%% fallback.")
-    result = run_backtest(
-        predictor=predictor,
-        historical_data=historical_data,
-        spy_data=spy_data,
-        tickers=list(historical_data.keys()),
-        start_date=args.start,
-        end_date=args.end,
-        max_positions=5,
-        horizon=args.horizon,
-        oos_start_date=oos_start,
-    )
+        # Build training data dict — may be larger than prediction tickers
+        # when --all-tickers is used.
+        training_data = {t: historical_data[t] for t in train_tickers if t in historical_data}
+        if not training_data:
+            logger.error("No training data available. Exiting.")
+            sys.exit(1)
+        logger.info("Training on %d tickers (pooled cross-section)...", len(training_data))
+        try:
+            predictor.train_all_models(training_data)
+            logger.info("Training completed.")
+        except Exception as e:
+            logger.error("Training failed: %s", e)
+            if not predictor.models and not predictor.pooled_models:
+                sys.exit(1)
 
-    if "error" in result:
-        logger.error("Backtest failed: %s", result["error"])
-        sys.exit(1)
+        # 5. Run Backtest (OOS only — restricted to dates after training cutoff)
+        # Use only the prediction tickers for backtest (not all 100).
+        backtest_data = {t: historical_data[t] for t in tickers if t in historical_data}
+        logger.info("Running backtest...")
+        oos_start = predictor.get_oos_start_date()
+        if oos_start:
+            logger.info("OOS backtest start date: %s", oos_start.date())
+        else:
+            logger.warning("No OOS start date available — backtest will use last 20%% fallback.")
+        result = run_backtest(
+            predictor=predictor,
+            historical_data=backtest_data,
+            spy_data=spy_data,
+            tickers=list(backtest_data.keys()),
+            start_date=args.start,
+            end_date=args.end,
+            max_positions=5,
+            horizon=args.horizon,
+            oos_start_date=oos_start,
+        )
 
-    print("\n=== Pipeline Results (OOS) ===")
-    print(f"OOS start: {result.get('oos_start', 'N/A')}")
-    print(f"Period: {result.get('start_date')} to {result.get('end_date')}")
-    print(f"Horizon: {args.horizon}")
-    print(f"Strategy return: {result.get('total_return', 0):.2%}")
-    print(f"Strategy Sharpe: {result.get('sharpe_ratio', 0):.3f}")
-    print(f"Max drawdown: {result.get('max_drawdown', 0):.2%}")
-    if result.get("spy_return") is not None:
-        print(f"SPY return: {result['spy_return']:.2%}")
-    ts = result.get("trade_stats", {})
-    if ts.get("n_trades", 0) > 0:
-        print(f"Trades: {ts['n_trades']} ({ts.get('trades_per_year', 0):.0f}/yr)")
-        print(f"Avg return/trade: {ts.get('avg_return_per_trade', 0):.4f}")
-        print(f"Win rate: {ts.get('win_rate', 0):.1%}")
-        print(f"Avg holding: {ts.get('avg_holding_bars', 0):.1f} bars")
-    else:
-        print("Trades: 0 (check filters)")
-    print("==============================\n")
+        if "error" in result:
+            logger.error("Backtest failed: %s", result["error"])
+            sys.exit(1)
 
-    # 6. Save Models
-    if args.retrain:
-        logger.info("Saving models...")
-        predictor.save_models()
+        print("\n=== Pipeline Results (OOS) ===")
+        print(f"OOS start: {result.get('oos_start', 'N/A')}")
+        print(f"Period: {result.get('start_date')} to {result.get('end_date')}")
+        print(f"Horizon: {args.horizon}")
+        print(f"Strategy return: {result.get('total_return', 0):.2%}")
+        print(f"Strategy Sharpe: {result.get('sharpe_ratio', 0):.3f}")
+        print(f"Max drawdown: {result.get('max_drawdown', 0):.2%}")
+        if result.get("spy_return") is not None:
+            print(f"SPY return: {result['spy_return']:.2%}")
+        ts = result.get("trade_stats", {})
+        if ts.get("n_trades", 0) > 0:
+            print(f"Trades: {ts['n_trades']} ({ts.get('trades_per_year', 0):.0f}/yr)")
+            print(f"Avg return/trade: {ts.get('avg_return_per_trade', 0):.4f}")
+            print(f"Win rate: {ts.get('win_rate', 0):.1%}")
+            print(f"Avg holding: {ts.get('avg_holding_bars', 0):.1f} bars")
+        else:
+            print("Trades: 0 (check filters)")
+        print("==============================\n")
 
-    # 7. Generate and Store Live Predictions
-    if not args.no_mongo and mongo_client:
+    # 6. Generate and Store Live Predictions (skip with --no-predict)
+    if args.no_predict:
+        logger.info("--no-predict: skipping prediction storage.")
+    elif not args.no_mongo and mongo_client:
         logger.info("Generating and storing live predictions...")
         for ticker in tickers:
             try:

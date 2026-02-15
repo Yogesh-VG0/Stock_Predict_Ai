@@ -15,6 +15,7 @@ import requests
 import os
 from dotenv import load_dotenv
 from ..config.constants import (
+    ARTICLE_COUNT_VOLUME_KEYS,
     REDDIT_SUBREDDITS,
     RETRY_CONFIG,
     TOP_100_TICKERS,
@@ -34,6 +35,7 @@ from .economic_calendar import EconomicCalendar
 from .fred_macro import fetch_and_store_all_fred_indicators
 import sys
 import traceback
+import math
 
 # Load environment variables
 load_dotenv()
@@ -222,21 +224,19 @@ class SentimentAnalyzer:
         self.short_interest_analyzer = None
         
         # Track API health status for rate limiting and error handling
+        # Only live sources — alphavantage and alpha_earnings_call removed
+        # (free tier insufficient / method gutted).
         self.api_status = {
             'finviz': {'working': True, 'last_error': None, 'cooldown_until': None},
             'yahoo': {'working': True, 'last_error': None, 'cooldown_until': None},
             'marketaux': {'working': True, 'last_error': None, 'cooldown_until': None},
-            'alpha_vantage': {'working': True, 'last_error': None, 'cooldown_until': None},
             'finnhub': {'working': True, 'last_error': None, 'cooldown_until': None},
             'fmp': {'working': True, 'last_error': None, 'cooldown_until': None},
             'sec': {'working': True, 'last_error': None, 'cooldown_until': None},
-            'yahoo_news': {'working': True, 'last_error': None, 'cooldown_until': None},
             'rss_news': {'working': True, 'last_error': None, 'cooldown_until': None},
             'reddit': {'working': True, 'last_error': None, 'cooldown_until': None},
             'seekingalpha': {'working': True, 'last_error': None, 'cooldown_until': None},
             'seekingalpha_comments': {'working': True, 'last_error': None, 'cooldown_until': None},
-            'alpha_earnings_call': {'working': True, 'last_error': None, 'cooldown_until': None},
-            'alphavantage': {'working': True, 'last_error': None, 'cooldown_until': None},
         }
         
         # Model routing configuration
@@ -264,6 +264,10 @@ class SentimentAnalyzer:
         
         # Model performance tracking
         self.model_performance = {}
+
+        # Exponential backoff parameters (used by _exponential_backoff)
+        self.base_delay = 1.0
+        self.max_delay = 60.0
         
         logger.info("  Enhanced Sentiment Analyzer Summary:")
         logger.info(f"    FinBERT (General Financial): {self.finbert is not None}")
@@ -282,6 +286,8 @@ class SentimentAnalyzer:
             self.vader is not None
         ])
         logger.info(f"  Enhanced Multi-Model Sentiment Analyzer ready with {total_models}/5 models loaded")
+        logger.info("  Disabled sources: alphavantage_news (free tier: 25 req/day insufficient for 100 tickers)")
+        logger.info("  Disabled sources: alpha_earnings_call (method gutted — redundant with FMP)")
         
     def _check_api_health(self, api_name: str) -> bool:
         """Check if an API is healthy and not in cooldown."""
@@ -408,16 +414,18 @@ class SentimentAnalyzer:
                     summary = getattr(entry, 'summary', '')
                     date_obj = None
                     
-                    # Parse date
+                    # Parse date — only break on successful parse
                     for date_field in ['published', 'updated', 'published_parsed', 'updated_parsed']:
                         if hasattr(entry, date_field):
                             try:
                                 date_obj = pd.to_datetime(getattr(entry, date_field), errors='coerce')
-                                if date_obj is not None:
+                                if date_obj is not None and pd.notnull(date_obj):
                                     date_obj = date_obj.tz_localize(None)
+                                    break  # success — stop trying other fields
+                                else:
+                                    date_obj = None
                             except Exception:
                                 date_obj = None
-                            break
                     
                     if not _is_recent(date_obj):
                         continue
@@ -465,75 +473,58 @@ class SentimentAnalyzer:
         }
 
     def blend_sentiment_scores(self, sentiment: Dict[str, float]) -> float:
-        """Blend sentiment scores from multiple sources with proper type checking."""
+        """Blend sentiment scores from multiple sources.
+
+        ONLY keys ending in '_sentiment' are considered — this avoids
+        accidentally blending non-numeric keys like 'ticker', 'timestamp',
+        'api_status', or raw-data lists which would dilute the score toward 0.
+        """
         if not sentiment:
             return 0.0
+
+        # Source weights for blending (key must match the flat *_sentiment key).
+        # Only LIVE sources that actually populate scores are listed.
+        # Dead (alphavantage, alpha_earnings_call) and phantom
+        # (economic_event, short_interest) entries have been removed so they
+        # cannot distort the normalization.
+        weights = {
+            'rss_news_sentiment':              0.22,
+            'marketaux_sentiment':             0.15,
+            'reddit_sentiment':                0.10,
+            'finnhub_sentiment':               0.10,
+            'finnhub_insider_sentiment':       0.10,
+            'sec_sentiment':                   0.10,
+            'fmp_sentiment':                   0.08,
+            'seekingalpha_comments_sentiment': 0.05,
+            'finviz_sentiment':                0.05,
+        }
 
         total_score = 0.0
         total_weight = 0.0
 
-        # Standardize source keys
-        standard_keys = {
-            'fmp_price_target_summary': 'fmp_price_target',
-            'fmp_grades_summary': 'fmp_grades',
-            'fmp_ratings_snapshot': 'fmp_ratings',
-            'fmp_financial_estimates': 'fmp_estimates',
-            'seekingalpha_comments_sentiment': 'seeking_alpha_comments'
+        # Only iterate keys that actually carry a sentiment score
+        sentiment_items = {
+            k: v for k, v in sentiment.items()
+            if k.endswith('_sentiment') and isinstance(v, (int, float))
+               and k in weights  # ignore unknown / phantom keys
         }
 
-        # Source weights for blending
-        weights = {
-            'rss_news': 0.22,  # Combined Yahoo + SeekingAlpha RSS (was 15% + 15% + 15% = 45% duplicated)
-            'marketaux': 0.15,  # MarketAux news API
-            'reddit': 0.10,     # Reddit posts/comments
-            'finnhub_insider': 0.10,  # Insider transactions
-            'earnings_call': 0.10,    # Earnings call transcripts
-            'sec_filings': 0.10,      # SEC filing sentiment
-            'fmp_estimates': 0.05,    # Analyst estimates - RESTORED
-            'fmp_ratings': 0.05,      # Analyst ratings - RESTORED
-            'fmp_price_targets': 0.05, # Price targets - RESTORED
-            'fmp_grades': 0.05,       # Stock grades - RESTORED
-            'fmp_dividends': 0.03,    # Dividend analysis - RESTORED
-            'seeking_alpha_comments': 0.05,  # User comments (separate from articles)
-            # Removed yahoo_news and seeking_alpha to eliminate duplication only
-        }
+        for key, value in sentiment_items.items():
+            score = max(-1.0, min(1.0, float(value)))
+            base_weight = weights[key]
 
-        for source, data in sentiment.items():
-            # Get standardized source key
-            source_key = standard_keys.get(source, source)
-            weight = weights.get(source_key, 0.05)  # Default weight for unknown sources
+            # Confidence-volume weighting: scale the base weight by the
+            # source's own confidence and log(1 + volume).  This makes the
+            # blend favour sources that actually returned data.
+            conf_key = key.replace('_sentiment', '_confidence')
+            vol_key  = key.replace('_sentiment', '_volume')
+            conf = float(sentiment.get(conf_key, 1.0))
+            vol  = float(sentiment.get(vol_key, 1))
+            effective_weight = base_weight * max(conf, 0.01) * math.log1p(max(vol, 0))
 
-            # Extract score with proper type checking
-            score = 0.0
-            if isinstance(data, dict):
-                # Try different possible score keys
-                score = (data.get('sentiment_score') or 
-                        data.get('sentiment') or 
-                        data.get('score') or 
-                        0.0)
-            elif isinstance(data, (int, float)):
-                score = float(data)
-            else:
-                # Handle other data types gracefully
-                logger.debug(f"Converting {source} data type {type(data)} to float")
-                try:
-                    score = float(data)
-                except (ValueError, TypeError):
-                    logger.debug(f"Could not convert {source} data to float, using 0.0")
-                    score = 0.0
+            total_score  += score * effective_weight
+            total_weight += effective_weight
 
-            # Validate score is within [-1, 1]
-            try:
-                score = float(score)
-            except Exception:
-                score = 0.0
-            score = max(-1.0, min(1.0, score))
-            
-            # Add to weighted average
-            total_score += score * weight
-            total_weight += weight
-
-        # Return normalized score
         return total_score / total_weight if total_weight > 0 else 0.0
 
     async def fetch_alpha_vantage_earnings_call(self, ticker: str, quarter: str = None) -> dict:
@@ -790,15 +781,17 @@ class SentimentAnalyzer:
             sentiment_results = []
             for article in articles:
                 # Only consider entities relevant to the ticker
+                score = None
                 for entity in article.get("entities", []):
                     if entity.get("symbol", "").upper() == ticker.upper() and "sentiment_score" in entity:
                         score = entity["sentiment_score"]
                         sentiment_scores.append(score)
-                sentiment_results.append({
-                    "headline": article.get("title", ""),
-                    "url": article.get("url", ""),
-                    "sentiment": score
-                })
+                if score is not None:
+                    sentiment_results.append({
+                        "headline": article.get("title", ""),
+                        "url": article.get("url", ""),
+                        "sentiment": score
+                    })
             total_volume = len(sentiment_scores)
             if total_volume < 1:
                 logger.info(f"Marketaux volume {total_volume} below threshold 1, setting sentiment to 0.")
@@ -939,23 +932,21 @@ class SentimentAnalyzer:
 
         # Define sentiment sources and their corresponding keys
         # NOTE: Removed only duplicate sources (yahoo_news, seekingalpha) that are already in rss_news
+        # NOTE: alpha_earnings_call and alphavantage explicitly disabled — methods gutted,
+        #       free-tier insufficient (25 req/day for 100 tickers).
         sources = [
             self.get_finviz_sentiment,
             self.get_sec_sentiment,
             self.get_marketaux_sentiment,
             self.get_rss_news_sentiment,  # This already includes Yahoo + SeekingAlpha
             self.get_reddit_sentiment,
-            # Removed self.get_yahoo_news_sentiment - DUPLICATE of Yahoo in RSS
-            # Removed self.get_seekingalpha_sentiment - DUPLICATE of SeekingAlpha in RSS
-            self.get_fmp_sentiment,  # RESTORED - FMP data is valuable for analyst estimates/ratings
+            self.get_fmp_sentiment,  # FMP data is valuable for analyst estimates/ratings
             self.get_finnhub_sentiment,
             self.get_seekingalpha_comments_sentiment,  # Comments are separate from articles
-            self.get_alpha_earnings_call_sentiment,
-            self.get_alphavantage_news_sentiment,  # RESTORED - Alpha Vantage has good sentiment data
         ]
         keys = [
             "finviz", "sec", "marketaux", "rss_news", "reddit",
-            "fmp", "finnhub", "seekingalpha_comments", "alpha_earnings_call", "alphavantage"
+            "fmp", "finnhub", "seekingalpha_comments",
         ]
         
         # Process each sentiment source
@@ -1041,8 +1032,54 @@ class SentimentAnalyzer:
             sentiment_dict["sentiment_confidence"] = 0.0
             sentiment_dict["sentiment_volume"] = 0
         
+        # Add feature-friendly fields expected by sentiment_features.py
+        sentiment_dict["composite_sentiment"] = float(sentiment_dict.get("blended_sentiment", 0.0))
+        # news_count = count of NEWS ARTICLES only.
+        # Uses the shared ARTICLE_COUNT_VOLUME_KEYS allowlist from
+        # config/constants.py — single source of truth with mongodb.py.
+        sentiment_dict["news_count"] = int(sum(
+            sentiment_dict.get(k, 0) for k in ARTICLE_COUNT_VOLUME_KEYS
+        ))
+
         # Add metadata for storage
-        sentiment_dict["date"] = sentiment_dict["timestamp"].replace(hour=0, minute=0, second=0, microsecond=0)
+        # Align sentiment date to the most-recent NYSE trading day so that
+        # shift(1) in the feature adapter lines up cleanly with price rows.
+        #
+        # Best-practice rule:
+        #   If now < market close (4 PM ET) on a trading day → label as
+        #   *previous* trading day (today's OHLCV isn't finalized yet).
+        #   If now >= market close (or a weekend/holiday) → snap to today's
+        #   (or the most-recent) trading day as usual.
+        # Because shift(1) delays consumption by one day anyway, this is a
+        # "nice-to-have" cleanliness fix, not a correctness requirement.
+        try:
+            utc_now = sentiment_dict["timestamp"]
+            utc_today_str = utc_now.strftime("%Y-%m-%d")
+
+            # Determine if NYSE is still open right now (market_close ~21:00 UTC / 16:00 ET)
+            nyse = mcal.get_calendar('NYSE')
+            today_schedule = nyse.schedule(
+                start_date=utc_today_str, end_date=utc_today_str
+            )
+            if (not today_schedule.empty
+                    and utc_now.replace(tzinfo=None) < today_schedule.iloc[0]["market_close"].tz_localize(None)):
+                # Market hasn't closed yet — use the *previous* trading day
+                prev_day = utc_now - pd.Timedelta(days=1)
+                trading_day_str = get_previous_trading_day(prev_day.strftime("%Y-%m-%d"))
+            else:
+                trading_day_str = get_previous_trading_day(utc_today_str)
+
+            if trading_day_str:
+                sentiment_dict["date"] = pd.Timestamp(trading_day_str)
+            else:
+                # Fallback: plain UTC midnight (e.g. if calendar data unavailable)
+                sentiment_dict["date"] = utc_now.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+        except Exception:
+            sentiment_dict["date"] = sentiment_dict["timestamp"].replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
         sentiment_dict["last_updated"] = datetime.utcnow()
         sentiment_dict["api_status"] = self.api_status  # Store API health status
         
@@ -1055,49 +1092,62 @@ class SentimentAnalyzer:
             
         return sentiment_dict
 
-    def _calculate_sentiment_confidence(self, sources: Dict) -> float:
-        """Calculate overall sentiment confidence based on source reliability and data quality."""
-        if not sources:
+    def _calculate_sentiment_confidence(self, d: Dict) -> float:
+        """Calculate overall sentiment confidence from flat *_confidence keys."""
+        if not d:
             return 0.0
 
-        confidence_scores = []
-        weights = {
-            'rss_news': 0.22,  # Combined Yahoo + SeekingAlpha RSS (was 15% + 15% + 15% = 45% duplicated)
-            'marketaux': 0.15,  # MarketAux news API
-            'reddit': 0.10,     # Reddit posts/comments
-            'finnhub_insider': 0.10,  # Insider transactions
-            'earnings_call': 0.10,    # Earnings call transcripts
-            'sec_filings': 0.10,      # SEC filing sentiment
-            'fmp_estimates': 0.05,    # Analyst estimates - RESTORED
-            'fmp_ratings': 0.05,      # Analyst ratings - RESTORED
-            'fmp_price_targets': 0.05, # Price targets - RESTORED
-            'fmp_grades': 0.05,       # Stock grades - RESTORED
-            'fmp_dividends': 0.03,    # Dividend analysis - RESTORED
-            'seeking_alpha_comments': 0.05,  # User comments (separate from articles)
-            # Removed yahoo_news and seeking_alpha to eliminate duplication only
+        conf_items = {
+            k: v for k, v in d.items()
+            if k.endswith('_confidence') and isinstance(v, (int, float))
         }
+        if not conf_items:
+            return 0.0
 
-        for source, data in sources.items():
-            if isinstance(data, dict):
-                confidence = data.get('confidence', 0.0)
-                weight = weights.get(source, 0.05)
-                confidence_scores.append(confidence * weight)
+        # Weighted average using same source weights as blend (live sources only)
+        weights = {
+            'rss_news_confidence': 0.22,
+            'marketaux_confidence': 0.15,
+            'reddit_confidence': 0.10,
+            'finnhub_confidence': 0.10,
+            'sec_confidence': 0.10,
+            'fmp_confidence': 0.08,
+            'seekingalpha_comments_confidence': 0.05,
+            'finviz_confidence': 0.05,
+        }
+        total, tw = 0.0, 0.0
+        for k, v in conf_items.items():
+            w = weights.get(k, 0.03)
+            total += float(v) * w
+            tw += w
+        return total / tw if tw > 0 else 0.0
 
-        return sum(confidence_scores) if confidence_scores else 0.0
+    def _calculate_sentiment_volume(self, d: Dict) -> int:
+        """Calculate total sentiment volume from flat *_volume keys.
 
-    def _calculate_sentiment_volume(self, sources: Dict) -> int:
-        """Calculate total sentiment volume across all sources."""
-        if not sources:
+        SCHEMA NOTE — "*_volume" naming is overloaded in the current schema:
+          ARTICLE COUNTS (safe for news_count):  rss_news_volume, marketaux_volume,
+              finviz_volume, fmp_estimates_volume,
+              fmp_ratings_volume, fmp_price_target_volume, fmp_grades_volume,
+              finnhub_recommendation_volume, seekingalpha_volume,
+              seekingalpha_comments_volume, sec_volume, reddit_volume
+          NOT ARTICLE COUNTS (exclude from news_count):
+              finnhub_volume       = insider share volume
+              short_interest_volume = short-interest data-point count
+              economic_event_volume = macro event count
+              sentiment_volume      = aggregate (this field itself)
+
+        This method sums ALL *_volume keys (total data breadth indicator).
+        For news article count, use the explicit ``news_count`` field set in
+        get_combined_sentiment() which sums only rss + marketaux + finviz
+        volumes (see ARTICLE_COUNT_VOLUME_KEYS in config/constants.py).
+        """
+        if not d:
             return 0
-
-        total_volume = 0
-        for source, data in sources.items():
-            if isinstance(data, dict):
-                volume = data.get('volume', 0)
-                if isinstance(volume, (int, float)):
-                    total_volume += volume
-
-        return total_volume
+        return int(sum(
+            v for k, v in d.items()
+            if k.endswith('_volume') and isinstance(v, (int, float))
+        ))
 
     async def fetch_fmp_dividends_and_store(self, ticker: str) -> dict:
         """Fetch dividend history for a ticker from FMP using centralized manager."""
@@ -1746,46 +1796,52 @@ class SentimentAnalyzer:
             weights = []
             total_volume = 0
             
-            # Process estimates
-            estimates = fmp_data.get('estimates', [])
+            # Process estimates  (FMP manager key: 'analyst_estimates')
+            estimates = fmp_data.get('analyst_estimates', [])
             if estimates:
-                est = estimates[0]
+                est = estimates[0] if isinstance(estimates, list) else estimates
                 eps_avg = est.get('estimatedEpsAvg', 0.0)
                 norm_eps = max(-1, min(1, (eps_avg - 5) / 5))
                 sentiments.append(norm_eps)
                 weights.append(0.3)
                 total_volume += est.get('numberAnalystEstimatedEps', 1)
             
-            # Process ratings
-            ratings = fmp_data.get('ratings', [])
+            # Process ratings  (FMP manager key: 'ratings_snapshot')
+            ratings = fmp_data.get('ratings_snapshot', [])
             if ratings:
-                rating = ratings[0]
+                rating = ratings[0] if isinstance(ratings, list) else ratings
+                # ratingScore is numeric (1-5); 'rating' can be a letter grade
+                # like 'B' which is not convertible to float — use ratingScore only.
                 overall = rating.get('ratingScore', 0)
-                norm_score = (overall - 3) / 2
-                sentiments.append(norm_score)
-                weights.append(0.3)
-                total_volume += 1
+                try:
+                    overall = float(overall) if overall else 0.0
+                except (ValueError, TypeError):
+                    overall = 0.0
+                if overall:
+                    norm_score = (overall - 3) / 2
+                    sentiments.append(max(-1.0, min(1.0, norm_score)))
+                    weights.append(0.3)
+                    total_volume += 1
             
-            # Process price targets
-            price_targets = fmp_data.get('price_targets', [])
+            # Process price targets  (FMP manager key: 'price_target_summary')
+            price_targets = fmp_data.get('price_target_summary', [])
             if price_targets:
-                pt = price_targets[0]
-                avg_target = pt.get('lastYearAvgPriceTarget', 0.0)
+                pt = price_targets[0] if isinstance(price_targets, list) else price_targets
+                avg_target = pt.get('lastYearAvgPriceTarget', pt.get('averagePriceTarget', 0.0))
                 norm_pt = max(-1, min(1, (avg_target - 200) / 100))
                 sentiments.append(norm_pt)
                 weights.append(0.25)
                 total_volume += pt.get('lastYearCount', 1)
             
-            # Process grades
-            grades = fmp_data.get('grades', [])
-            if grades:
-                gs = grades[0]
-                consensus = gs.get('gradingCompany', '').lower()
-                mapping = {'strong buy': 1.0, 'buy': 0.7, 'hold': 0.0, 'sell': -0.7, 'strong sell': -1.0}
-                norm_score = mapping.get(consensus, 0.0)
-                sentiments.append(norm_score)
-                weights.append(0.15)
-                total_volume += 1
+            # Process consensus  (FMP manager key: 'price_target_consensus')
+            consensus_data = fmp_data.get('price_target_consensus', [])
+            if consensus_data:
+                cs = consensus_data[0] if isinstance(consensus_data, list) else consensus_data
+                consensus_val = cs.get('targetConsensus', 0.0)
+                if consensus_val:
+                    sentiments.append(max(-1.0, min(1.0, (float(consensus_val) - 200) / 100)))
+                    weights.append(0.15)
+                    total_volume += 1
             
             # Calculate weighted sentiment
             if sentiments:
@@ -2244,9 +2300,11 @@ class SentimentAnalyzer:
             logger.error(f"Error fetching Finnhub company peers for {ticker}: {e}")
             return {}
 
-    async def get_finnhub_insider_sentiment_direct(self, ticker: str) -> dict:
+    async def get_finnhub_insider_sentiment_cached(self, ticker: str) -> dict:
         """
-        Get insider sentiment (MSPR) from Finnhub with MongoDB storage.
+        Get insider sentiment (MSPR) from Finnhub with MongoDB cache.
+        (Renamed from get_finnhub_insider_sentiment_direct to avoid shadowing
+        fetch_finnhub_insider_sentiment_direct.)
         """
         try:
             # Check MongoDB cache first
@@ -2299,8 +2357,8 @@ class SentimentAnalyzer:
         Falls back to transaction parsing if MSPR data unavailable.
         """
         try:
-            # Try the official MSPR API first
-            mspr_sentiment = await self.get_finnhub_insider_sentiment_direct(ticker)
+            # Try the official MSPR API first (cached version)
+            mspr_sentiment = await self.get_finnhub_insider_sentiment_cached(ticker)
             
             if mspr_sentiment and mspr_sentiment.get('sentiment') is not None:
                 logger.info(f"Using official Finnhub MSPR data for {ticker}")
@@ -2401,10 +2459,14 @@ class SentimentAnalyzer:
 
 
 def get_previous_trading_day(date_str):
+    """Return the most recent NYSE trading day <= *date_str*.
+
+    Looks back 30 calendar days so even the longest holiday stretch
+    (Christmas + New Year week) never returns an empty schedule.
+    """
     nyse = mcal.get_calendar('NYSE')
     date = pd.to_datetime(date_str)
-    # Get the last valid trading day before or on the given date
-    schedule = nyse.schedule(start_date=date - pd.Timedelta(days=7), end_date=date)
+    schedule = nyse.schedule(start_date=date - pd.Timedelta(days=30), end_date=date)
     if schedule.empty:
         return None
     last_trading_day = schedule.index[-1]
