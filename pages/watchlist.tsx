@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react"
 import StockLogo from "@/components/market/StockLogo"
 import { motion } from "framer-motion"
 import { Link } from "react-router-dom"
-import { Star, TrendingUp, TrendingDown, Plus, MoreHorizontal, Bell, Trash2, MoveVertical, Wifi, WifiOff, AlertTriangle, CheckCircle, Clock } from "lucide-react"
+import { Star, TrendingUp, TrendingDown, Plus, Bell, Trash2, Wifi, WifiOff, AlertTriangle, CheckCircle, Clock } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import Sparkline from "@/components/ui/sparkline"
 import { cn } from "@/lib/utils"
@@ -472,77 +472,68 @@ export default function WatchlistPage() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.05 }}
-                  className="bg-zinc-900 rounded-md border border-zinc-800 p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between group hover:border-zinc-700 transition-colors"
+                  className="bg-zinc-900 rounded-md border border-zinc-800 p-3 group hover:border-zinc-700 transition-colors"
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="cursor-move opacity-0 group-hover:opacity-100 transition-opacity">
-                      <MoveVertical className="h-4 w-4 text-zinc-500" />
+                  {/* Mobile: stacked layout, Desktop: row layout */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                      <StockLogo symbol={stock.symbol} size={32} />
+                      <div className="flex flex-col min-w-0">
+                        <Link
+                          to={`/stocks/${stock.symbol}`}
+                          className="font-medium hover:text-emerald-500 transition-colors"
+                        >
+                          {stock.symbol}
+                        </Link>
+                        <span className="text-xs text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stock.name}</span>
+                      </div>
                     </div>
 
-                    <StockLogo symbol={stock.symbol} size={32} />
+                    <div className="flex items-center gap-3 sm:gap-6">
+                      <div className="hidden sm:block">
+                        <Sparkline
+                          data={stock.sparklineData}
+                          height={30}
+                          width={80}
+                          color={stock.changePercent >= 0 ? "#10b981" : "#ef4444"}
+                        />
+                      </div>
 
-                    <div className="flex flex-col">
-                      <Link
-                        to={`/stocks/${stock.symbol}`}
-                        className="font-medium hover:text-emerald-500 transition-colors"
-                      >
-                        {stock.symbol}
-                      </Link>
-                      <span className="text-xs text-zinc-400">{stock.name}</span>
-                      <span className="text-xs text-zinc-500">
-                        Vol: {stock.volume > 0 ? stock.volume.toLocaleString() : 'N/A'}
-                      </span>
-                    </div>
-                  </div>
+                      <div className="flex flex-col items-end">
+                        {stock.price > 0 ? (
+                          <>
+                            <span className="font-medium text-sm sm:text-base">${stock.price.toFixed(2)}</span>
+                            <span
+                              className={cn(
+                                "text-xs flex items-center gap-1",
+                                stock.changePercent >= 0 ? "text-emerald-500" : "text-red-500",
+                              )}
+                            >
+                              {stock.changePercent >= 0 ? (
+                                <TrendingUp className="h-3 w-3" />
+                              ) : (
+                                <TrendingDown className="h-3 w-3" />
+                              )}
+                              {stock.changePercent >= 0 ? "+" : ""}
+                              {stock.changePercent.toFixed(2)}%
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <div className="h-4 w-16 bg-zinc-800 rounded animate-pulse"></div>
+                            <div className="h-3 w-12 bg-zinc-800 rounded animate-pulse mt-1"></div>
+                          </>
+                        )}
+                      </div>
 
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-end sm:gap-6 w-full sm:w-auto">
-                    <Sparkline
-                      data={stock.sparklineData}
-                      height={30}
-                      width={80}
-                      color={stock.changePercent >= 0 ? "#10b981" : "#ef4444"}
-                    />
-
-                    <div className="flex flex-col items-end">
-                      {stock.price > 0 ? (
-                        <>
-                          <span className="font-medium">${stock.price.toFixed(2)}</span>
-                          <span
-                            className={cn(
-                              "text-xs flex items-center gap-1",
-                              stock.changePercent >= 0 ? "text-emerald-500" : "text-red-500",
-                            )}
-                          >
-                            {stock.changePercent >= 0 ? (
-                              <TrendingUp className="h-3 w-3" />
-                            ) : (
-                              <TrendingDown className="h-3 w-3" />
-                            )}
-                            {stock.changePercent >= 0 ? "+" : ""}
-                            {stock.changePercent.toFixed(2)}%
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <div className="h-4 w-16 bg-zinc-800 rounded animate-pulse"></div>
-                          <div className="h-3 w-12 bg-zinc-800 rounded animate-pulse mt-1"></div>
-                        </>
-                      )}
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <button className="p-1.5 rounded-md hover:bg-zinc-800 transition-colors">
-                        <Bell className="h-4 w-4 text-zinc-400 hover:text-white" />
-                      </button>
-                      <button 
-                        onClick={() => removeFromWatchlist(stock.symbol)}
-                        className="p-1.5 rounded-md hover:bg-zinc-800 transition-colors"
-                      >
-                        <Trash2 className="h-4 w-4 text-zinc-400 hover:text-red-500" />
-                      </button>
-                      <button className="p-1.5 rounded-md hover:bg-zinc-800 transition-colors">
-                        <MoreHorizontal className="h-4 w-4 text-zinc-400 hover:text-white" />
-                      </button>
+                      <div className="flex items-center gap-0.5 sm:gap-1">
+                        <button 
+                          onClick={() => removeFromWatchlist(stock.symbol)}
+                          className="p-1.5 rounded-md hover:bg-zinc-800 transition-colors"
+                        >
+                          <Trash2 className="h-4 w-4 text-zinc-400 hover:text-red-500" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </motion.div>

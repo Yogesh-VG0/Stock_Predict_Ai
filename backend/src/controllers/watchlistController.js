@@ -136,11 +136,11 @@ const addToWatchlist = async (req, res) => {
     
     const upperSymbol = symbol.toUpperCase();
     
-    // Validate symbol exists
-    if (!COMPANY_DATA[upperSymbol]) {
+    // Validate symbol format (1-5 uppercase letters, optionally with a dot like BRK.B)
+    if (!/^[A-Z]{1,5}(\.[A-Z]{1,2})?$/.test(upperSymbol)) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Invalid symbol' 
+        error: 'Invalid symbol format' 
       });
     }
     
@@ -155,13 +155,43 @@ const addToWatchlist = async (req, res) => {
       });
     }
     
-    // Get current price for the symbol
-    const priceData = await wsService.getCurrentPrice(upperSymbol);
+    // Get current price - try WebSocket cache first
+    let priceData = await wsService.getCurrentPrice(upperSymbol);
+    
+    // For non-tracked stocks, create minimal price data so they can still be added
+    if (!priceData) {
+      // Try Finnhub quote API for any stock
+      try {
+        const axios = require('axios');
+        const finnhubKey = process.env.FINNHUB_API_KEY;
+        const quoteRes = await axios.get(
+          `https://finnhub.io/api/v1/quote?symbol=${upperSymbol}&token=${finnhubKey}`,
+          { timeout: 8000 }
+        );
+        const q = quoteRes.data;
+        if (q && q.c > 0) {
+          priceData = {
+            price: q.c,
+            change: q.d || 0,
+            changePercent: q.dp || 0,
+            high: q.h || q.c,
+            low: q.l || q.c,
+            open: q.o || q.c,
+            previousClose: q.pc || q.c,
+            volume: 0,
+            tradeCount: 0,
+            timestamp: Date.now()
+          };
+        }
+      } catch (e) {
+        console.log(`⚠️ Finnhub quote failed for ${upperSymbol}: ${e.message}`);
+      }
+    }
     
     if (!priceData) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Unable to fetch price data for symbol' 
+        error: 'Unable to fetch price data. Check the symbol and try again.' 
       });
     }
     
@@ -169,7 +199,8 @@ const addToWatchlist = async (req, res) => {
     userWatchlist.push(upperSymbol);
     userWatchlists.set(userId, userWatchlist);
     
-    const companyData = COMPANY_DATA[upperSymbol];
+    // Use COMPANY_DATA if available, otherwise use symbol as name
+    const companyData = COMPANY_DATA[upperSymbol] || { name: upperSymbol, sector: 'Unknown' };
     const watchlistItem = {
       symbol: upperSymbol,
       name: companyData.name,
