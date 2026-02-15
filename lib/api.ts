@@ -265,36 +265,15 @@ export async function getStockPrice(symbol: string): Promise<{ price: number; ch
   }
 }
 
-export async function searchStocks(query: string): Promise<Array<{ symbol: string; name: string; price?: number }> | null> {
+export async function searchStocks(query: string): Promise<Array<{ symbol: string; name: string; isTracked?: boolean; price?: number }> | null> {
   try {
-    // Extended mock search results - replace with real API
-    const mockStocks = [
-      { symbol: "AAPL", name: "Apple Inc." },
-      { symbol: "MSFT", name: "Microsoft Corporation" },
-      { symbol: "GOOGL", name: "Alphabet Inc." },
-      { symbol: "AMZN", name: "Amazon.com Inc." },
-      { symbol: "TSLA", name: "Tesla Inc." },
-      { symbol: "NVDA", name: "NVIDIA Corporation" },
-      { symbol: "META", name: "Meta Platforms Inc." },
-      { symbol: "NFLX", name: "Netflix Inc." },
-      { symbol: "JPM", name: "JPMorgan Chase & Co." },
-      { symbol: "V", name: "Visa Inc." },
-      { symbol: "JNJ", name: "Johnson & Johnson" },
-      { symbol: "WMT", name: "Walmart Inc." },
-      { symbol: "PG", name: "Procter & Gamble Co." },
-      { symbol: "UNH", name: "UnitedHealth Group Inc." },
-      { symbol: "HD", name: "Home Depot Inc." },
-      { symbol: "MA", name: "Mastercard Inc." },
-      { symbol: "BAC", name: "Bank of America Corp." },
-      { symbol: "XOM", name: "Exxon Mobil Corp." },
-      { symbol: "LLY", name: "Eli Lilly and Co." },
-      { symbol: "ABBV", name: "AbbVie Inc." }
-    ]
+    if (!query || query.length < 1) return []
 
-    return mockStocks.filter(stock =>
-      stock.symbol.toLowerCase().includes(query.toLowerCase()) ||
-      stock.name.toLowerCase().includes(query.toLowerCase())
-    ).slice(0, 10)
+    const response = await fetch(`${NODE_BACKEND_URL}/api/stock/search/${encodeURIComponent(query)}`, { cache: 'no-store' })
+    if (!response.ok) return []
+
+    const data = await response.json()
+    return data.results || []
   } catch (error) {
     console.error('Error searching stocks:', error);
     return null;

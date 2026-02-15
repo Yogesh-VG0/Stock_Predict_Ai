@@ -288,56 +288,115 @@ const getStockDetails = async (req, res) => {
     const { symbol } = req.params;
     const upperSymbol = symbol.toUpperCase();
 
-    // Get company overview data
+    // Check if this is a tracked stock with hardcoded data
     const companyData = COMPANY_DATA[upperSymbol];
-    if (!companyData) {
-      return res.status(404).json({ error: 'Company data not found' });
-    }
+    
+    let stockDetails;
+    
+    if (companyData) {
+      // Tracked stock — use hardcoded data + AI analysis
+      let aiAnalysis = null;
+      try {
+        const explanationResponse = await axios.get(`${ML_BACKEND_URL}/api/v1/predictions/${upperSymbol}/explanation`, {
+          timeout: 10000
+        });
+        if (explanationResponse.data && explanationResponse.data.explanation) {
+          const explanation = explanationResponse.data.explanation;
+          aiAnalysis = {
+            positiveFactors: explanation.positive_factors || [
+              "Strong technical indicators show bullish momentum",
+              "Market sentiment analysis indicates positive investor outlook"
+            ],
+            negativeFactors: explanation.negative_factors || [
+              "Market volatility increases investment risk",
+              "Macroeconomic uncertainties affect sector performance"
+            ]
+          };
+        }
+      } catch (mlError) {
+        console.log(`ML Backend not available for ${upperSymbol}, using fallback`);
+      }
 
-    // Get AI analysis from ML backend
-    let aiAnalysis = null;
-    try {
-      const explanationResponse = await axios.get(`${ML_BACKEND_URL}/api/v1/predictions/${upperSymbol}/explanation`, {
-        timeout: 10000
-      });
-
-      if (explanationResponse.data && explanationResponse.data.explanation) {
-        const explanation = explanationResponse.data.explanation;
+      if (!aiAnalysis) {
         aiAnalysis = {
-          positiveFactors: explanation.positive_factors || [
+          positiveFactors: [
             "Strong technical indicators show bullish momentum",
             "Market sentiment analysis indicates positive investor outlook"
           ],
-          negativeFactors: explanation.negative_factors || [
+          negativeFactors: [
             "Market volatility increases investment risk",
             "Macroeconomic uncertainties affect sector performance"
           ]
         };
       }
-    } catch (mlError) {
-      console.log(`ML Backend not available for ${upperSymbol}, using fallback`);
-    }
 
-    // Fallback AI analysis if ML backend is not available
-    if (!aiAnalysis) {
-      aiAnalysis = {
-        positiveFactors: [
-          "Strong technical indicators show bullish momentum",
-          "Market sentiment analysis indicates positive investor outlook"
-        ],
-        negativeFactors: [
-          "Market volatility increases investment risk",
-          "Macroeconomic uncertainties affect sector performance"
-        ]
+      stockDetails = {
+        symbol: upperSymbol,
+        ...companyData,
+        isTracked: true,
+        aiAnalysis
       };
+    } else {
+      // Non-tracked stock — fetch from Finnhub Company Profile API
+      console.log(`📊 Fetching Finnhub profile for untracked stock: ${upperSymbol}`);
+      try {
+        const finnhubKey = process.env.FINNHUB_API_KEY;
+        const profileRes = await axios.get(
+          `https://finnhub.io/api/v1/stock/profile2?symbol=${upperSymbol}&token=${finnhubKey}`,
+          { timeout: 10000 }
+        );
+        const profile = profileRes.data;
+        if (profile && profile.name) {
+          stockDetails = {
+            symbol: upperSymbol,
+            name: profile.name,
+            sector: profile.finnhubIndustry || 'Unknown',
+            industry: profile.finnhubIndustry || 'Unknown',
+            description: `${profile.name} (${upperSymbol}) is listed on ${profile.exchange || 'N/A'}. Market cap: $${profile.marketCapitalization ? (profile.marketCapitalization / 1000).toFixed(1) + 'B' : 'N/A'}. Country: ${profile.country || 'N/A'}.`,
+            headquarters: profile.country || 'N/A',
+            founded: 0,
+            employees: 0,
+            ceo: 'N/A',
+            website: profile.weburl || 'N/A',
+            isTracked: false,
+            aiAnalysis: { positiveFactors: [], negativeFactors: [] }
+          };
+        } else {
+          // Finnhub returned empty profile — still allow viewing with minimal data
+          stockDetails = {
+            symbol: upperSymbol,
+            name: upperSymbol,
+            sector: 'Unknown',
+            industry: 'Unknown',
+            description: `View the live chart for ${upperSymbol} below.`,
+            headquarters: 'N/A',
+            founded: 0,
+            employees: 0,
+            ceo: 'N/A',
+            website: 'N/A',
+            isTracked: false,
+            aiAnalysis: { positiveFactors: [], negativeFactors: [] }
+          };
+        }
+      } catch (finnhubError) {
+        console.log(`⚠️ Finnhub profile failed for ${upperSymbol}: ${finnhubError.message}`);
+        // Minimal fallback so the page still renders
+        stockDetails = {
+          symbol: upperSymbol,
+          name: upperSymbol,
+          sector: 'Unknown',
+          industry: 'Unknown',
+          description: `View the live chart for ${upperSymbol} below.`,
+          headquarters: 'N/A',
+          founded: 0,
+          employees: 0,
+          ceo: 'N/A',
+          website: 'N/A',
+          isTracked: false,
+          aiAnalysis: { positiveFactors: [], negativeFactors: [] }
+        };
+      }
     }
-
-    // Combine company data with AI analysis
-    const stockDetails = {
-      symbol: upperSymbol,
-      ...companyData,
-      aiAnalysis
-    };
 
     // Add real-time price from latest MongoDB prediction (reliable source)
     try {
@@ -921,6 +980,67 @@ const getTechnicalIndicators = async (req, res) => {
   }
 };
 
+// ── Search stocks using Finnhub Symbol Search (works for ANY stock) ──
+const searchStocks = async (req, res) => {
+  try {
+    const { query } = req.params;
+    if (!query || query.length < 1) {
+      return res.json({ results: [] });
+    }
+
+    const upperQuery = query.toUpperCase();
+
+    // First check local tracked stocks for instant results
+    const localMatches = Object.entries(COMPANY_DATA)
+      .filter(([symbol, data]) =>
+        symbol.includes(upperQuery) ||
+        data.name.toUpperCase().includes(upperQuery)
+      )
+      .map(([symbol, data]) => ({
+        symbol,
+        name: data.name,
+        isTracked: true
+      }));
+
+    // Then search Finnhub for broader results
+    let finnhubResults = [];
+    try {
+      const finnhubKey = process.env.FINNHUB_API_KEY;
+      const response = await axios.get(
+        `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}&token=${finnhubKey}`,
+        { timeout: 8000 }
+      );
+      if (response.data?.result) {
+        finnhubResults = response.data.result
+          .filter(r => r.type === 'Common Stock' || r.type === 'ETP')
+          .slice(0, 10)
+          .map(r => ({
+            symbol: r.symbol,
+            name: r.description,
+            isTracked: !!COMPANY_DATA[r.symbol]
+          }));
+      }
+    } catch (e) {
+      console.log(`⚠️ Finnhub search failed: ${e.message}`);
+    }
+
+    // Merge: local matches first, then Finnhub results (deduped)
+    const seenSymbols = new Set(localMatches.map(m => m.symbol));
+    const merged = [...localMatches];
+    for (const r of finnhubResults) {
+      if (!seenSymbols.has(r.symbol)) {
+        seenSymbols.add(r.symbol);
+        merged.push(r);
+      }
+    }
+
+    res.json({ results: merged.slice(0, 15) });
+  } catch (error) {
+    console.error('Error searching stocks:', error.message);
+    res.json({ results: [] });
+  }
+};
+
 module.exports = {
   getStockDetails,
   getAIAnalysis,
@@ -930,5 +1050,6 @@ module.exports = {
   getBatchExplanationStatus,
   getAvailableStocksWithExplanations,
   getPredictions,
-  getTechnicalIndicators
+  getTechnicalIndicators,
+  searchStocks
 }; 

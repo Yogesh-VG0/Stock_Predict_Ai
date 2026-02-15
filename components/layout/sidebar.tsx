@@ -11,7 +11,6 @@ import {
   X,
   TrendingUp,
   TrendingDown,
-  Search,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -135,17 +134,6 @@ export default function Sidebar({ onClose }: SidebarProps) {
           <span className="font-bold text-xl">StockPredict AI</span>
         </Link>
       </SidebarHeader>
-
-      <div className="px-4 py-2">
-        <div className="relative">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
-          <input
-            type="text"
-            placeholder="Search stocks..."
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          />
-        </div>
-      </div>
 
       <SidebarContent className="overflow-hidden">
         <SidebarMenu>

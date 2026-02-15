@@ -64,7 +64,9 @@ export default function StockDetail({ }: StockDetailProps) {
   const [stockNews, setStockNews] = useState<any[]>([])
   const [currentPrice, setCurrentPrice] = useState<number>(0)
   const [isUsingRealData, setIsUsingRealData] = useState(false)
-  const [availableStocks] = useState([
+  const [isTrackedStock, setIsTrackedStock] = useState(true)
+  // Top tracked stocks shown as quick-access buttons
+  const [trackedStocks] = useState([
     "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
     "JPM", "V", "JNJ", "WMT", "PG", "UNH", "HD", "MA", "BAC", "XOM", "LLY", "ABBV"
   ])
@@ -150,6 +152,10 @@ export default function StockDetail({ }: StockDetailProps) {
       if (details) {
         // Cache for future use if fetched from API
         if (!cachedDetails) setCachedData(`stock-details-${symbol}`, details)
+
+        // Track whether this stock has ML predictions
+        const tracked = (details as any).isTracked !== false
+        setIsTrackedStock(tracked)
 
         // Use real price from backend if available, otherwise fallback to details or mock
         const finalPrice = details.price || currentPrice || 0
@@ -290,12 +296,12 @@ export default function StockDetail({ }: StockDetailProps) {
     if (!searchQuery) return
 
     let symbol = getSymbolFromCompanyName(searchQuery) || searchQuery.toUpperCase()
-
-    if (availableStocks.includes(symbol)) {
+    // Accept any valid-looking ticker symbol (1-5 uppercase letters)
+    if (/^[A-Z]{1,5}$/.test(symbol) || /^[A-Z]+\.[A-Z]$/.test(symbol)) {
       setSelectedStock(symbol)
       setSearchQuery("")
     } else {
-      alert(`No data available for ${searchQuery}. Available stocks: ${availableStocks.join(', ')}`)
+      alert(`Invalid symbol: ${searchQuery}. Enter a valid ticker like AAPL, PLTR, TSLA, etc.`)
     }
   }
 
@@ -413,7 +419,7 @@ export default function StockDetail({ }: StockDetailProps) {
         </form>
 
         <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-2 scrollbar-hide -mx-1 px-1">
-          {availableStocks.slice(0, 8).map((symbol) => (
+          {trackedStocks.slice(0, 8).map((symbol) => (
             <button
               key={symbol}
               onClick={() => setSelectedStock(symbol)}
@@ -550,7 +556,8 @@ export default function StockDetail({ }: StockDetailProps) {
           </Card>
         </motion.div>
 
-        {/* Middle Column - AI Predictions */}
+        {/* Middle Column - AI Predictions (only for tracked stocks) */}
+        {isTrackedStock && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -699,6 +706,7 @@ export default function StockDetail({ }: StockDetailProps) {
               </CardContent>
             </Card>
         </motion.div>
+        )}
 
         {/* Right Column - News */}
         <motion.div
@@ -791,7 +799,9 @@ export default function StockDetail({ }: StockDetailProps) {
         </motion.div>
       </div>
 
-      {/* Advanced Technical & AI Analysis Header */}
+      {/* Advanced Technical & AI Analysis Header (only for tracked stocks) */}
+      {isTrackedStock && (
+      <>
       <div className="flex items-center justify-between pt-2">
         <h2 className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
           <BarChart3 className="h-4 w-4 text-emerald-500" />
@@ -845,6 +855,8 @@ export default function StockDetail({ }: StockDetailProps) {
             </Suspense>
           </motion.div>
       </div>
+      </>
+      )}
     </div>
   )
 }

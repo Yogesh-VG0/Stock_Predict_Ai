@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom"
 interface SearchResult {
   symbol: string
   name: string
+  isTracked?: boolean
   price?: number
   change?: number
   changePercent?: number
@@ -118,7 +119,12 @@ export default function SearchWidget() {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
-                        <div className="font-medium text-white">{stock.symbol}</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium text-white">{stock.symbol}</span>
+                          {stock.isTracked && (
+                            <span className="text-[9px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded-full border border-emerald-500/30">AI</span>
+                          )}
+                        </div>
                         <div className="text-sm text-zinc-400 truncate">{stock.name}</div>
                       </div>
                       {stock.price && (

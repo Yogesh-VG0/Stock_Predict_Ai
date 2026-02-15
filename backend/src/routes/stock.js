@@ -9,7 +9,8 @@ const {
   getBatchExplanationStatus,
   getAvailableStocksWithExplanations,
   getPredictions,
-  getTechnicalIndicators
+  getTechnicalIndicators,
+  searchStocks
 } = require('../controllers/stockController');
 
 // Specific routes first to avoid shadowing by /:symbol
@@ -36,6 +37,9 @@ router.get('/batch/status', getBatchExplanationStatus);
 
 // Get available stocks with explanations — MUST be before /:symbol catch-all
 router.get('/batch/available', getAvailableStocksWithExplanations);
+
+// Search stocks by query — MUST be before /:symbol catch-all
+router.get('/search/:query', searchStocks);
 
 // Get stock details (company info + basic AI analysis)
 // This is LAST because it matches any single parameter
