@@ -76,10 +76,9 @@ function FinlogixEarningsCalendar() {
 
   if (!isClient) {
     return (
-      <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden">
+      <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden" style={{ height: 600 }}>
         <div 
-          className="w-full flex items-center justify-center" 
-          style={{ height: 500, backgroundColor: '#18181b' }}
+          className="w-full h-full flex items-center justify-center"
         >
           <div className="text-zinc-500 text-sm">Loading earnings calendar...</div>
         </div>
@@ -88,12 +87,11 @@ function FinlogixEarningsCalendar() {
   }
 
   return (
-    <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden">
+    <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden" style={{ height: 600 }}>
       {/* Use the exact class name the widget expects */}
       <div 
         ref={containerRef}
-        className="finlogix-container w-full" 
-        style={{ height: 500, backgroundColor: '#18181b' }} 
+        className="finlogix-container w-full h-full" 
       />
     </div>
   )

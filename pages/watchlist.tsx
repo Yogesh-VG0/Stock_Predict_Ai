@@ -45,35 +45,7 @@ export default function WatchlistPage() {
     type: 'price_above' as Alert['type'],
     value: ''
   })
-  const [alerts, setAlerts] = useState<Alert[]>([
-    {
-      id: '1',
-      symbol: 'AAPL',
-      type: 'price_above',
-      value: 190,
-      active: true,
-      triggered: false,
-      createdAt: new Date()
-    },
-    {
-      id: '2',
-      symbol: 'TSLA',
-      type: 'price_below',
-      value: 240,
-      active: true,
-      triggered: false,
-      createdAt: new Date()
-    },
-    {
-      id: '3',
-      symbol: 'NVDA',
-      type: 'earnings',
-      value: '2024-01-25',
-      active: true,
-      triggered: false,
-      createdAt: new Date()
-    }
-  ])
+  const [alerts, setAlerts] = useState<Alert[]>([])
 
   // Fetch watchlist data
   const fetchWatchlist = useCallback(async (forceRefresh = false) => {
