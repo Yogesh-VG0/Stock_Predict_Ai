@@ -1,8 +1,9 @@
 const axios = require('axios');
 
-// Massive API configuration
-const MASSIVE_API_BASE = 'https://api.polygon.io'; // Massive uses Polygon's API structure
-const MASSIVE_API_KEY = process.env.MASSIVE_API_KEY || process.env.POLYGON_API_KEY || '';
+// Polygon API DISABLED — free tier (5 req/min) causes infinite rate-limit loops
+// with 26 stocks × 6 indicators = 156 calls needed. Using financialdata.net instead.
+const MASSIVE_API_BASE = 'https://api.polygon.io';
+const MASSIVE_API_KEY = ''; // Force disabled — use financialdata.net calculations
 
 // Cache for technical indicators (24 hour TTL since it's end-of-day data)
 const indicatorCache = new Map();
@@ -12,14 +13,18 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const historicalPriceCache = new Map();
 const HIST_CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours
 
+// In-flight request deduplication — prevents duplicate concurrent fetches
+const inFlightRequests = new Map();
+
 // Rate limiting (5 calls per minute for free tier)
 let lastRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 12000; // 12 seconds between requests (5 per minute)
+const MAX_RETRIES = 2; // Max retries on 429 to prevent infinite loops
 
 /**
- * Rate-limited request helper
+ * Rate-limited request helper (with max retry limit)
  */
-async function makeRateLimitedRequest(url) {
+async function makeRateLimitedRequest(url, retryCount = 0) {
   const now = Date.now();
   const timeSinceLastRequest = now - lastRequestTime;
   
@@ -33,10 +38,10 @@ async function makeRateLimitedRequest(url) {
     const response = await axios.get(url, { timeout: 15000 });
     return response.data;
   } catch (error) {
-    if (error.response?.status === 429) {
-      console.warn('⚠️ Massive API rate limit hit, waiting 60 seconds...');
+    if (error.response?.status === 429 && retryCount < MAX_RETRIES) {
+      console.warn(`⚠️ Massive API rate limit hit (attempt ${retryCount + 1}/${MAX_RETRIES}), waiting 60 seconds...`);
       await new Promise(resolve => setTimeout(resolve, 60000));
-      return makeRateLimitedRequest(url); // Retry
+      return makeRateLimitedRequest(url, retryCount + 1);
     }
     throw error;
   }
@@ -244,64 +249,80 @@ async function getAllIndicators(symbol) {
     return cached.data;
   }
   
+  // In-flight deduplication: if this symbol is already being fetched, reuse the promise
+  if (inFlightRequests.has(cacheKey)) {
+    console.log(`📊 Dedup: reusing in-flight request for ${symbol}`);
+    return inFlightRequests.get(cacheKey);
+  }
+  
   console.log(`📊 Fetching all technical indicators for ${symbol}...`);
   
-  try {
-    // Fetch all indicators (with rate limiting handled internally)
-    const [rsi, macd, sma20, sma50, ema12, ema26] = await Promise.all([
-      getRSI(symbol).catch(e => ({ value: null, error: e.message })),
-      getMACD(symbol).catch(e => ({ value: null, error: e.message })),
-      getSMA(symbol, 'day', 20).catch(e => ({ value: null, error: e.message })),
-      getSMA(symbol, 'day', 50).catch(e => ({ value: null, error: e.message })),
-      getEMA(symbol, 'day', 12).catch(e => ({ value: null, error: e.message })),
-      getEMA(symbol, 'day', 26).catch(e => ({ value: null, error: e.message }))
-    ]);
-    
-    const result = {
-      symbol: symbol.toUpperCase(),
-      timestamp: new Date().toISOString(),
-      indicators: {
-        rsi: {
-          value: rsi.value,
-          signal: rsi.signal || 'Neutral',
-          window: rsi.window || 14,
-          interpretation: getRSIInterpretation(rsi.value)
+  const fetchPromise = (async () => {
+    try {
+      // Fetch all indicators (with rate limiting handled internally)
+      const [rsi, macd, sma20, sma50, ema12, ema26] = await Promise.all([
+        getRSI(symbol).catch(e => ({ value: null, error: e.message })),
+        getMACD(symbol).catch(e => ({ value: null, error: e.message })),
+        getSMA(symbol, 'day', 20).catch(e => ({ value: null, error: e.message })),
+        getSMA(symbol, 'day', 50).catch(e => ({ value: null, error: e.message })),
+        getEMA(symbol, 'day', 12).catch(e => ({ value: null, error: e.message })),
+        getEMA(symbol, 'day', 26).catch(e => ({ value: null, error: e.message }))
+      ]);
+      
+      const result = {
+        symbol: symbol.toUpperCase(),
+        timestamp: new Date().toISOString(),
+        indicators: {
+          rsi: {
+            value: rsi.value,
+            signal: rsi.signal || 'Neutral',
+            window: rsi.window || 14,
+            interpretation: getRSIInterpretation(rsi.value)
+          },
+          macd: {
+            value: macd.value,
+            signal: macd.signal,
+            histogram: macd.histogram,
+            trend: macd.trend || 'Neutral',
+            interpretation: getMACDInterpretation(macd)
+          },
+          sma: {
+            sma20: sma20.value,
+            sma50: sma50.value,
+            trend: sma20.value && sma50.value ? 
+              (sma20.value > sma50.value ? 'Bullish (Golden Cross potential)' : 'Bearish (Death Cross potential)') : 
+              'Unknown'
+          },
+          ema: {
+            ema12: ema12.value,
+            ema26: ema26.value,
+            trend: ema12.value && ema26.value ?
+              (ema12.value > ema26.value ? 'Bullish' : 'Bearish') :
+              'Unknown'
+          }
         },
-        macd: {
-          value: macd.value,
-          signal: macd.signal,
-          histogram: macd.histogram,
-          trend: macd.trend || 'Neutral',
-          interpretation: getMACDInterpretation(macd)
-        },
-        sma: {
-          sma20: sma20.value,
-          sma50: sma50.value,
-          trend: sma20.value && sma50.value ? 
-            (sma20.value > sma50.value ? 'Bullish (Golden Cross potential)' : 'Bearish (Death Cross potential)') : 
-            'Unknown'
-        },
-        ema: {
-          ema12: ema12.value,
-          ema26: ema26.value,
-          trend: ema12.value && ema26.value ?
-            (ema12.value > ema26.value ? 'Bullish' : 'Bearish') :
-            'Unknown'
-        }
-      },
-      summary: generateTechnicalSummary(rsi, macd, sma20, sma50),
-      source: MASSIVE_API_KEY ? 'massive_api' : 'calculated',
-      cached: false
-    };
-    
-    // Cache for 24 hours
-    indicatorCache.set(cacheKey, { data: result, expiry: Date.now() + CACHE_TTL });
-    
-    return result;
-  } catch (error) {
-    console.error(`Error fetching indicators for ${symbol}:`, error.message);
-    throw error;
-  }
+        summary: generateTechnicalSummary(rsi, macd, sma20, sma50),
+        source: 'calculated',
+        cached: false
+      };
+      
+      // Cache for 24 hours
+      indicatorCache.set(cacheKey, { data: result, expiry: Date.now() + CACHE_TTL });
+      
+      return result;
+    } catch (error) {
+      console.error(`Error fetching indicators for ${symbol}:`, error.message);
+      throw error;
+    } finally {
+      // Remove from in-flight map once done
+      inFlightRequests.delete(cacheKey);
+    }
+  })();
+  
+  // Store the promise for deduplication
+  inFlightRequests.set(cacheKey, fetchPromise);
+  
+  return fetchPromise;
 }
 
 // Helper functions for interpretation
@@ -376,6 +397,13 @@ async function fetchHistoricalPrices(symbol) {
   if (cached && Date.now() < cached.expiry) {
     return cached.data;
   }
+  
+  // In-flight dedup for historical price fetches
+  if (inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey);
+  }
+  
+  const fetchPromise = (async () => {
   try {
     const url = `https://financialdata.net/api/v1/stock-prices?identifier=${symbol.toUpperCase()}`;
     console.log(`📊 Fetching historical prices from financialdata.net for ${symbol}...`);
@@ -392,7 +420,13 @@ async function fetchHistoricalPrices(symbol) {
   } catch (error) {
     console.warn(`⚠️ financialdata.net failed for ${symbol}: ${error.message}`);
     return null;
+  } finally {
+    inFlightRequests.delete(cacheKey);
   }
+  })();
+  
+  inFlightRequests.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 // ── Local Technical Indicator Calculations ──

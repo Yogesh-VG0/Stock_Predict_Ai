@@ -901,9 +901,9 @@ const getTechnicalIndicators = async (req, res) => {
       console.warn(`⚠️ MongoDB technical indicators lookup failed for ${upperSymbol}:`, mongoErr.message);
     }
 
-    // PRIORITY 2: Fall back to Massive API (slow but real-time)
+    // PRIORITY 2: Fall back to financialdata.net calculated indicators
     if (!indicators) {
-      console.log(`⚠️ No MongoDB indicators for ${upperSymbol}, falling back to Massive API...`);
+      console.log(`⚠️ No MongoDB indicators for ${upperSymbol}, falling back to calculated indicators...`);
       indicators = await massiveService.getAllIndicators(upperSymbol);
     }
 
