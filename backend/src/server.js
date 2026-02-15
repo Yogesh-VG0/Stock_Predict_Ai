@@ -45,6 +45,14 @@ function validateEnvironment() {
     console.log('✅ CALENDARIFIC_API_KEY: Configured');
   }
 
+  // Check financialdata.net API Key (for technical indicators)
+  if (!process.env.FINANCIALDATA_API_KEY) {
+    console.log('⚠️  FINANCIALDATA_API_KEY: Not set (indicator calculations may fail)');
+  } else {
+    const maskedKey = process.env.FINANCIALDATA_API_KEY.substring(0, 4) + '****';
+    console.log(`✅ FINANCIALDATA_API_KEY: ${maskedKey}`);
+  }
+
   console.log('');
 }
 

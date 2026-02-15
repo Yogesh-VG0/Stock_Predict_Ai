@@ -13,6 +13,9 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 const historicalPriceCache = new Map();
 const HIST_CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours
 
+// financialdata.net API key (free tier, 300 req/day)
+const FINANCIALDATA_API_KEY = process.env.FINANCIALDATA_API_KEY || '';
+
 // In-flight request deduplication — prevents duplicate concurrent fetches
 const inFlightRequests = new Map();
 
@@ -405,7 +408,8 @@ async function fetchHistoricalPrices(symbol) {
   
   const fetchPromise = (async () => {
   try {
-    const url = `https://financialdata.net/api/v1/stock-prices?identifier=${symbol.toUpperCase()}`;
+    const keyParam = FINANCIALDATA_API_KEY ? `&key=${FINANCIALDATA_API_KEY}` : '';
+    const url = `https://financialdata.net/api/v1/stock-prices?identifier=${symbol.toUpperCase()}${keyParam}`;
     console.log(`📊 Fetching historical prices from financialdata.net for ${symbol}...`);
     const response = await axios.get(url, { timeout: 15000 });
     const data = response.data;
