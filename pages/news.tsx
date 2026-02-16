@@ -246,7 +246,7 @@ export default function NewsPage() {
         transition={{ delay: 0.1 }}
         className="bg-zinc-900 rounded-lg p-4 border border-zinc-800"
       >
-        <div className="flex flex-col md:flex-row gap-4">
+        <div className="flex flex-col gap-3">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
             <input
@@ -254,7 +254,7 @@ export default function NewsPage() {
               value={tempSearchTerm}
               onChange={handleSearchChange}
               onKeyDown={handleSearchKeyPress}
-              placeholder="Search news by keyword, ticker, or company... (Press Enter to search)"
+              placeholder="Search news by keyword, ticker, or company... (Press Enter)"
               className="w-full bg-zinc-800 border border-zinc-700 rounded-md py-2 pl-9 pr-12 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
             {tempSearchTerm && (
@@ -268,13 +268,14 @@ export default function NewsPage() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="bg-zinc-800 rounded-md p-1 flex items-center">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className="text-xs text-zinc-400 shrink-0">Sentiment:</span>
+            <div className="bg-zinc-800 rounded-md p-0.5 sm:p-1 flex items-center">
               {SENTIMENTS.map((sentiment) => (
               <button
                   key={sentiment}
                   onClick={() => setSentiment(sentiment)}
-                className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs ${
+                className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-md text-[11px] sm:text-xs ${
                     activeSentiment === sentiment
                       ? sentiment === "positive"
                     ? "bg-emerald-500/20 text-emerald-500"
@@ -292,8 +293,8 @@ export default function NewsPage() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 mt-3">
-          <div className="text-xs text-zinc-400 flex items-center">Sectors:</div>
+        <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-3">
+          <div className="w-full sm:w-auto text-xs text-zinc-400 flex items-center">Sectors:</div>
           {INDUSTRIES.map((industry) => (
             <button
               key={industry}
@@ -307,8 +308,10 @@ export default function NewsPage() {
               {industry}
             </button>
           ))}
+        </div>
 
-          <div className="text-xs text-zinc-400 flex items-center ml-2">Top Tickers:</div>
+        <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
+          <div className="w-full sm:w-auto text-xs text-zinc-400 flex items-center">Top Tickers:</div>
           {TOP_TICKERS.map((ticker) => (
             <button
               key={ticker}
@@ -354,33 +357,38 @@ export default function NewsPage() {
               transition={{ delay: index * 0.05 }}
             >
               <Card className="hover:border-zinc-700 transition-colors">
-                <CardContent className="p-4">
-                  <div className="flex flex-col md:flex-row md:items-start gap-4">
-                          <div className="w-full md:w-48 flex-shrink-0 mb-2 md:mb-0">
+                <CardContent className="p-3 sm:p-4">
+                  <div className="flex flex-col md:flex-row md:items-start gap-3 sm:gap-4">
+                          <div className="w-full md:w-48 flex-shrink-0">
                             <img
                               src={item.image_url && item.image_url.trim() !== ""
                                 ? item.image_url
                                 : "/news-placeholder.jpg"}
-                              alt={item.title}
+                              alt=""
                               className="rounded-lg w-full h-32 object-cover bg-zinc-800"
-                              style={{ objectFit: "cover" }}
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                target.onerror = null;
+                                target.src = "";
+                                target.style.display = "none";
+                              }}
                             />
                           </div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <div className="text-xs text-zinc-400">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
+                        <span className="text-xs text-zinc-400">
                                 {item.published_at ? new Date(item.published_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}
-                        </div>
-                        <div className="text-xs text-zinc-400">•</div>
-                        <div className="text-xs text-zinc-400">{item.source}</div>
+                        </span>
+                        <span className="text-xs text-zinc-400">•</span>
+                        <span className="text-xs text-zinc-400 truncate max-w-[100px] sm:max-w-[180px]">{item.source}</span>
                               {providerBadge(item.provider)}
-                        <div className="flex items-center gap-1 ml-auto">
+                        <span className="flex items-center gap-1 ml-auto shrink-0">
                                 {getSentimentIcon(sentiment)}
                                 <span className="text-xs capitalize">{sentiment}</span>
-                        </div>
+                        </span>
                       </div>
-                      <h2 className="text-lg font-medium mb-2">{item.title}</h2>
-                            <p className="text-sm text-zinc-300 mb-3">{item.snippet}</p>
+                      <h2 className="text-base sm:text-lg font-medium mb-2 line-clamp-2">{item.title}</h2>
+                            <p className="text-sm text-zinc-300 mb-3 line-clamp-3">{item.snippet}</p>
                     </div>
                     <div className="flex items-center md:items-start">
                       <a
@@ -424,35 +432,38 @@ export default function NewsPage() {
                   transition={{ delay: index * 0.05 }}
                 >
                   <Card className="hover:border-zinc-700 transition-colors">
-                    <CardContent className="p-4">
-                      <div className="flex flex-col md:flex-row md:items-start gap-4">
-                        {item.image_url && item.image_url.trim() !== "" && (
-                          <div className="w-full md:w-48 flex-shrink-0 mb-2 md:mb-0">
+                    <CardContent className="p-3 sm:p-4">
+                      <div className="flex flex-col md:flex-row md:items-start gap-3 sm:gap-4">
+                        {item.image_url && item.image_url.trim() !== "" ? (
+                          <div className="w-full md:w-48 flex-shrink-0">
                             <img
                               src={item.image_url}
-                              alt={item.title}
+                              alt=""
                               className="rounded-lg w-full h-32 object-cover bg-zinc-800"
-                              style={{ objectFit: "cover" }}
                               onError={(e) => {
-                                e.currentTarget.src = "/news-placeholder.jpg";
+                                const target = e.currentTarget;
+                                target.onerror = null;
+                                target.src = "";
+                                target.style.display = "none";
+                                if (target.parentElement) target.parentElement.style.display = "none";
                               }}
                             />
                           </div>
-                        )}
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <div className="text-xs text-zinc-400">
+                        ) : null}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 sm:gap-2 mb-1 flex-wrap">
+                            <span className="text-xs text-zinc-400">
                               {new Date(item.published_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                            </div>
-                            <div className="text-xs text-zinc-400">•</div>
-                            <div className="text-xs text-zinc-400">{item.source}</div>
+                            </span>
+                            <span className="text-xs text-zinc-400">•</span>
+                            <span className="text-xs text-zinc-400 truncate max-w-[100px] sm:max-w-[180px]">{item.source}</span>
                             {providerBadge(item.provider)}
-                            <div className="flex items-center gap-1 ml-auto">
+                            <span className="flex items-center gap-1 ml-auto shrink-0">
                               {getSentimentIcon(sentiment)}
                               <span className="text-xs capitalize">{sentiment}</span>
-                            </div>
+                            </span>
                           </div>
-                          <h2 className="text-lg font-medium mb-2">{item.title}</h2>
+                          <h2 className="text-base sm:text-lg font-medium mb-2 line-clamp-2">{item.title}</h2>
                           <p className="text-sm text-zinc-300 mb-3">
                             {item.provider === "tickertick" ? truncate(item.snippet) : item.snippet}
                           </p>

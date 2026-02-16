@@ -415,18 +415,18 @@ export default function StockDetail({ }: StockDetailProps) {
           </button>
         </form>
 
-        <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto pb-2 scrollbar-hide -mx-1 px-1">
+        <div className="flex flex-wrap gap-1.5 sm:gap-2">
           {trackedStocks.slice(0, 8).map((symbol) => (
             <button
               key={symbol}
               onClick={() => setSelectedStock(symbol)}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors whitespace-nowrap ${selectedStock === symbol ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"
+              className={`flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${selectedStock === symbol ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"
                 }`}
             >
               <img
                 src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
                 alt={symbol}
-                className="h-4 w-4 object-contain rounded-sm"
+                className="h-3.5 w-3.5 sm:h-4 sm:w-4 object-contain rounded-sm"
                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
               />
               {symbol}
@@ -459,14 +459,14 @@ export default function StockDetail({ }: StockDetailProps) {
             />
           </div>
           <div>
-            <h1 className="text-lg sm:text-2xl font-bold flex items-center gap-2 flex-wrap">
-              <span className="truncate max-w-[200px] sm:max-w-none">{stockData.name}</span>
-              <span className="text-sm sm:text-lg text-zinc-400">({selectedStock})</span>
+            <h1 className="text-base sm:text-2xl font-bold flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
+              <span className="truncate max-w-[160px] sm:max-w-[280px] md:max-w-none">{stockData.name}</span>
+              <span className="text-xs sm:text-lg text-zinc-400 shrink-0">({selectedStock})</span>
             </h1>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-zinc-400">{stockData.sector}</span>
+            <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm flex-wrap">
+              <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stockData.sector}</span>
               <span className="text-zinc-600">•</span>
-              <span className="text-zinc-400">{stockData.industry}</span>
+              <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stockData.industry}</span>
             </div>
           </div>
         </div>

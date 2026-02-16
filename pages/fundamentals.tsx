@@ -35,26 +35,25 @@ export default function FundamentalsPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-3">
         <div className="space-y-2">
           <motion.h1
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="text-2xl font-bold flex items-center gap-2"
+            className="text-xl sm:text-2xl font-bold flex items-center gap-2"
           >
-            <BarChart3 className="h-6 w-6 text-emerald-500" />
+            <BarChart3 className="h-5 w-5 sm:h-6 sm:w-6 text-emerald-500" />
             Fundamentals & Filings
           </motion.h1>
-          <p className="text-xs md:text-sm text-zinc-400 max-w-xl">
+          <p className="text-xs sm:text-sm text-zinc-400 max-w-xl">
             Deep-dive into a symbol using fundamentals, SEC filings, and press releases widgets powered by Jika.io.
-            This page is independent from the core AI and real-time views.
           </p>
         </div>
 
         {/* Symbol selector */}
-        <div className="flex flex-col items-start gap-2 md:items-end">
+        <div className="flex flex-col gap-2">
           <form
-            className="flex w-full items-center gap-2 md:w-auto"
+            className="flex w-full items-center gap-2"
             onSubmit={(e) => {
               e.preventDefault()
               const value = customSymbol.trim().toUpperCase()
@@ -63,10 +62,10 @@ export default function FundamentalsPage() {
               setCustomSymbol("")
             }}
           >
-            <div className="flex flex-col gap-1">
+            <div className="flex flex-col gap-1 flex-1 sm:flex-initial">
               <label
                 htmlFor="fundamentals-symbol-input"
-                className="text-xs md:text-sm text-zinc-400"
+                className="text-xs sm:text-sm text-zinc-400"
               >
                 Symbol for widgets
               </label>
@@ -77,7 +76,7 @@ export default function FundamentalsPage() {
                   value={customSymbol}
                   onChange={(e) => setCustomSymbol(e.target.value)}
                   placeholder={symbol || "AAPL"}
-                  className="w-full md:w-32 bg-zinc-900 border border-zinc-700 text-xs md:text-sm rounded-md px-3 py-2 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  className="w-full sm:w-32 bg-zinc-900 border border-zinc-700 text-xs sm:text-sm rounded-md px-3 py-2 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
                 <button
                   type="submit"
@@ -90,8 +89,8 @@ export default function FundamentalsPage() {
           </form>
 
           {/* Quick-pick popular symbols */}
-          <div className="mt-1 flex w-full flex-wrap gap-1 justify-start md:justify-end">
-            {AVAILABLE_SYMBOLS.slice(0, 8).map((s) => (
+          <div className="flex flex-wrap gap-1">
+            {AVAILABLE_SYMBOLS.slice(0, 10).map((s) => (
               <button
                 key={s}
                 type="button"
@@ -120,7 +119,7 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white h-[520px] md:h-[460px]">
+            <div className="rounded-lg overflow-hidden bg-white h-[380px] sm:h-[520px] md:h-[460px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
@@ -148,7 +147,7 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white h-[740px] md:h-[680px]">
+            <div className="rounded-lg overflow-hidden bg-white h-[500px] sm:h-[740px] md:h-[680px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
@@ -176,7 +175,7 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white h-[260px] md:h-[230px]">
+            <div className="rounded-lg overflow-hidden bg-white h-[200px] sm:h-[260px] md:h-[230px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
@@ -204,7 +203,7 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white h-[300px] md:h-[260px]">
+            <div className="rounded-lg overflow-hidden bg-white h-[240px] sm:h-[300px] md:h-[260px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
@@ -232,7 +231,7 @@ export default function FundamentalsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-2">
-            <div className="rounded-lg overflow-hidden bg-white h-[520px] md:h-[460px]">
+            <div className="rounded-lg overflow-hidden bg-white h-[380px] sm:h-[520px] md:h-[460px]">
               <iframe
                 referrerPolicy="origin"
                 width="100%"
