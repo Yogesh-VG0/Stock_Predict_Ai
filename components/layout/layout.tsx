@@ -20,10 +20,15 @@ export default function Layout({ children }: LayoutProps) {
   const [isMobile, setIsMobile] = useState(false)
   const pathname = usePathname()
 
-  // Pre-fetch stock data for priority stocks in the background
+  // Landing page renders its own full-screen layout (no sidebar/navbar)
+  const isLandingPage = pathname === "/"
+
+  // Pre-fetch stock data for priority stocks in the background (skip on landing)
   usePrefetch()
 
   useEffect(() => {
+    if (isLandingPage) return
+
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768)
       if (window.innerWidth < 768) {
@@ -36,7 +41,12 @@ export default function Layout({ children }: LayoutProps) {
     checkMobile()
     window.addEventListener("resize", checkMobile)
     return () => window.removeEventListener("resize", checkMobile)
-  }, [])
+  }, [isLandingPage])
+
+  // Landing page: render children directly (no sidebar, no navbar, no ticker tape)
+  if (isLandingPage) {
+    return <>{children}</>
+  }
 
   return (
     <SidebarProvider defaultOpen={!isMobile}>

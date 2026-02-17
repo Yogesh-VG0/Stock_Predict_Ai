@@ -1,7 +1,7 @@
 "use client"
 
-import HomePage from "@/views/home"
+import LandingPage from "@/views/landing"
 
 export default function Page() {
-  return <HomePage />
+  return <LandingPage />
 }
