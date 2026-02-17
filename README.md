@@ -11,7 +11,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-ML%20API-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![LightGBM](https://img.shields.io/badge/LightGBM-Predictor-FFCC00?style=flat-square)](https://lightgbm.readthedocs.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
-[![GitHub last commit](https://img.shields.io/github/last-commit/Yogesh-VG0/stockpredict-ai?style=flat-square)](https://github.com/Yogesh-VG0/stockpredict-ai)
+[![GitHub last commit](https://img.shields.io/github/last-commit/Yogesh-VG0/Stock_Predict_Ai?style=flat-square)](https://github.com/Yogesh-VG0/Stock_Predict_Ai)
 
 ---
 
@@ -99,7 +99,7 @@ Runs nightly via GitHub Actions (~6:15 PM ET):
 **Prerequisites:** Node.js 18+, Python 3.11+, MongoDB Atlas, API keys (Finnhub, FMP, FRED, Google Gemini, etc.)
 
 ```bash
-git clone https://github.com/Yogesh-VG0/stockpredict-ai.git
+git clone https://github.com/Yogesh-VG0/Stock_Predict_Ai.git
 cd stockpredict-ai
 npm install
 ```
