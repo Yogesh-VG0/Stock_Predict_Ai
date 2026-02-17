@@ -263,6 +263,15 @@ jobs:
           python -m ml_backend.scripts.drift_monitor \
             | tee drift_report.txt || echo "Drift monitor failed (non-fatal)"
 
+      - name: Data retention cleanup (remove data older than 12 months)
+        env:
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "===== Running data retention cleanup ====="
+          python -m ml_backend.scripts.data_retention \
+            | tee retention_report.txt || echo "Retention cleanup failed (non-fatal)"
+
       - name: Upload logs/artifacts (always)
         if: always()
         uses: actions/upload-artifact@v4
@@ -273,4 +282,5 @@ jobs:
             **/*.log
             eval_report.txt
             drift_report.txt
+            retention_report.txt
           if-no-files-found: ignore

@@ -5,6 +5,7 @@ import "./globals.css"
 import { WebSocketProvider } from "@/hooks/use-websocket-context"
 import { Analytics } from "@vercel/analytics/next"
 import { SpeedInsights } from "@vercel/speed-insights/next"
+import Layout from "@/components/layout/layout"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -26,7 +27,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className} suppressHydrationWarning>
         <WebSocketProvider>
-          {children}
+          <Layout>{children}</Layout>
         </WebSocketProvider>
         <Analytics />
         <SpeedInsights />

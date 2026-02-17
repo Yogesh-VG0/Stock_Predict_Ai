@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useNavigate } from "react-router-dom"
+import { useRouter } from "next/navigation"
 import { motion } from "framer-motion"
 import { TrendingUp, TrendingDown, Brain, Calendar, Target, Sparkles, Loader2, AlertCircle } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -36,7 +36,7 @@ const COMPANY_NAMES: Record<string, string> = {
 }
 
 export default function Predictions() {
-  const navigate = useNavigate()
+  const router = useRouter()
   const [selectedTimeframe, setSelectedTimeframe] = useState<'1_day' | '7_day' | '30_day'>('7_day')
   const [stocksWithExplanations, setStocksWithExplanations] = useState<string[]>([])
   const [batchStatus, setBatchStatus] = useState<any>(null)
@@ -339,7 +339,7 @@ export default function Predictions() {
                         size="sm"
                         variant="outline"
                         className="w-full group-hover:bg-purple-600 group-hover:text-white transition-colors"
-                        onClick={() => navigate(`/stock/${stock.symbol}`)}
+                        onClick={() => router.push(`/stocks/${stock.symbol}`)}
                       >
                         View Comprehensive Analysis
                       </Button>

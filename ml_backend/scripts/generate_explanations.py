@@ -47,6 +47,55 @@ TOP_100_TICKERS: List[str] = [
     "LIN", "NEE", "SO", "DUK", "AMT", "SPG", "PLTR", "TMUS", "PM", "AMAT",
 ]
 
+# ── Human-readable feature name mapping ──
+FEATURE_DISPLAY_NAMES = {
+    "macro_spread_2y10y": "Treasury yield curve (2Y-10Y spread)",
+    "macro_fed_funds": "Federal funds rate",
+    "spy_vol_20d": "S&P 500 volatility (20-day)",
+    "spy_vol_regime": "S&P 500 volatility regime",
+    "sector_etf_vol_20d": "Sector ETF volatility (20-day)",
+    "sector_etf_return_20d": "Sector ETF return (20-day)",
+    "sector_etf_return_60d": "Sector ETF return (60-day)",
+    "sector_momentum_rank": "Sector momentum ranking",
+    "vix_level": "VIX fear index level",
+    "vix_vol_20d": "VIX volatility (20-day)",
+    "vol_regime": "Volatility regime",
+    "volatility_20d": "Stock volatility (20-day)",
+    "price_vs_sma20": "Price vs 20-day moving average",
+    "price_vs_sma50": "Price vs 50-day moving average",
+    "rsi": "RSI (relative strength index)",
+    "rsi_divergence": "RSI divergence signal",
+    "bb_position": "Bollinger Band position",
+    "log_return_1d": "1-day return",
+    "log_return_5d": "5-day return",
+    "log_return_21d": "21-day return",
+    "trend_20d": "20-day price trend",
+    "momentum_5d": "5-day momentum",
+    "intraday_range": "Intraday price range",
+    "overnight_gap": "Overnight gap",
+    "volume_ratio": "Volume vs average ratio",
+    "volume_z60": "Volume z-score (60-day)",
+    "volume_vol_ratio": "Volume volatility ratio",
+    "excess_vs_sector_5d": "Excess return vs sector (5-day)",
+    "excess_vs_sector_20d": "Excess return vs sector (20-day)",
+    "ticker_id": "Stock-specific factor",
+    "sector_id": "Sector factor",
+    "sent_mean_1d": "News sentiment (1-day)",
+    "sent_mean_7d": "News sentiment (7-day avg)",
+    "sent_mean_30d": "News sentiment (30-day avg)",
+    "sent_momentum": "Sentiment momentum shift",
+    "news_count_7d": "News volume (7-day)",
+    "news_spike_1d": "Unusual news activity",
+    "insider_net_value_30d": "Insider net trading (30-day)",
+    "insider_buy_ratio_30d": "Insider buy ratio (30-day)",
+    "insider_cluster_buying": "Insider cluster buying signal",
+}
+
+
+def _friendly_feature_name(raw: str) -> str:
+    """Convert raw feature name to human-readable name."""
+    return FEATURE_DISPLAY_NAMES.get(raw, raw.replace("_", " ").title())
+
 
 # ── Technical indicator calculator (standalone, no FastAPI dependency) ──
 def calculate_technicals(df: pd.DataFrame) -> Dict:
@@ -78,7 +127,18 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
 
         # SMAs
         sma50 = close.rolling(50).mean().iloc[-1] if len(close) >= 50 else None
+        sma200 = close.rolling(200).mean().iloc[-1] if len(close) >= 200 else None
         vol_sma = volume.rolling(20).mean().iloc[-1]
+
+        # Price performance
+        close_now = float(close.iloc[-1])
+        perf_1w = float((close_now / close.iloc[-5] - 1) * 100) if len(close) >= 5 else None
+        perf_1m = float((close_now / close.iloc[-21] - 1) * 100) if len(close) >= 21 else None
+        perf_3m = float((close_now / close.iloc[-63] - 1) * 100) if len(close) >= 63 else None
+
+        # 52-week high/low
+        high_52w = float(high.iloc[-252:].max()) if len(high) >= 252 else float(high.max())
+        low_52w = float(low.iloc[-252:].min()) if len(low) >= 252 else float(low.min())
 
         return {
             "RSI": float(rsi),
@@ -88,11 +148,17 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
             "Bollinger_Lower": float((sma20 - 2 * std20).iloc[-1]),
             "SMA_20": float(sma20.iloc[-1]),
             "SMA_50": float(sma50) if sma50 is not None else None,
+            "SMA_200": float(sma200) if sma200 is not None else None,
             "EMA_12": float(ema12.iloc[-1]),
             "EMA_26": float(ema26.iloc[-1]),
-            "Close": float(close.iloc[-1]),
+            "Close": close_now,
             "Volume": float(volume.iloc[-1]),
             "Volume_SMA": float(vol_sma),
+            "Perf_1W": perf_1w,
+            "Perf_1M": perf_1m,
+            "Perf_3M": perf_3m,
+            "High_52W": high_52w,
+            "Low_52W": low_52w,
         }
     except Exception as e:
         logger.warning("Technicals failed: %s", e)
@@ -119,7 +185,7 @@ def _call_gemini(prompt: str, ticker: str) -> str:
             model=GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=1000)
+                thinking_config=types.ThinkingConfig(thinking_budget=2000)
             ),
         )
         if response and response.text:
@@ -131,6 +197,170 @@ def _call_gemini(prompt: str, ticker: str) -> str:
         return f"AI explanation unavailable: {e}"
 
 
+def _get_macro_context(mongo) -> Dict:
+    """Fetch the latest macro economic indicators from MongoDB.
+
+    The macro_data_raw collection stores documents in a flat format where
+    date strings are keys: {"indicator": "RETAIL_SALES", "source": "FRED",
+    "2024-01-01": 539834, "2024-02-01": 544169, ...}.
+    We also check the macro_data collection which may use a similar schema.
+    """
+    macro_context = {}
+    try:
+        # Try both collections
+        for coll_name in ("macro_data_raw", "macro_data"):
+            try:
+                coll = mongo.db[coll_name]
+            except Exception:
+                continue
+
+            indicators = ["FEDERAL_FUNDS_RATE", "CPI", "UNEMPLOYMENT", "NONFARM_PAYROLL",
+                          "RETAIL_SALES", "TREASURY_10Y", "TREASURY_2Y", "GDP"]
+            for indicator in indicators:
+                if indicator in macro_context:
+                    continue
+                try:
+                    doc = coll.find_one({"indicator": indicator}, sort=[("_id", -1)])
+                    if not doc:
+                        continue
+                    # Extract date-keyed numeric fields
+                    date_fields = {}
+                    for k, v in doc.items():
+                        if k in ("_id", "indicator", "source", "date", "processed"):
+                            continue
+                        if isinstance(v, (int, float)):
+                            date_fields[k] = v
+                    if date_fields:
+                        latest_date = max(date_fields.keys())
+                        macro_context[indicator] = {"value": date_fields[latest_date], "date": latest_date}
+                except Exception:
+                    pass
+    except Exception as e:
+        logger.warning("Macro context fetch failed: %s", e)
+    return macro_context
+
+
+def _get_insider_context(mongo, ticker: str) -> Dict:
+    """Fetch recent insider trading activity from MongoDB."""
+    insider_ctx = {}
+    try:
+        coll = mongo.db["insider_transactions"]
+        recent = list(coll.find(
+            {"symbol": ticker},
+            {"filingDate": 1, "transactionCode": 1, "change": 1, "name": 1,
+             "transactionPrice": 1, "share": 1, "_id": 0}
+        ).sort("filingDate", -1).limit(10))
+        if recent:
+            buys = [t for t in recent if t.get("transactionCode", "").upper() in ("P", "M", "A")]
+            sells = [t for t in recent if t.get("transactionCode", "").upper() in ("S", "D")]
+            insider_ctx = {
+                "recent_transactions": len(recent),
+                "buys": len(buys),
+                "sells": len(sells),
+                "latest_transactions": recent[:5],
+            }
+    except Exception as e:
+        logger.warning("Insider context fetch failed for %s: %s", ticker, e)
+    return insider_ctx
+
+
+def _get_short_interest_context(mongo, ticker: str) -> Dict:
+    """Fetch short interest data from the dedicated collection first, then sentiment."""
+    short_ctx = {}
+    try:
+        # Try direct short_interest_data collection first (more granular)
+        si_col = mongo.db.get_collection("short_interest_data")
+        if si_col is not None:
+            latest = si_col.find_one({"ticker": ticker.upper()}, sort=[("fetched_at", -1)])
+            if latest:
+                short_ctx = {
+                    "short_float_pct": latest.get("short_float_pct", latest.get("shortFloatPct", 0)),
+                    "days_to_cover": latest.get("daysToCover", latest.get("days_to_cover", 0)),
+                    "short_interest": latest.get("short_interest", latest.get("interest", 0)),
+                    "settlement_date": latest.get("settlementDate", ""),
+                }
+        # Fallback to sentiment collection
+        if not short_ctx:
+            sent = mongo.get_latest_sentiment(ticker) or {}
+            sources = sent.get("sources", {})
+            si_data = sources.get("short_interest", {})
+            if isinstance(si_data, dict) and si_data:
+                short_ctx = {
+                    "short_float_pct": si_data.get("short_float_percentage", 0),
+                    "days_to_cover": si_data.get("days_to_cover", 0),
+                    "sentiment_score": si_data.get("score", 0),
+                }
+    except Exception as e:
+        logger.warning("Short interest context failed for %s: %s", ticker, e)
+    return short_ctx
+
+
+def _get_financials_context(mongo, ticker: str) -> Dict:
+    """Fetch Finnhub basic financials (P/E, margins, etc.) from MongoDB."""
+    fin_ctx = {}
+    try:
+        col = mongo.db.get_collection("finnhub_basic_financials")
+        if col is not None:
+            doc = col.find_one({"ticker": ticker.upper()}, sort=[("fetched_at", -1)])
+            if not doc:
+                doc = col.find_one({"ticker": ticker.upper()})
+            if doc and isinstance(doc.get("data"), dict):
+                metric = doc["data"].get("metric", doc["data"])
+                fin_ctx = {
+                    "pe_ratio": metric.get("peBasicExclExtraTTM") or metric.get("peTTM"),
+                    "pb_ratio": metric.get("pbAnnual") or metric.get("pbQuarterly"),
+                    "dividend_yield": metric.get("dividendYieldIndicatedAnnual"),
+                    "roe": metric.get("roeTTM"),
+                    "market_cap": metric.get("marketCapitalization"),
+                    "52w_high": metric.get("52WeekHigh"),
+                    "52w_low": metric.get("52WeekLow"),
+                    "beta": metric.get("beta"),
+                }
+                fin_ctx = {k: v for k, v in fin_ctx.items() if v is not None}
+    except Exception as e:
+        logger.warning("Financials context failed for %s: %s", ticker, e)
+    return fin_ctx
+
+
+def _get_fmp_context(mongo, ticker: str) -> Dict:
+    """Fetch FMP earnings, ratings, and price target data from MongoDB."""
+    fmp_ctx = {}
+    try:
+        col = mongo.db.get_collection("alpha_vantage_data")
+        if col is None:
+            return fmp_ctx
+
+        # Earnings
+        earnings_doc = col.find_one({"ticker": ticker.upper(), "endpoint": "fmp_earnings"}, sort=[("timestamp", -1)])
+        if earnings_doc and isinstance(earnings_doc.get("data"), list) and earnings_doc["data"]:
+            latest_e = earnings_doc["data"][0]
+            fmp_ctx["latest_earnings"] = {
+                "eps_actual": latest_e.get("eps"),
+                "eps_estimated": latest_e.get("epsEstimated"),
+                "revenue": latest_e.get("revenue"),
+                "date": latest_e.get("date"),
+            }
+            if latest_e.get("eps") and latest_e.get("epsEstimated"):
+                fmp_ctx["earnings_surprise"] = latest_e["eps"] - latest_e["epsEstimated"]
+
+        # Ratings
+        rating_doc = col.find_one({"ticker": ticker.upper(), "endpoint": "fmp_ratings-snapshot"}, sort=[("timestamp", -1)])
+        if rating_doc and isinstance(rating_doc.get("data"), list) and rating_doc["data"]:
+            rd = rating_doc["data"][0]
+            fmp_ctx["rating_score"] = rd.get("ratingScore")
+            fmp_ctx["rating_recommendation"] = rd.get("ratingRecommendation")
+
+        # Price target
+        pt_doc = col.find_one({"ticker": ticker.upper(), "endpoint": "fmp_price-target-summary"}, sort=[("timestamp", -1)])
+        if pt_doc and isinstance(pt_doc.get("data"), list) and pt_doc["data"]:
+            pt = pt_doc["data"][0]
+            fmp_ctx["analyst_avg_target"] = pt.get("lastYearAvgPriceTarget")
+            fmp_ctx["analyst_count"] = pt.get("lastYearCount")
+    except Exception as e:
+        logger.warning("FMP context failed for %s: %s", ticker, e)
+    return fmp_ctx
+
+
 def _build_prompt(
     ticker: str,
     date: str,
@@ -138,98 +368,314 @@ def _build_prompt(
     sentiment: Dict,
     technicals: Dict,
     shap_data: Optional[Dict],
+    macro_context: Optional[Dict] = None,
+    insider_context: Optional[Dict] = None,
+    short_interest: Optional[Dict] = None,
+    financials_context: Optional[Dict] = None,
+    fmp_context: Optional[Dict] = None,
 ) -> str:
-    """Build a concise explanation prompt."""
+    """Build a comprehensive explanation prompt using all available data."""
     sections = []
 
-    # ── Predictions ──
+    # ── 1. PRICE & PREDICTION OVERVIEW ──
+    current_price = None
     pred_lines = []
-    for window in ("next_day", "7_day", "30_day"):
+    for window, label in [("next_day", "Next Day"), ("7_day", "1 Week"), ("30_day", "1 Month")]:
         pd_ = predictions.get(window, {})
         if isinstance(pd_, dict) and pd_:
-            pred_lines.append(
-                f"  {window}: price=${pd_.get('predicted_price', 'N/A')}, "
-                f"change={pd_.get('price_change', 0):.2f}%, "
-                f"confidence={pd_.get('confidence', 0):.2f}"
-            )
-    sections.append(f"PREDICTION DATA FOR {ticker} ON {date}:\n" + "\n".join(pred_lines))
+            cp = pd_.get("current_price", 0)
+            if cp and not current_price:
+                current_price = cp
+            pp = pd_.get("predicted_price", 0)
+            pc = pd_.get("price_change", 0)
+            conf = pd_.get("confidence", 0)
+            prob_up = pd_.get("prob_positive", pd_.get("prob_up", 0))
+            alpha = pd_.get("alpha_pct", 0)
+            pr = pd_.get("price_range", {})
+            trade_rec = pd_.get("trade_recommended", 0)
 
-    # ── Sentiment ──
+            line = f"  {label}: predicted ${pp:.2f}"
+            if pc:
+                line += f" (change ${pc:+.2f})"
+            if alpha:
+                line += f", alpha vs SPY: {alpha:+.2f}%"
+            line += f", confidence: {conf:.1%}, prob up: {prob_up:.1%}"
+            if pr:
+                line += f", range: ${pr.get('low', 0):.2f}-${pr.get('high', 0):.2f}"
+            if trade_rec:
+                line += " [TRADE RECOMMENDED]"
+            pred_lines.append(line)
+
+    header = f"STOCK: {ticker} | Current Price: ${current_price:.2f}" if current_price else f"STOCK: {ticker}"
+    header += f" | Date: {date}"
+    sections.append(header + "\n\nML PRICE PREDICTIONS:\n" + "\n".join(pred_lines))
+
+    # ── 2. TECHNICAL ANALYSIS ──
+    if technicals:
+        rsi = technicals.get("RSI")
+        macd = technicals.get("MACD")
+        macd_sig = technicals.get("MACD_Signal")
+        bb_upper = technicals.get("Bollinger_Upper")
+        bb_lower = technicals.get("Bollinger_Lower")
+        sma20 = technicals.get("SMA_20")
+        sma50 = technicals.get("SMA_50")
+        sma200 = technicals.get("SMA_200")
+        close = technicals.get("Close", current_price or 0)
+        vol = technicals.get("Volume", 0)
+        vol_sma = technicals.get("Volume_SMA", 0)
+        perf_1w = technicals.get("Perf_1W")
+        perf_1m = technicals.get("Perf_1M")
+        perf_3m = technicals.get("Perf_3M")
+        high_52w = technicals.get("High_52W")
+        low_52w = technicals.get("Low_52W")
+
+        tech_lines = ["TECHNICAL ANALYSIS:"]
+        if rsi is not None:
+            rsi_label = "overbought" if rsi > 70 else "oversold" if rsi < 30 else "neutral"
+            tech_lines.append(f"  RSI: {rsi:.1f} ({rsi_label})")
+        if macd is not None and macd_sig is not None:
+            macd_cross = "bullish crossover" if macd > macd_sig else "bearish crossunder"
+            tech_lines.append(f"  MACD: {macd:.2f} vs Signal {macd_sig:.2f} ({macd_cross})")
+        if sma20 and close:
+            pct_from_sma20 = ((close / sma20) - 1) * 100
+            tech_lines.append(f"  Price vs SMA-20: {pct_from_sma20:+.1f}% ({'above' if pct_from_sma20 > 0 else 'below'})")
+        if sma50 and close:
+            pct_from_sma50 = ((close / sma50) - 1) * 100
+            tech_lines.append(f"  Price vs SMA-50: {pct_from_sma50:+.1f}% ({'above' if pct_from_sma50 > 0 else 'below'})")
+        if sma200 and close:
+            pct_from_sma200 = ((close / sma200) - 1) * 100
+            tech_lines.append(f"  Price vs SMA-200: {pct_from_sma200:+.1f}% ({'above' if pct_from_sma200 > 0 else 'below'})")
+        if bb_upper and bb_lower and close:
+            bb_width_pct = ((bb_upper - bb_lower) / close) * 100
+            bb_pos = "near upper band (potential resistance)" if close > (bb_upper - (bb_upper - bb_lower) * 0.2) else \
+                     "near lower band (potential support)" if close < (bb_lower + (bb_upper - bb_lower) * 0.2) else "mid-range"
+            tech_lines.append(f"  Bollinger Bands: ${bb_lower:.2f} - ${bb_upper:.2f} ({bb_pos}, width {bb_width_pct:.1f}%)")
+        if vol and vol_sma:
+            vol_ratio = vol / vol_sma if vol_sma > 0 else 1
+            vol_label = "above average" if vol_ratio > 1.2 else "below average" if vol_ratio < 0.8 else "normal"
+            tech_lines.append(f"  Volume: {vol:,.0f} vs avg {vol_sma:,.0f} ({vol_label}, {vol_ratio:.1f}x)")
+
+        perf_parts = []
+        if perf_1w is not None:
+            perf_parts.append(f"1W: {perf_1w:+.1f}%")
+        if perf_1m is not None:
+            perf_parts.append(f"1M: {perf_1m:+.1f}%")
+        if perf_3m is not None:
+            perf_parts.append(f"3M: {perf_3m:+.1f}%")
+        if perf_parts:
+            tech_lines.append(f"  Recent Performance: {', '.join(perf_parts)}")
+        if high_52w and low_52w and close:
+            pct_from_high = ((close / high_52w) - 1) * 100
+            pct_from_low = ((close / low_52w) - 1) * 100
+            tech_lines.append(f"  52-Week Range: ${low_52w:.2f} - ${high_52w:.2f} ({pct_from_high:+.1f}% from high, {pct_from_low:+.1f}% from low)")
+
+        sections.append("\n".join(tech_lines))
+
+    # ── 3. SENTIMENT & NEWS ──
     blended = sentiment.get("blended_sentiment", 0)
     sources = sentiment.get("sources", {})
-    source_lines = []
-    for src, data in sources.items():
-        if isinstance(data, dict):
-            source_lines.append(f"  {src}: score={data.get('score', 0):.3f}, volume={data.get('volume', 0)}")
-    sections.append(f"SENTIMENT (blended={blended:.3f}):\n" + "\n".join(source_lines))
+    sent_lines = ["NEWS & SENTIMENT:"]
+    sent_lines.append(f"  Overall sentiment score: {blended:.3f} ({'bullish' if blended > 0.1 else 'bearish' if blended < -0.1 else 'neutral'})")
 
-    # ── Recent News Headlines ──
-    news_lines = []
-    # Extract from finviz raw data (list of headline strings)
+    for src, data in sources.items():
+        if isinstance(data, dict) and data.get("volume", 0) > 0:
+            sent_lines.append(f"  {src}: score={data.get('score', 0):.3f}, articles/posts={data.get('volume', 0)}")
+
+    # News headlines
+    news_headlines = []
     finviz_headlines = sentiment.get("finviz_raw_data", [])
     if isinstance(finviz_headlines, list):
         for h in finviz_headlines[:5]:
             if isinstance(h, str) and h.strip():
-                news_lines.append(f"  - {h.strip()}")
-    # Extract from RSS news raw data (list of dicts with "title")
+                news_headlines.append(h.strip())
+            elif isinstance(h, dict) and h.get("title"):
+                news_headlines.append(h["title"].strip())
     rss_news = sentiment.get("rss_news_raw_data", [])
     if isinstance(rss_news, list):
         for item in rss_news[:5]:
             title = item.get("title", "") if isinstance(item, dict) else str(item)
-            if title.strip() and title.strip() not in [l.strip().lstrip("- ") for l in news_lines]:
-                news_lines.append(f"  - {title.strip()}")
-    # Extract from reddit raw data
+            if title.strip() and title.strip() not in news_headlines:
+                news_headlines.append(title.strip())
     reddit_posts = sentiment.get("reddit_raw_data", [])
     if isinstance(reddit_posts, list):
         for item in reddit_posts[:3]:
             title = item.get("title", "") if isinstance(item, dict) else str(item)
             if title.strip():
-                news_lines.append(f"  - [Reddit] {title.strip()}")
+                news_headlines.append(f"[Reddit] {title.strip()}")
+    marketaux = sentiment.get("marketaux_raw_data", [])
+    if isinstance(marketaux, list):
+        for item in marketaux[:3]:
+            title = item.get("title", "") if isinstance(item, dict) else str(item)
+            if title.strip() and title.strip() not in news_headlines:
+                news_headlines.append(title.strip())
 
-    if news_lines:
-        sections.append("RECENT NEWS HEADLINES:\n" + "\n".join(news_lines[:10]))
+    if news_headlines:
+        sent_lines.append("  Recent headlines:")
+        for h in news_headlines[:8]:
+            sent_lines.append(f"    - {h}")
+    else:
+        sent_lines.append("  No recent news headlines available.")
 
-    # ── Technicals ──
-    if technicals:
-        tech_lines = [f"  {k}: {v}" for k, v in technicals.items() if v is not None]
-        sections.append("TECHNICAL INDICATORS:\n" + "\n".join(tech_lines))
+    sections.append("\n".join(sent_lines))
 
-    # ── SHAP ──
+    # ── 4. ML MODEL DRIVERS (SHAP) ──
     if shap_data:
         pos = shap_data.get("top_positive_contrib", [])
         neg = shap_data.get("top_negative_contrib", [])
-        shap_lines = ["FEATURE IMPORTANCE (SHAP):"]
+        global_imp = shap_data.get("global_gain_importance", [])
+        shap_lines = ["ML MODEL KEY DRIVERS (what's influencing the prediction):"]
+
         if pos:
-            shap_lines.append("  Bullish drivers: " + ", ".join(
-                f"{f.get('feature', '?')} (+{f.get('contrib', 0):.4f})" for f in pos[:5]
-            ))
+            shap_lines.append("  Bullish factors pushing price UP:")
+            for f in pos[:6]:
+                fname = _friendly_feature_name(f.get("feature", "?"))
+                contrib = f.get("contrib", 0)
+                value = f.get("value")
+                line = f"    + {fname} (impact: {contrib:+.4f})"
+                if value is not None:
+                    line += f" [current value: {value:.4f}]" if isinstance(value, float) else f" [value: {value}]"
+                shap_lines.append(line)
         if neg:
-            shap_lines.append("  Bearish drivers: " + ", ".join(
-                f"{f.get('feature', '?')} ({f.get('contrib', 0):.4f})" for f in neg[:5]
-            ))
+            shap_lines.append("  Bearish factors pushing price DOWN:")
+            for f in neg[:6]:
+                fname = _friendly_feature_name(f.get("feature", "?"))
+                contrib = f.get("contrib", 0)
+                value = f.get("value")
+                line = f"    - {fname} (impact: {contrib:+.4f})"
+                if value is not None:
+                    line += f" [current value: {value:.4f}]" if isinstance(value, float) else f" [value: {value}]"
+                shap_lines.append(line)
+
+        if global_imp:
+            top_global = [g for g in global_imp[:5] if g.get("gain_pct", 0) > 0]
+            if top_global:
+                shap_lines.append("  Most important features overall:")
+                for g in top_global:
+                    fname = _friendly_feature_name(g.get("feature", "?"))
+                    shap_lines.append(f"    {fname}: {g.get('gain_pct', 0):.1f}% importance")
+
         sections.append("\n".join(shap_lines))
 
-    # ── Instructions ──
+    # ── 5. MACRO ECONOMIC CONTEXT ──
+    if macro_context:
+        macro_lines = ["MACRO ECONOMIC CONTEXT:"]
+        display_map = {
+            "FEDERAL_FUNDS_RATE": "Fed Funds Rate",
+            "CPI": "CPI (Consumer Price Index)",
+            "UNEMPLOYMENT": "Unemployment Rate",
+            "NONFARM_PAYROLL": "Nonfarm Payrolls",
+            "RETAIL_SALES": "Retail Sales",
+            "TREASURY_10Y": "10-Year Treasury Yield",
+            "TREASURY_2Y": "2-Year Treasury Yield",
+            "GDP": "GDP",
+        }
+        for key, info in macro_context.items():
+            name = display_map.get(key, key)
+            macro_lines.append(f"  {name}: {info['value']:,.2f} (as of {info['date']})")
+        if "TREASURY_10Y" in macro_context and "TREASURY_2Y" in macro_context:
+            spread = macro_context["TREASURY_10Y"]["value"] - macro_context["TREASURY_2Y"]["value"]
+            inversion = " (INVERTED - recession signal)" if spread < 0 else ""
+            macro_lines.append(f"  Yield Curve Spread (10Y-2Y): {spread:+.2f}%{inversion}")
+        sections.append("\n".join(macro_lines))
+
+    # ── 6. INSIDER TRADING ──
+    if insider_context and insider_context.get("recent_transactions", 0) > 0:
+        ins_lines = ["INSIDER TRADING (recent 90 days):"]
+        ins_lines.append(f"  Total transactions: {insider_context['recent_transactions']}")
+        ins_lines.append(f"  Buys: {insider_context.get('buys', 0)}, Sells: {insider_context.get('sells', 0)}")
+        ratio_text = "net buying" if insider_context.get("buys", 0) > insider_context.get("sells", 0) else \
+                     "net selling" if insider_context.get("sells", 0) > insider_context.get("buys", 0) else "balanced"
+        ins_lines.append(f"  Pattern: {ratio_text}")
+        for txn in insider_context.get("latest_transactions", [])[:3]:
+            code = txn.get("transactionCode", "?")
+            action = "BUY" if code.upper() in ("P", "M", "A") else "SELL" if code.upper() in ("S", "D") else code
+            name = txn.get("name", "Unknown")
+            change = txn.get("change", 0)
+            price = txn.get("transactionPrice", 0)
+            date_str = txn.get("filingDate", "")
+            ins_lines.append(f"    {action} by {name}: {change:+,.0f} shares @ ${price:.2f} ({date_str})")
+        sections.append("\n".join(ins_lines))
+
+    # ── 7. SHORT INTEREST ──
+    if short_interest and short_interest.get("short_float_pct", 0) > 0:
+        si_lines = ["SHORT INTEREST:"]
+        si_lines.append(f"  Short float: {short_interest['short_float_pct']:.2f}%")
+        if short_interest.get("days_to_cover"):
+            si_lines.append(f"  Days to cover: {short_interest['days_to_cover']:.1f}")
+        if short_interest["short_float_pct"] > 10:
+            si_lines.append("  Note: High short interest - potential for short squeeze or continued bearish pressure")
+        sections.append("\n".join(si_lines))
+
+    # ── 8. FUNDAMENTAL FINANCIALS (Finnhub) ──
+    if financials_context:
+        fin_lines = ["FUNDAMENTAL FINANCIALS:"]
+        if financials_context.get("pe_ratio"):
+            fin_lines.append(f"  P/E Ratio: {financials_context['pe_ratio']:.2f}")
+        if financials_context.get("pb_ratio"):
+            fin_lines.append(f"  P/B Ratio: {financials_context['pb_ratio']:.2f}")
+        if financials_context.get("dividend_yield"):
+            fin_lines.append(f"  Dividend Yield: {financials_context['dividend_yield']:.2f}%")
+        if financials_context.get("roe"):
+            fin_lines.append(f"  Return on Equity (ROE): {financials_context['roe']:.2f}%")
+        if financials_context.get("market_cap"):
+            mc = financials_context["market_cap"]
+            if mc > 1e6:
+                fin_lines.append(f"  Market Cap: ${mc / 1e3:.1f}T")
+            elif mc > 1e3:
+                fin_lines.append(f"  Market Cap: ${mc:.1f}B")
+            else:
+                fin_lines.append(f"  Market Cap: ${mc:.1f}M")
+        if financials_context.get("beta"):
+            fin_lines.append(f"  Beta: {financials_context['beta']:.2f}")
+        if len(fin_lines) > 1:
+            sections.append("\n".join(fin_lines))
+
+    # ── 9. EARNINGS & ANALYST DATA (FMP) ──
+    if fmp_context:
+        fmp_lines = ["EARNINGS & ANALYST DATA:"]
+        le = fmp_context.get("latest_earnings", {})
+        if le:
+            fmp_lines.append(f"  Latest Earnings ({le.get('date', 'N/A')}): EPS actual={le.get('eps_actual', 'N/A')}, estimated={le.get('eps_estimated', 'N/A')}")
+            if fmp_context.get("earnings_surprise") is not None:
+                surprise = fmp_context["earnings_surprise"]
+                beat_miss = "beat" if surprise > 0 else "missed" if surprise < 0 else "met"
+                fmp_lines.append(f"  Earnings surprise: ${surprise:+.2f} ({beat_miss} estimates)")
+        if fmp_context.get("rating_recommendation"):
+            fmp_lines.append(f"  Analyst Rating: {fmp_context['rating_recommendation']} (score {fmp_context.get('rating_score', 'N/A')})")
+        if fmp_context.get("analyst_avg_target"):
+            fmp_lines.append(f"  Avg Analyst Price Target: ${fmp_context['analyst_avg_target']:.2f} (from {fmp_context.get('analyst_count', '?')} analysts)")
+        if len(fmp_lines) > 1:
+            sections.append("\n".join(fmp_lines))
+
+    # ── 10. INSTRUCTIONS (the actual prompt to Gemini) ──
     sections.append(f"""
-You are a trading dashboard AI. Generate a SHORT analysis for {ticker}.
+INSTRUCTIONS: You are an expert stock market analyst writing for a retail investor dashboard.
+Generate a clear, insightful analysis for {ticker} using ALL the data provided above.
+
+OUTPUT FORMAT — use this EXACT structure with these EXACT section headers. No markdown formatting (no **, no ##, no bold). Plain text only.
+
+OVERALL_OUTLOOK: [Bullish/Bearish/Neutral/Slightly Bullish/Slightly Bearish]
+
+SUMMARY: [2-3 sentences explaining the overall picture in plain English. What is the stock doing? What is the model predicting? Reference specific news if available. Speak to a regular investor, not a quant.]
+
+WHAT_THIS_MEANS: [2-3 sentences in simple terms. Example: "The stock may drift lower over the next week" or "Strong upward momentum suggests further gains." Translate the data into actionable plain-language insight.]
+
+KEY_DRIVERS: [3-5 bullet points, each starting with "+" for bullish or "-" for bearish. Include the REASON from the data, not just feature names. Example: "+ Strong insider buying: 5 buys vs 0 sells in 30 days signals executive confidence" or "- RSI at 75 suggests overbought conditions, pullback likely"]
+
+NEWS_IMPACT: [1-3 sentences about recent news and sentiment. If no news is available, say "No significant recent news detected. The analysis is based on technical and quantitative factors."]
+
+KEY_LEVELS: [Support and resistance prices from Bollinger Bands or price range data. Format: "Support around $X | Resistance around $Y"]
+
+BOTTOM_LINE: [1-2 punchy sentences. The single most important takeaway for the investor. Be direct. Example: "MSFT looks poised for a 2.5% gain over the next month based on strong sector momentum, but watch the $390 support level."]
+
 STRICT RULES:
-- MAX 600 characters total
-- Reference specific news events if provided (e.g. "Earnings beat" or "AI fears slam sector")
-- Use this EXACT format (no markdown headers, no bold):
-
-Summary: [1 sentence, max 20 words, mention key news catalyst if any]
-
-+ [Bullish factor 1]
-+ [Bullish factor 2]
-
-- [Risk factor 1]
-- [Risk factor 2]
-
-Outlook: [Bullish/Bearish/Neutral] | Confidence: [value]
-Levels: Support $[price] | Resistance $[price]
-
-Do NOT add disclaimers, caveats, or "not financial advice" text.
-Use ONLY the provided data. Do NOT invent numbers.
+- Maximum 1500 characters total
+- Use ONLY data provided above. NEVER invent numbers, prices, percentages, or news events
+- Do NOT add disclaimers like "not financial advice" or "past performance"
+- Write in plain English for regular investors, not financial jargon
+- If sentiment data shows 0 articles, say news is unavailable — do NOT make up news
+- Each section header must be on its own line followed by its content
+- Do NOT use any markdown formatting (no **, no ##, no bold, no italics)
 """)
     return "\n\n".join(sections)
 
@@ -249,6 +695,10 @@ def generate_explanations(
 
     results = {"success": 0, "skipped": 0, "failed": 0, "details": []}
 
+    # Fetch macro context once for all tickers
+    macro_context = _get_macro_context(mongo)
+    logger.info("Fetched macro context: %d indicators", len(macro_context))
+
     for i, ticker in enumerate(ticker_list, 1):
         logger.info("[%d/%d] Processing %s…", i, len(ticker_list), ticker)
 
@@ -260,7 +710,7 @@ def generate_explanations(
             results["details"].append({"ticker": ticker, "status": "skipped", "reason": "no predictions"})
             continue
 
-        # 2. Get sentiment
+        # 2. Get sentiment (with full raw data for news headlines)
         sentiment = mongo.get_latest_sentiment(ticker) or {"blended_sentiment": 0, "sources": {}}
 
         # 3. Get technicals from historical data
@@ -269,43 +719,78 @@ def generate_explanations(
             start_dt = end_dt - timedelta(days=365)
             hist = mongo.get_historical_data(ticker, start_dt, end_dt)
             technicals = calculate_technicals(hist) if hist is not None and not hist.empty else {}
-            # Fallback: if MongoDB has no historical data, try yfinance directly
             if not technicals:
                 try:
                     import yfinance as yf
                     yf_data = yf.download(ticker, start=start_dt.strftime("%Y-%m-%d"), end=end_dt.strftime("%Y-%m-%d"), progress=False)
                     if yf_data is not None and not yf_data.empty:
-                        # Flatten MultiIndex columns if present
                         if hasattr(yf_data.columns, 'levels'):
                             yf_data.columns = yf_data.columns.get_level_values(0)
                         technicals = calculate_technicals(yf_data)
                         if technicals:
-                            logger.info("  ✅ Got technicals from yfinance fallback for %s", ticker)
+                            logger.info("  Got technicals from yfinance fallback for %s", ticker)
                 except Exception as yf_err:
                     logger.warning("  yfinance fallback failed for %s: %s", ticker, yf_err)
         except Exception as e:
             logger.warning("  Technicals failed for %s: %s", ticker, e)
             technicals = {}
 
-        # 4. Get SHAP data
+        # 4. Get SHAP / feature importance data (all windows, merge)
         shap_data = None
         try:
-            fi_doc = mongo.db["feature_importance"].find_one(
+            fi_docs = list(mongo.db["feature_importance"].find(
                 {"ticker": ticker}, sort=[("timestamp", -1)]
-            )
-            if fi_doc:
+            ).limit(3))
+            if fi_docs:
+                merged_pos = []
+                merged_neg = []
+                merged_global = []
+                for fi_doc in fi_docs:
+                    merged_pos.extend(fi_doc.get("top_positive_contrib", []))
+                    merged_neg.extend(fi_doc.get("top_negative_contrib", []))
+                    if not merged_global:
+                        merged_global = fi_doc.get("global_gain_importance", [])
+
+                # Deduplicate by feature name, keeping highest abs contrib
+                def dedup_by_feature(items, top_n=8):
+                    seen = {}
+                    for f in items:
+                        feat = f.get("feature", "")
+                        if feat not in seen or abs(f.get("contrib", 0)) > abs(seen[feat].get("contrib", 0)):
+                            seen[feat] = f
+                    return sorted(seen.values(), key=lambda x: abs(x.get("contrib", 0)), reverse=True)[:top_n]
+
                 shap_data = {
-                    "top_positive_contrib": fi_doc.get("top_positive_contrib", []),
-                    "top_negative_contrib": fi_doc.get("top_negative_contrib", []),
-                    "global_gain_importance": fi_doc.get("global_gain_importance", []),
-                    "prob_up": fi_doc.get("prob_up"),
-                    "predicted_value": fi_doc.get("predicted_value"),
+                    "top_positive_contrib": dedup_by_feature(merged_pos),
+                    "top_negative_contrib": dedup_by_feature(merged_neg),
+                    "global_gain_importance": merged_global[:10],
+                    "prob_up": fi_docs[0].get("prob_up"),
+                    "predicted_value": fi_docs[0].get("predicted_value"),
                 }
         except Exception as e:
             logger.warning("  SHAP lookup failed for %s: %s", ticker, e)
 
-        # 5. Build prompt & call Gemini
-        prompt = _build_prompt(ticker, target_date, predictions, sentiment, technicals, shap_data)
+        # 5. Get insider trading context
+        insider_context = _get_insider_context(mongo, ticker)
+
+        # 6. Get short interest context
+        short_interest = _get_short_interest_context(mongo, ticker)
+
+        # 7. Get Finnhub basic financials (P/E, margins, etc.)
+        financials_context = _get_financials_context(mongo, ticker)
+
+        # 8. Get FMP earnings, ratings, price targets
+        fmp_context = _get_fmp_context(mongo, ticker)
+
+        # 9. Build prompt & call Gemini
+        prompt = _build_prompt(
+            ticker, target_date, predictions, sentiment, technicals, shap_data,
+            macro_context=macro_context,
+            insider_context=insider_context,
+            short_interest=short_interest,
+            financials_context=financials_context,
+            fmp_context=fmp_context,
+        )
         explanation_text = _call_gemini(prompt, ticker)
 
         if "unavailable" in explanation_text.lower():
@@ -314,7 +799,32 @@ def generate_explanations(
             results["details"].append({"ticker": ticker, "status": "failed", "reason": explanation_text[:200]})
             continue
 
-        # 6. Build explanation doc & store
+        # 10. Build explanation doc & store
+        data_sources = ["ML Predictions"]
+        if sentiment.get("blended_sentiment") or sentiment.get("sources"):
+            data_sources.append("Sentiment Analysis")
+        if technicals:
+            data_sources.append("Technical Indicators")
+        if shap_data:
+            data_sources.append("SHAP Feature Importance")
+        if macro_context:
+            data_sources.append("Macro Economic Data (FRED)")
+        if insider_context and insider_context.get("recent_transactions", 0) > 0:
+            data_sources.append("Insider Trading Data")
+        if short_interest and short_interest.get("short_float_pct", 0) > 0:
+            data_sources.append("Short Interest Data")
+        if financials_context:
+            data_sources.append("Fundamental Financials (Finnhub)")
+        if fmp_context:
+            data_sources.append("Earnings & Analyst Data (FMP)")
+        news_count = (len(sentiment.get("finviz_raw_data", [])) +
+                      len(sentiment.get("rss_news_raw_data", [])) +
+                      len(sentiment.get("reddit_raw_data", [])) +
+                      len(sentiment.get("marketaux_raw_data", [])))
+        if news_count > 0:
+            data_sources.append(f"News Headlines ({news_count} sources)")
+        data_sources.append(f"Google {GEMINI_MODEL}")
+
         explanation_data = {
             "ticker": ticker,
             "explanation_date": target_date,
@@ -332,21 +842,25 @@ def generate_explanations(
             },
             "technical_indicators": technicals,
             "feature_importance": shap_data or {},
+            "macro_context": macro_context,
+            "insider_summary": insider_context,
+            "short_interest_summary": short_interest,
             "ai_explanation": explanation_text,
-            "data_sources_used": [
-                "ML Predictions",
-                "Sentiment Analysis",
-                "Technical Indicators",
-                "SHAP Feature Importance",
-                f"Google {GEMINI_MODEL}",
-            ],
+            "data_sources_used": data_sources,
+            "financials_context": financials_context,
+            "fmp_context": fmp_context,
             "explanation_quality": {
                 "data_completeness": min(1.0, (
-                    (0.3 if predictions else 0) +
-                    (0.2 if sentiment.get("blended_sentiment") else 0) +
-                    (0.2 if technicals else 0) +
-                    (0.15 if shap_data else 0) +
-                    (0.15 if explanation_text else 0)
+                    (0.20 if predictions else 0) +
+                    (0.12 if sentiment.get("blended_sentiment") else 0) +
+                    (0.12 if technicals else 0) +
+                    (0.12 if shap_data else 0) +
+                    (0.08 if macro_context else 0) +
+                    (0.05 if insider_context and insider_context.get("recent_transactions") else 0) +
+                    (0.05 if short_interest and short_interest.get("short_float_pct") else 0) +
+                    (0.08 if news_count > 0 else 0) +
+                    (0.08 if financials_context else 0) +
+                    (0.10 if fmp_context else 0)
                 )),
             },
             "timestamp": datetime.utcnow().isoformat(),
@@ -358,11 +872,11 @@ def generate_explanations(
         if stored:
             results["success"] += 1
             results["details"].append({"ticker": ticker, "status": "success", "chars": len(explanation_text)})
-            logger.info("  ✅ Stored for %s (%d chars)", ticker, len(explanation_text))
+            logger.info("  Stored for %s (%d chars, %d sources)", ticker, len(explanation_text), len(data_sources))
         else:
             results["failed"] += 1
             results["details"].append({"ticker": ticker, "status": "failed", "reason": "mongo store failed"})
-            logger.error("  ❌ MongoDB store failed for %s", ticker)
+            logger.error("  MongoDB store failed for %s", ticker)
 
         # Rate limit: gemini-2.5-flash free tier ~15 RPM; pro ~5 RPM
         sleep_secs = 4 if "pro" in GEMINI_MODEL else 2

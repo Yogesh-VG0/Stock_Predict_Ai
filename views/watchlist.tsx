@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import StockLogo from "@/components/market/StockLogo"
 import { motion } from "framer-motion"
-import { Link } from "react-router-dom"
+import Link from "next/link"
 import { Star, TrendingUp, TrendingDown, Plus, Bell, Trash2, Wifi, WifiOff, AlertTriangle, CheckCircle, Clock } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import Sparkline from "@/components/ui/sparkline"
@@ -452,7 +452,7 @@ export default function WatchlistPage() {
                       <StockLogo symbol={stock.symbol} size={32} />
                       <div className="flex flex-col min-w-0">
                         <Link
-                          to={`/stocks/${stock.symbol}`}
+                          href={`/stocks/${stock.symbol}`}
                           className="font-medium hover:text-emerald-500 transition-colors"
                         >
                           {stock.symbol}

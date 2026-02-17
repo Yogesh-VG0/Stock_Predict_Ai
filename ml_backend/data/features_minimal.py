@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from ..utils.tickers import get_ticker_id
-from ..config.feature_config_v1 import FEATURE_CONFIG_V1, USE_SENTIMENT_FEATURES
+from ..config.feature_config_v1 import FEATURE_CONFIG_V1, USE_SENTIMENT_FEATURES, USE_INSIDER_FEATURES
 
 logger = logging.getLogger(__name__)
 
@@ -294,7 +294,7 @@ class MinimalFeatureEngineer:
 
             # 11. Insider-transaction features (rolling aggregates from MongoDB)
             # Uses insider_features.py adapter — same shift(1) PIT pattern.
-            if USE_SENTIMENT_FEATURES:  # gated by same toggle (insider = alternative data)
+            if USE_INSIDER_FEATURES:
                 df = self._add_insider_features(df, ticker, mc)
             else:
                 for _ic in ("insider_net_shares_30d", "insider_net_shares_90d",

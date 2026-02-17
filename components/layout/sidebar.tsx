@@ -1,7 +1,8 @@
 "use client"
 
 import { useMemo, useState, useCallback } from "react"
-import { Link, useLocation } from "react-router-dom"
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
 import {
   Home,
@@ -89,7 +90,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ onClose }: SidebarProps) {
-  const location = useLocation()
+  const pathname = usePathname()
   const { stockPrices } = useWebSocket()
   const { isMobile, setOpenMobile } = useSidebar()
 
@@ -127,7 +128,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
   return (
     <ShadcnSidebar className="h-screen w-64 bg-black border-r border-zinc-800 overflow-hidden">
       <SidebarHeader className="p-4 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-2">
+        <Link href="/" className="flex items-center gap-2">
           <motion.div initial={{ rotate: -10 }} animate={{ rotate: 0 }} transition={{ duration: 0.5 }}>
             <LineChart className="h-6 w-6 text-emerald-500" />
           </motion.div>
@@ -139,9 +140,9 @@ export default function Sidebar({ onClose }: SidebarProps) {
         <SidebarMenu>
           {navItems.map((item) => (
             <SidebarMenuItem key={item.path}>
-              <SidebarMenuButton asChild isActive={location.pathname === item.path}>
+              <SidebarMenuButton asChild isActive={pathname === item.path}>
                 <Link
-                  to={item.path}
+                  href={item.path}
                   className="flex items-center gap-3"
                   onClick={handleNavigate}
                 >
@@ -161,7 +162,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
             {topStocks.map((stock) => (
               <Link
                 key={stock.symbol}
-                to={`/stocks/${stock.symbol}`}
+                href={`/stocks/${stock.symbol}`}
                 className="flex items-center justify-between p-2 rounded-md hover:bg-zinc-900 transition-colors"
                 onClick={handleNavigate}
               >

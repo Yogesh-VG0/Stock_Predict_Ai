@@ -5,7 +5,7 @@ import { Search, TrendingUp, TrendingDown } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { useNavigate } from "react-router-dom"
+import { useRouter } from "next/navigation"
 
 interface SearchResult {
   symbol: string
@@ -22,7 +22,7 @@ export default function SearchWidget() {
   const [loading, setLoading] = useState(false)
   const [showResults, setShowResults] = useState(false)
   const searchRef = useRef<HTMLDivElement>(null)
-  const navigate = useNavigate()
+  const router = useRouter()
 
   // Search function using API
   const searchStocks = async (searchQuery: string): Promise<SearchResult[]> => {
@@ -88,7 +88,7 @@ export default function SearchWidget() {
     setQuery("")
     setShowResults(false)
     // Navigate to stock detail page like the sidebar does
-    navigate(`/stocks/${symbol}`)
+    router.push(`/stocks/${symbol}`)
   }
 
   return (

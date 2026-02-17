@@ -28,6 +28,10 @@ USE_MARKET_NEUTRAL_TARGET = True
 # When False, sentiment columns are filled with zeros (preserves feature dimensions).
 USE_SENTIMENT_FEATURES = True
 
+# Insider features toggle: set False to exclude insider-transaction features.
+# Decoupled from sentiment so each alternative-data source can be A/B-tested independently.
+USE_INSIDER_FEATURES = True
+
 # Walk-forward folds: 0 = single split; 3-4 = rolling folds, report median metrics (credibility upgrade)
 WALK_FORWARD_FOLDS = 3
 

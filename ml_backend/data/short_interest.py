@@ -211,6 +211,22 @@ class ShortInterestAnalyzer:
             logger.warning(f"❌ Error in direct API call: {e}")
             return []
 
+    def _store_short_interest_raw(self, ticker: str, records: List[Dict]) -> None:
+        """Persist raw short interest records in MongoDB for later use."""
+        if not self.mongo_client or not records:
+            return
+        try:
+            col = self.mongo_client.db["short_interest_data"]
+            for rec in records:
+                col.update_one(
+                    {"ticker": ticker.upper(), "settlementDate": rec.get("settlementDate", "")},
+                    {"$set": {**rec, "ticker": ticker.upper(), "fetched_at": datetime.utcnow()}},
+                    upsert=True,
+                )
+            logger.info(f"Stored {len(records)} short interest records for {ticker}")
+        except Exception as e:
+            logger.warning(f"Non-critical: failed to store short interest raw data for {ticker}: {e}")
+
     async def fetch_short_interest(self, ticker: str) -> List[Dict]:
         """
         Fetch short interest data using the new Nasdaq API approach with NYSE fallback.
@@ -233,7 +249,9 @@ class ShortInterestAnalyzer:
             
             if ticker.upper() in nyse_stocks:
                 logger.info(f"📊 {ticker} is NYSE-listed, using Finviz for short interest data")
-                return await self.fetch_finviz_short_interest(ticker)
+                data = await self.fetch_finviz_short_interest(ticker)
+                self._store_short_interest_raw(ticker, data)
+                return data
             
             # Use the direct Nasdaq API method for NASDAQ stocks
             logger.info(f"Fetching short interest for {ticker} using Nasdaq API")
@@ -241,10 +259,13 @@ class ShortInterestAnalyzer:
             
             if nasdaq_data:
                 logger.info(f"✅ Successfully got {len(nasdaq_data)} records from Nasdaq API")
+                self._store_short_interest_raw(ticker, nasdaq_data)
                 return nasdaq_data
             else:
                 logger.warning(f"❌ No data from Nasdaq API for {ticker}, trying Finviz fallback")
-                return await self.fetch_finviz_short_interest(ticker)
+                data = await self.fetch_finviz_short_interest(ticker)
+                self._store_short_interest_raw(ticker, data)
+                return data
                 
         except Exception as e:
             logger.error(f"Error fetching short interest for {ticker}: {e}")

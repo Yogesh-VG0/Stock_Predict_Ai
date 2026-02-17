@@ -1870,11 +1870,26 @@ class SentimentAnalyzer:
             }
 
     async def analyze_finnhub_sentiment(self, ticker: str) -> Dict[str, Any]:
-        """Analyze sentiment from Finnhub data sources."""
+        """Analyze sentiment from Finnhub data sources.
+        Also fetches and stores basic financials and company peers
+        so that this data is available in MongoDB for explanation context.
+        """
         try:
             # Combine insider transactions and recommendation trends
             insider_sentiment = await self.analyze_finnhub_insider_sentiment(ticker)
             recommendation_sentiment = await self.analyze_finnhub_recommendation_trends(ticker)
+
+            # Fetch & store supplementary Finnhub data for later use
+            # (basic financials, company peers).  These are non-critical so
+            # failures are logged but do not block the sentiment result.
+            try:
+                await self.get_finnhub_basic_financials(ticker)
+            except Exception as e:
+                logger.warning(f"Non-critical: failed to fetch basic financials for {ticker}: {e}")
+            try:
+                await self.get_finnhub_company_peers(ticker)
+            except Exception as e:
+                logger.warning(f"Non-critical: failed to fetch company peers for {ticker}: {e}")
             
             # Calculate weighted average sentiment
             sentiments = []

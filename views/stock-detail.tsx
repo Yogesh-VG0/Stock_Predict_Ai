@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, Suspense, lazy, memo } from "react"
-import { useParams } from "react-router-dom"
+import { useParams } from "next/navigation"
 import { motion } from "framer-motion"
 import {
   Star,
@@ -52,7 +52,8 @@ import { getCachedData, setCachedData } from "@/hooks/use-prefetch"
 type StockDetailProps = {}
 
 export default function StockDetail({ }: StockDetailProps) {
-  const { symbol: urlSymbol } = useParams<{ symbol: string }>()
+  const params = useParams<{ symbol: string }>()
+  const urlSymbol = params?.symbol
   const [isLoading, setIsLoading] = useState(true)
   const [stockData, setStockData] = useState<StockDetails | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
