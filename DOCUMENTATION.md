@@ -1354,6 +1354,20 @@ Step 12: UPLOAD ARTIFACTS (always runs)
 > - Smaller bundle: `react-router-dom` removed (~45KB gzipped)
 > - Native Next.js features: prefetching, code splitting per route
 
+#### Performance and other improvements from full Next.js
+
+Removing React Router and using the App Router as the sole routing system yields measurable and qualitative gains:
+
+| Area | Improvement |
+|------|-------------|
+| **Bundle size** | ~45KB less client JS (react-router-dom removed); less to download, parse, and execute on first load. |
+| **Code splitting** | Each route gets its own chunk; users load JS mainly for the page they’re on. Lighter initial load and faster subsequent navigations. |
+| **Navigation** | Next.js `<Link>` prefetches routes in the viewport by default; client-side transitions avoid full reloads and keep the shared layout without re-mounting. |
+| **Direct URLs** | No redirect chain (e.g. `/stocks/AAPL` is a real App Router route); single response, no double load. |
+| **SEO** | Routes can be server-rendered or statically generated; crawlers get full HTML instead of a client-only shell. |
+| **Reliability** | Single routing model (App Router only) reduces edge cases, 404s from the hybrid setup, and hydration issues from mixing two routers. |
+| **Future use** | Enables server components, streaming, and Next.js caching where applicable, without conflicting with React Router. |
+
 ### Pages
 
 | Route | App Router File | View Component | Purpose |
@@ -2079,6 +2093,8 @@ React Router DOM has been fully removed and routing consolidated to Next.js App 
 **Files removed**: `app_v0modified.tsx`, `pages/_app.tsx`, `pages/stocks/[symbol].tsx`, entire `pages/` directory.
 **Files added**: `views/` directory (page components), `app/*/page.tsx` route files.
 
+**Performance and other improvements** from full Next.js (smaller bundle, per-route code splitting, prefetching, no redirect chain, SEO, single routing model) are documented in [§14 Frontend Architecture — Routing: Performance and other improvements from full Next.js](#performance-and-other-improvements-from-full-nextjs).
+
 ### Critical Issues
 
 | Issue | Severity | Description | Suggested Fix |
@@ -2092,6 +2108,32 @@ React Router DOM has been fully removed and routing consolidated to Next.js App 
 |-------|--------|---------------|
 | Frontend polling every 5s | Battery/bandwidth on mobile | Use true WebSocket or Server-Sent Events |
 | TradingView widgets not code-split | Heavy load on homepage | Load only visible widgets |
+
+### Gemini API Rate Limits (Free Tier)
+
+**Problem**: Google Gemini API free tier has strict rate limits that can block explanation generation for all 100 tickers:
+
+| Model | Free Tier Limits | Impact |
+|-------|------------------|--------|
+| **gemini-2.5-flash** | 5 RPM, 250K TPM, **20 RPD** | ❌ Only 20 requests/day — insufficient for 100 tickers |
+| **gemini-2.5-pro** | 15 RPM, Unlimited TPM, **1.5K RPD** | ✅ 1,500 requests/day — sufficient for daily batch (100 tickers) |
+
+**Solutions implemented** (Feb 2026):
+
+1. **Default model switched to `gemini-2.5-pro`** — Provides 1.5K RPD (vs 20 for flash), sufficient for daily batch processing of 100 tickers
+2. **Check for existing explanations** — Script now checks MongoDB for existing explanations for today's date before calling Gemini API, avoiding redundant API calls
+3. **Quota exceeded handling** — Script detects quota/rate limit errors and stops processing remaining tickers gracefully (no wasted API calls)
+4. **Error messages** — Clear error messages inform users when quota is exceeded, suggesting upgrade to paid tier for production use
+
+**For production**: Consider upgrading to Gemini API paid tier for:
+- Higher rate limits (unlimited RPD on paid tier)
+- Better reliability
+- Priority support
+
+**Alternative solutions** (if staying on free tier):
+- Use OpenRouter free models (e.g., Gemma 3, DeepSeek R1) — see `openrouter.ai/collections/free-models`
+- Self-host lightweight LLMs (e.g., Llama 3.2, Gemma 2B) for explanation generation
+- Implement template-based fallback explanations when API quota is exceeded
 
 ### Data Quality Issues
 
@@ -2128,6 +2170,8 @@ The following code changes were made to address data storage gaps and pipeline i
 | **Gemini reads Finnhub financials** | `ml_backend/scripts/generate_explanations.py` | Added `_get_financials_context()` — reads P/E, P/B, dividend yield, ROE, market cap, beta from `finnhub_basic_financials` collection |
 | **Gemini reads FMP earnings/ratings** | `ml_backend/scripts/generate_explanations.py` | Added `_get_fmp_context()` — reads latest earnings (EPS actual vs estimated, surprise), analyst ratings, and price targets from `alpha_vantage_data` collection |
 | **Gemini reads short interest directly** | `ml_backend/scripts/generate_explanations.py` | Updated `_get_short_interest_context()` to read from `short_interest_data` collection first (more granular), with fallback to `sentiment` collection |
+| **Gemini API rate limit handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | Default model switched to `gemini-2.5-pro` (1.5K RPD vs 20 for flash); added check for existing explanations to avoid redundant API calls; added quota exceeded detection and graceful stopping |
+| **Gemini API error handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | `_call_gemini()` now returns error type (`quota_exceeded`, `rate_limit`, `api_error`); batch script stops processing when quota exceeded; API route returns clear error messages |
 
 ---
 

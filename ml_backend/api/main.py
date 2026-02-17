@@ -2296,9 +2296,10 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
         logger.error(f"Error generating comprehensive AI explanation for {ticker}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate explanation: {str(e)}")
 
-# Default model: gemini-2.5-flash (free tier, higher rate limits)
-# Override: set GEMINI_MODEL=gemini-2.5-pro for higher quality
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Default model: gemini-2.5-pro (free tier: 1.5K RPD, better quality)
+# gemini-2.5-flash has only 20 RPD on free tier (too restrictive)
+# Override: set GEMINI_MODEL env var (e.g., GEMINI_MODEL=gemini-2.5-flash)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
 
 
 async def call_google_gemini_api(prompt: str, ticker: str) -> str:
@@ -2343,6 +2344,11 @@ async def call_google_gemini_api(prompt: str, ticker: str) -> str:
         logger.error(f"Google Generative AI library not installed or outdated: {e}")
         return "AI explanation unavailable: Required library not installed or needs update"
     except Exception as e:
+        error_str = str(e).lower()
+        # Check for quota/rate limit errors
+        if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
+            logger.error(f"{GEMINI_MODEL} quota/rate limit exceeded for {ticker}: {e}")
+            return f"AI explanation unavailable: Gemini API quota exceeded ({GEMINI_MODEL} free tier limit reached). Please try again later or upgrade to paid tier."
         logger.error(f"Error calling {GEMINI_MODEL} for {ticker}: {e}")
         return f"AI explanation unavailable: {str(e)}"
 

@@ -3,8 +3,9 @@ Batch AI Explanation Generator for CI/CD
 
 Generates Gemini AI explanations for all tickers with stored predictions
 and stores them in the ``prediction_explanations`` MongoDB collection.
-Model defaults to gemini-2.5-flash (free tier, high rate limits);
-override with GEMINI_MODEL env var.
+Model defaults to gemini-2.5-pro (free tier: 1.5K RPD, better quality).
+gemini-2.5-flash has only 20 RPD (too restrictive for 100 tickers).
+Override with GEMINI_MODEL env var.
 
 Usage (CI):
     python -m ml_backend.scripts.generate_explanations
@@ -165,20 +166,25 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
         return {}
 
 
-# Default model: gemini-2.5-flash (free tier, 15 RPM, fast)
-# Override: set GEMINI_MODEL=gemini-2.5-pro for higher quality
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Default model: gemini-2.5-pro (free tier: 1.5K RPD, better quality)
+# gemini-2.5-flash has only 20 RPD on free tier (too restrictive)
+# Override: set GEMINI_MODEL env var (e.g., GEMINI_MODEL=gemini-2.5-flash)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
 
 
-def _call_gemini(prompt: str, ticker: str) -> str:
-    """Synchronous Gemini API call using GEMINI_MODEL."""
+def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
+    """
+    Synchronous Gemini API call using GEMINI_MODEL.
+    Returns (explanation_text, error_type) where error_type is None on success,
+    or "quota_exceeded", "rate_limit", or "api_error" on failure.
+    """
     try:
         from google import genai
         from google.genai import types
 
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
-            return "AI explanation unavailable: GOOGLE_API_KEY not set"
+            return ("AI explanation unavailable: GOOGLE_API_KEY not set", "api_error")
 
         client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
@@ -190,11 +196,16 @@ def _call_gemini(prompt: str, ticker: str) -> str:
         )
         if response and response.text:
             logger.info("%s response for %s: %d chars", GEMINI_MODEL, ticker, len(response.text))
-            return response.text
-        return "AI explanation unavailable: empty response"
+            return (response.text, None)
+        return ("AI explanation unavailable: empty response", "api_error")
     except Exception as e:
+        error_str = str(e).lower()
+        # Check for quota/rate limit errors
+        if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
+            logger.error("%s quota/rate limit exceeded for %s: %s", GEMINI_MODEL, ticker, e)
+            return (f"AI explanation unavailable: Gemini API quota exceeded ({GEMINI_MODEL} free tier limit)", "quota_exceeded")
         logger.error("%s API error for %s: %s", GEMINI_MODEL, ticker, e)
-        return f"AI explanation unavailable: {e}"
+        return (f"AI explanation unavailable: {e}", "api_error")
 
 
 def _get_macro_context(mongo) -> Dict:
@@ -699,8 +710,34 @@ def generate_explanations(
     macro_context = _get_macro_context(mongo)
     logger.info("Fetched macro context: %d indicators", len(macro_context))
 
+    # Track quota exhaustion to stop early
+    quota_exceeded = False
+    
     for i, ticker in enumerate(ticker_list, 1):
         logger.info("[%d/%d] Processing %s…", i, len(ticker_list), ticker)
+
+        # Check if quota exceeded (stop processing remaining tickers)
+        if quota_exceeded:
+            logger.warning("  Quota exceeded — skipping remaining %d tickers", len(ticker_list) - i + 1)
+            results["skipped"] += len(ticker_list) - i + 1
+            for remaining_ticker in ticker_list[i-1:]:
+                results["details"].append({"ticker": remaining_ticker, "status": "skipped", "reason": "quota_exceeded"})
+            break
+
+        # 0. Check for existing explanation for today (avoid redundant API calls)
+        existing_explanation = mongo.db["prediction_explanations"].find_one(
+            {
+                "ticker": ticker,
+                "window": "comprehensive",
+                "explanation_data.explanation_date": target_date
+            },
+            sort=[("timestamp", -1)]
+        )
+        if existing_explanation:
+            logger.info("  Explanation already exists for %s on %s — skipping", ticker, target_date)
+            results["skipped"] += 1
+            results["details"].append({"ticker": ticker, "status": "skipped", "reason": "already_exists"})
+            continue
 
         # 1. Get predictions (required)
         predictions = mongo.get_latest_predictions(ticker)
@@ -791,9 +828,18 @@ def generate_explanations(
             financials_context=financials_context,
             fmp_context=fmp_context,
         )
-        explanation_text = _call_gemini(prompt, ticker)
+        explanation_text, error_type = _call_gemini(prompt, ticker)
 
-        if "unavailable" in explanation_text.lower():
+        # Handle quota exceeded — stop processing remaining tickers
+        if error_type == "quota_exceeded":
+            logger.error("  Gemini quota exceeded — stopping batch processing")
+            quota_exceeded = True
+            results["failed"] += 1
+            results["details"].append({"ticker": ticker, "status": "failed", "reason": "quota_exceeded"})
+            # Don't store failed explanation, break to skip remaining tickers
+            break
+
+        if "unavailable" in explanation_text.lower() or error_type:
             logger.error("  Gemini failed for %s: %s", ticker, explanation_text[:80])
             results["failed"] += 1
             results["details"].append({"ticker": ticker, "status": "failed", "reason": explanation_text[:200]})
@@ -878,8 +924,9 @@ def generate_explanations(
             results["details"].append({"ticker": ticker, "status": "failed", "reason": "mongo store failed"})
             logger.error("  MongoDB store failed for %s", ticker)
 
-        # Rate limit: gemini-2.5-flash free tier ~15 RPM; pro ~5 RPM
-        sleep_secs = 4 if "pro" in GEMINI_MODEL else 2
+        # Rate limit: gemini-2.5-pro free tier ~15 RPM, 1.5K RPD; flash ~5 RPM, 20 RPD
+        # Use longer sleep for pro to avoid hitting daily limits
+        sleep_secs = 5 if "pro" in GEMINI_MODEL else 3
         time.sleep(sleep_secs)
 
     return results
