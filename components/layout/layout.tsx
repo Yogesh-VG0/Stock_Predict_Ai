@@ -20,14 +20,15 @@ export default function Layout({ children }: LayoutProps) {
   const [isMobile, setIsMobile] = useState(false)
   const pathname = usePathname()
 
-  // Landing page renders its own full-screen layout (no sidebar/navbar)
-  const isLandingPage = pathname === "/"
+  // Marketing pages render their own full-screen layout (no sidebar/navbar)
+  const isMarketingPage =
+    pathname === "/" || pathname === "/how-it-works" || pathname === "/methodology" || pathname === "/disclaimer"
 
-  // Pre-fetch stock data for priority stocks in the background (skip on landing)
-  usePrefetch()
+  // Pre-fetch stock data for priority stocks in the background (skip marketing pages)
+  usePrefetch(!isMarketingPage)
 
   useEffect(() => {
-    if (isLandingPage) return
+    if (isMarketingPage) return
 
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 768)
@@ -41,10 +42,10 @@ export default function Layout({ children }: LayoutProps) {
     checkMobile()
     window.addEventListener("resize", checkMobile)
     return () => window.removeEventListener("resize", checkMobile)
-  }, [isLandingPage])
+  }, [isMarketingPage])
 
-  // Landing page: render children directly (no sidebar, no navbar, no ticker tape)
-  if (isLandingPage) {
+  // Marketing pages: render children directly (no sidebar, no navbar, no ticker tape)
+  if (isMarketingPage) {
     return <>{children}</>
   }
 

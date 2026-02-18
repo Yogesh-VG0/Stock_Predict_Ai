@@ -62,10 +62,11 @@ export async function fetchWithCache<T>(
 
 // ── Pre-fetch hook: runs once on app mount, loads data in background ──
 
-export function usePrefetch() {
+export function usePrefetch(enabled: boolean = true) {
   const hasPrefetched = useRef(false)
 
   useEffect(() => {
+    if (!enabled) return
     if (hasPrefetched.current || typeof window === 'undefined') return
     hasPrefetched.current = true
 
@@ -108,5 +109,5 @@ export function usePrefetch() {
     phase1()
     setTimeout(phase2, 1500)
     setTimeout(phase3, 4000)
-  }, [])
+  }, [enabled])
 }
