@@ -172,40 +172,75 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
 
 
+MAX_RETRIES = 3
+INITIAL_BACKOFF = 30
+
+
+def _parse_retry_after(error_str: str) -> int:
+    """Try to extract a Retry-After hint (in seconds) from the error message."""
+    import re
+    m = re.search(r"retry.*?(\d+)\s*s", error_str, re.IGNORECASE)
+    if m:
+        return min(int(m.group(1)), 120)
+    return 0
+
+
 def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
     """
-    Synchronous Gemini API call using GEMINI_MODEL.
+    Synchronous Gemini API call using GEMINI_MODEL with retry + backoff.
+
     Returns (explanation_text, error_type) where error_type is None on success,
-    or "quota_exceeded", "rate_limit", or "api_error" on failure.
+    or "quota_exceeded" (daily limit hit), "rate_limit" (transient 429),
+    or "api_error" on permanent failure.
     """
-    try:
-        from google import genai
-        from google.genai import types
+    from google import genai
+    from google.genai import types
 
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            return ("AI explanation unavailable: GOOGLE_API_KEY not set", "api_error")
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return ("AI explanation unavailable: GOOGLE_API_KEY not set", "api_error")
 
-        client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=2000)
-            ),
-        )
-        if response and response.text:
-            logger.info("%s response for %s: %d chars", GEMINI_MODEL, ticker, len(response.text))
-            return (response.text, None)
-        return ("AI explanation unavailable: empty response", "api_error")
-    except Exception as e:
-        error_str = str(e).lower()
-        # Check for quota/rate limit errors
-        if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
-            logger.error("%s quota/rate limit exceeded for %s: %s", GEMINI_MODEL, ticker, e)
-            return (f"AI explanation unavailable: Gemini API quota exceeded ({GEMINI_MODEL} free tier limit)", "quota_exceeded")
-        logger.error("%s API error for %s: %s", GEMINI_MODEL, ticker, e)
-        return (f"AI explanation unavailable: {e}", "api_error")
+    client = genai.Client(api_key=api_key)
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(thinking_budget=2000)
+                ),
+            )
+            if response and response.text:
+                logger.info("%s response for %s: %d chars", GEMINI_MODEL, ticker, len(response.text))
+                return (response.text, None)
+            return ("AI explanation unavailable: empty response", "api_error")
+
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
+            is_quota = "quota" in error_str
+
+            if is_rate_limit and not is_quota and attempt < MAX_RETRIES:
+                retry_secs = _parse_retry_after(error_str) or (INITIAL_BACKOFF * attempt)
+                logger.warning(
+                    "%s rate-limited for %s (attempt %d/%d) — sleeping %ds",
+                    GEMINI_MODEL, ticker, attempt, MAX_RETRIES, retry_secs,
+                )
+                time.sleep(retry_secs)
+                continue
+
+            if is_quota or (is_rate_limit and attempt >= MAX_RETRIES):
+                logger.error("%s quota/rate limit exceeded for %s after %d attempts: %s", GEMINI_MODEL, ticker, attempt, e)
+                return (
+                    f"AI explanation unavailable: Gemini API quota exceeded ({GEMINI_MODEL} free tier limit)",
+                    "quota_exceeded",
+                )
+
+            logger.error("%s API error for %s: %s", GEMINI_MODEL, ticker, e)
+            return (f"AI explanation unavailable: {e}", "api_error")
+
+    return ("AI explanation unavailable: max retries exceeded", "quota_exceeded")
 
 
 def _get_macro_context(mongo) -> Dict:
@@ -710,16 +745,16 @@ def generate_explanations(
     macro_context = _get_macro_context(mongo)
     logger.info("Fetched macro context: %d indicators", len(macro_context))
 
-    # Track quota exhaustion to stop early
-    quota_exceeded = False
-    
+    quota_failures = 0
+    MAX_QUOTA_FAILURES = 3
+
     for i, ticker in enumerate(ticker_list, 1):
         logger.info("[%d/%d] Processing %s…", i, len(ticker_list), ticker)
 
-        # Check if quota exceeded (stop processing remaining tickers)
-        if quota_exceeded:
-            logger.warning("  Quota exceeded — skipping remaining %d tickers", len(ticker_list) - i + 1)
-            results["skipped"] += len(ticker_list) - i + 1
+        if quota_failures >= MAX_QUOTA_FAILURES:
+            remaining = len(ticker_list) - i + 1
+            logger.warning("  %d consecutive quota failures — skipping remaining %d tickers", quota_failures, remaining)
+            results["skipped"] += remaining
             for remaining_ticker in ticker_list[i-1:]:
                 results["details"].append({"ticker": remaining_ticker, "status": "skipped", "reason": "quota_exceeded"})
             break
@@ -830,14 +865,16 @@ def generate_explanations(
         )
         explanation_text, error_type = _call_gemini(prompt, ticker)
 
-        # Handle quota exceeded — stop processing remaining tickers
         if error_type == "quota_exceeded":
-            logger.error("  Gemini quota exceeded — stopping batch processing")
-            quota_exceeded = True
+            quota_failures += 1
+            logger.error("  Gemini quota exceeded (%d/%d consecutive failures)", quota_failures, MAX_QUOTA_FAILURES)
             results["failed"] += 1
             results["details"].append({"ticker": ticker, "status": "failed", "reason": "quota_exceeded"})
-            # Don't store failed explanation, break to skip remaining tickers
-            break
+            if quota_failures >= MAX_QUOTA_FAILURES:
+                continue
+            logger.info("  Sleeping 60s before retrying next ticker…")
+            time.sleep(60)
+            continue
 
         if "unavailable" in explanation_text.lower() or error_type:
             logger.error("  Gemini failed for %s: %s", ticker, explanation_text[:80])
@@ -916,6 +953,7 @@ def generate_explanations(
 
         stored = mongo.store_prediction_explanation(ticker, "comprehensive", explanation_data)
         if stored:
+            quota_failures = 0
             results["success"] += 1
             results["details"].append({"ticker": ticker, "status": "success", "chars": len(explanation_text)})
             logger.info("  Stored for %s (%d chars, %d sources)", ticker, len(explanation_text), len(data_sources))

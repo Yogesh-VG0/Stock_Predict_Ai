@@ -3,7 +3,6 @@ Module for scraping and analyzing Seeking Alpha comments using Playwright.
 """
 
 import asyncio
-from playwright.async_api import async_playwright
 import logging
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
@@ -19,7 +18,6 @@ from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 import json
 from urllib.parse import urljoin
-import aiofiles
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -30,9 +28,31 @@ import atexit
 from functools import wraps
 import backoff
 from tenacity import retry, stop_after_attempt, wait_exponential
-from fake_useragent import UserAgent
-from aiohttp_proxy import ProxyConnector
-from aiohttp_socks import ProxyConnector as SocksProxyConnector
+
+try:
+    from playwright.async_api import async_playwright
+except ImportError:
+    async_playwright = None
+
+try:
+    import aiofiles
+except ImportError:
+    aiofiles = None
+
+try:
+    from fake_useragent import UserAgent
+except ImportError:
+    UserAgent = None
+
+try:
+    from aiohttp_proxy import ProxyConnector
+except ImportError:
+    ProxyConnector = None
+
+try:
+    from aiohttp_socks import ProxyConnector as SocksProxyConnector
+except ImportError:
+    SocksProxyConnector = None
 
 # Load environment variables
 load_dotenv()
@@ -75,7 +95,7 @@ class SeekingAlphaAnalyzer:
         self.request_timestamps = []
         self.proxy_list = self._load_proxies()
         self.current_proxy_index = 0
-        self.user_agent = UserAgent()
+        self.user_agent = UserAgent() if UserAgent is not None else None
         self.proxy_rotation_interval = 300  # 5 minutes
         self.last_proxy_rotation = time.time()
         
@@ -139,7 +159,9 @@ class SeekingAlphaAnalyzer:
         Returns:
             Random user agent string
         """
-        return self.user_agent.random
+        if self.user_agent is not None:
+            return self.user_agent.random
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
     async def _create_browser_context(self) -> None:
         """

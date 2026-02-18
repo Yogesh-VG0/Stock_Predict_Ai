@@ -28,7 +28,10 @@ from ..utils.mongodb import MongoDBClient
 from .sec_filings import SECFilingsAnalyzer
 import aiohttp
 import finnhub
-from .seeking_alpha import SeekingAlphaAnalyzer
+try:
+    from .seeking_alpha import SeekingAlphaAnalyzer
+except ImportError:
+    SeekingAlphaAnalyzer = None
 from starlette.concurrency import run_in_threadpool
 import argparse
 import asyncio
