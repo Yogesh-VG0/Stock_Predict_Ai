@@ -2049,7 +2049,7 @@ async def get_prediction_history(ticker: str, days: int = 30):
     """Get prediction history for a ticker over specified days."""
     try:
         ticker = ticker.upper()
-        history = app.state.mongo_client.get_prediction_history(ticker, days)
+        history = app.state.mongo_client.get_prediction_history_simple(ticker, days)
         
         return {
             "ticker": ticker,

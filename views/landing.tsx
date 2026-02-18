@@ -19,6 +19,24 @@ import {
   Globe,
   Cpu,
 } from "lucide-react"
+import {
+  SiExpress,
+  SiFastapi,
+  SiFramer,
+  SiGithubactions,
+  SiGoogle,
+  SiMongodb,
+  SiNextdotjs,
+  SiNodedotjs,
+  SiPython,
+  SiReact,
+  SiRedis,
+  SiTailwindcss,
+  SiTradingview,
+  SiTypescript,
+  SiVercel,
+} from "react-icons/si"
+import { TbBrain } from "react-icons/tb"
 
 function AnimatedSection({ children, className = "", delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -89,24 +107,24 @@ const FEATURES = [
 ]
 
 const TECH_STACK = [
-  { name: "Next.js 15", category: "Frontend" },
-  { name: "React", category: "Frontend" },
-  { name: "TypeScript", category: "Frontend" },
-  { name: "Tailwind CSS", category: "Frontend" },
-  { name: "Framer Motion", category: "Frontend" },
-  { name: "TradingView", category: "Frontend" },
-  { name: "Python", category: "ML Backend" },
-  { name: "FastAPI", category: "ML Backend" },
-  { name: "LightGBM", category: "ML Backend" },
-  { name: "SHAP", category: "ML Backend" },
-  { name: "Google Gemini", category: "ML Backend" },
-  { name: "FinBERT", category: "ML Backend" },
-  { name: "Node.js", category: "Backend" },
-  { name: "Express", category: "Backend" },
-  { name: "MongoDB", category: "Backend" },
-  { name: "Redis", category: "Backend" },
-  { name: "GitHub Actions", category: "CI/CD" },
-  { name: "Vercel", category: "Deployment" },
+  { name: "Next.js 15", icon: SiNextdotjs },
+  { name: "React", icon: SiReact },
+  { name: "TypeScript", icon: SiTypescript },
+  { name: "Tailwind CSS", icon: SiTailwindcss },
+  { name: "Framer Motion", icon: SiFramer },
+  { name: "TradingView", icon: SiTradingview },
+  { name: "Python", icon: SiPython },
+  { name: "FastAPI", icon: SiFastapi },
+  { name: "LightGBM", icon: TbBrain },
+  { name: "SHAP", icon: TbBrain },
+  { name: "Google Gemini", icon: SiGoogle },
+  { name: "FinBERT", icon: TbBrain },
+  { name: "Node.js", icon: SiNodedotjs },
+  { name: "Express", icon: SiExpress },
+  { name: "MongoDB", icon: SiMongodb },
+  { name: "Redis", icon: SiRedis },
+  { name: "GitHub Actions", icon: SiGithubactions },
+  { name: "Vercel", icon: SiVercel },
 ]
 
 const PIPELINE_STEPS = [
@@ -120,13 +138,73 @@ const PIPELINE_STEPS = [
 const STOCK_LOGOS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "NFLX"]
 
 export default function LandingPage() {
+  const webApplicationData = {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    name: "StockPredict AI",
+    description:
+      "AI-powered stock prediction platform using LightGBM ML models, SHAP explainability, and Gemini AI for S&P 100 companies.",
+    url: "https://stockpredict.dev",
+    applicationCategory: "FinanceApplication",
+    operatingSystem: "Web",
+    offers: {
+      "@type": "Offer",
+      price: "0",
+      priceCurrency: "USD",
+    },
+    creator: {
+      "@type": "Person",
+      name: "Yogesh Vadivel",
+      url: "https://yogeshv.me",
+    },
+    featureList: [
+      "LightGBM ML Predictions",
+      "SHAP Explainability",
+      "Gemini AI Explanations",
+      "Real-Time Market Data",
+      "Multi-Source Sentiment Analysis",
+      "Technical Analysis",
+      "Drift Monitoring",
+    ],
+  }
+
+  const websiteData = {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    name: "StockPredict AI",
+    url: "https://stockpredict.dev",
+    description:
+      "AI-powered stock prediction platform using LightGBM ML models, SHAP explainability, and Gemini AI for S&P 100 companies.",
+    publisher: {
+      "@type": "Person",
+      name: "Yogesh Vadivel",
+      url: "https://yogeshv.me",
+    },
+  }
+
   return (
-    <div className="min-h-screen bg-black text-white overflow-x-hidden">
+    <>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(webApplicationData) }}
+      />
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(websiteData) }}
+      />
+      <div className="min-h-screen bg-black text-white overflow-x-hidden">
+      {/* Skip to content link for accessibility */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-emerald-500 focus:text-black focus:rounded-lg focus:font-semibold"
+      >
+        Skip to main content
+      </a>
       {/* Navbar */}
-      <nav className="fixed top-0 left-0 right-0 z-50 border-b border-zinc-800/50 bg-black/80 backdrop-blur-xl">
+      <nav className="fixed top-0 left-0 right-0 z-50 border-b border-zinc-800/50 bg-black/80 backdrop-blur-xl" aria-label="Main navigation">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2.5">
-            <LineChart className="h-6 w-6 text-emerald-500" />
+          <Link href="/" className="flex items-center gap-2.5" aria-label="StockPredict AI Home">
+            <LineChart className="h-6 w-6 text-emerald-500" aria-hidden="true" />
             <span className="font-bold text-lg">StockPredict AI</span>
           </Link>
           <div className="flex items-center gap-3">
@@ -142,6 +220,7 @@ export default function LandingPage() {
             <Link
               href="/dashboard"
               className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-sm px-5 py-2.5 rounded-lg transition-all hover:shadow-lg hover:shadow-emerald-500/20"
+              aria-label="Open Dashboard"
             >
               Open Dashboard
             </Link>
@@ -150,7 +229,7 @@ export default function LandingPage() {
       </nav>
 
       {/* Hero Section */}
-      <section className="relative pt-32 pb-20 sm:pt-40 sm:pb-28 px-4 overflow-hidden">
+      <section id="main-content" className="relative pt-32 pb-20 sm:pt-40 sm:pb-28 px-4 overflow-hidden">
         {/* Background glow */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute top-20 right-0 w-[400px] h-[400px] bg-purple-500/5 rounded-full blur-[100px] pointer-events-none" />
@@ -205,11 +284,21 @@ export default function LandingPage() {
             <Link
               href="/stocks/AAPL"
               className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium text-base px-8 py-3.5 rounded-xl transition-all border border-zinc-700"
+              aria-label="View AAPL stock analysis"
             >
-              <TrendingUp className="h-4 w-4 text-emerald-500" />
+              <TrendingUp className="h-4 w-4 text-emerald-500" aria-hidden="true" />
               View AAPL Analysis
             </Link>
           </motion.div>
+
+          <motion.p
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.38 }}
+            className="mt-4 text-xs text-zinc-500 max-w-2xl mx-auto"
+          >
+            Educational project — not financial advice. Predictions are probabilistic and may be wrong.
+          </motion.p>
 
           {/* Floating stock logos */}
           <motion.div
@@ -229,7 +318,7 @@ export default function LandingPage() {
                 <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden group-hover:border-emerald-500/50 transition-colors">
                   <img
                     src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-                    alt={symbol}
+                    alt={`${symbol} stock logo`}
                     width={32}
                     height={32}
                     loading="eager"
@@ -341,13 +430,43 @@ export default function LandingPage() {
 
           <AnimatedSection>
             <div className="flex flex-wrap justify-center gap-2.5">
-              {TECH_STACK.map((tech) => (
-                <span
-                  key={tech.name}
-                  className="px-4 py-2 rounded-lg border border-zinc-800 bg-zinc-900/50 text-sm text-zinc-300 hover:border-emerald-500/30 hover:text-white transition-colors"
+              {TECH_STACK.map((tech) => {
+                const Icon = tech.icon
+                return (
+                  <div
+                    key={tech.name}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg border border-zinc-800 bg-zinc-900/50 text-sm text-zinc-300 hover:border-emerald-500/30 hover:text-white hover:shadow hover:shadow-emerald-500/10 transition-all"
+                  >
+                    <Icon className="h-4 w-4 text-zinc-400" />
+                    {tech.name}
+                  </div>
+                )
+              })}
+            </div>
+          </AnimatedSection>
+        </div>
+      </section>
+
+      {/* Popular Stocks / Internal Links */}
+      <section className="py-16 px-4 border-t border-zinc-800/50">
+        <div className="max-w-5xl mx-auto">
+          <AnimatedSection className="text-center mb-6">
+            <h2 className="text-2xl sm:text-3xl font-bold mb-3">Popular Stocks</h2>
+            <p className="text-sm text-zinc-400 max-w-xl mx-auto">
+              Jump straight into detailed AI predictions, technicals, and news for some of the most followed S&amp;P 100 names.
+            </p>
+          </AnimatedSection>
+          <AnimatedSection>
+            <div className="flex flex-wrap justify-center gap-2 sm:gap-3">
+              {["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA", "NFLX"].map((symbol) => (
+                <Link
+                  key={symbol}
+                  href={`/stocks/${symbol}`}
+                  className="px-4 py-2 rounded-full border border-zinc-800 bg-zinc-900/60 text-sm text-zinc-200 hover:border-emerald-500/40 hover:text-white hover:bg-zinc-900 transition-colors"
+                  aria-label={`View AI analysis for ${symbol}`}
                 >
-                  {tech.name}
-                </span>
+                  {symbol}
+                </Link>
               ))}
             </div>
           </AnimatedSection>
@@ -368,37 +487,58 @@ export default function LandingPage() {
             <Link
               href="/dashboard"
               className="group inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-base px-8 py-3.5 rounded-xl transition-all hover:shadow-xl hover:shadow-emerald-500/20"
+              aria-label="Open Dashboard"
             >
               Open Dashboard
-              <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" />
+              <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" aria-hidden="true" />
             </Link>
           </div>
         </AnimatedSection>
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-zinc-800/50 py-8 px-4">
-        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-zinc-500">
-          <div className="flex items-center gap-2">
-            <LineChart className="h-4 w-4 text-emerald-500" />
-            <span>StockPredict AI</span>
+      <footer className="border-t border-zinc-800/50 py-8 px-4" role="contentinfo">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-xs text-zinc-500 leading-relaxed mb-5">
+            StockPredict AI is an educational research project and does not provide investment advice. Predictions are estimates
+            based on historical data and may be inaccurate. Do your own research and consult a licensed advisor before investing.
           </div>
-          <div className="flex items-center gap-6">
-            <Link href="/dashboard" className="hover:text-white transition-colors">Dashboard</Link>
-            <Link href="/predictions" className="hover:text-white transition-colors">Predictions</Link>
-            <Link href="/news" className="hover:text-white transition-colors">News</Link>
-            <Link
-              href="https://github.com/Yogesh-VG0/Stock_Predict_Ai"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-white transition-colors"
-            >
-              GitHub
-            </Link>
+
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-zinc-500">
+            <div className="flex items-center gap-2">
+              <LineChart className="h-4 w-4 text-emerald-500" />
+              <span>StockPredict AI</span>
+            </div>
+            <div className="flex items-center gap-6">
+              <Link href="/dashboard" className="hover:text-white transition-colors">
+                Dashboard
+              </Link>
+              <Link href="/predictions" className="hover:text-white transition-colors">
+                Predictions
+              </Link>
+              <Link href="/news" className="hover:text-white transition-colors">
+                News
+              </Link>
+              <Link href="/how-it-works" className="hover:text-white transition-colors">
+                How it works
+              </Link>
+              <Link href="/methodology" className="hover:text-white transition-colors">
+                Methodology
+              </Link>
+              <Link
+                href="https://github.com/Yogesh-VG0/Stock_Predict_Ai"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-white transition-colors"
+              >
+                GitHub
+              </Link>
+            </div>
+            <span>Built by Yogesh Vadivel</span>
           </div>
-          <span>Built by Yogesh Vadivel</span>
         </div>
       </footer>
-    </div>
+      </div>
+    </>
   )
 }

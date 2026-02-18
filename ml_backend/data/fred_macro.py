@@ -4,8 +4,16 @@ from datetime import datetime
 from ml_backend.utils.mongodb import MongoDBClient
 from fredapi import Fred
 
-FRED_API_KEY = os.getenv('FRED_API_KEY')
-fred = Fred(api_key=FRED_API_KEY) if FRED_API_KEY else None
+_fred_client = None
+
+def _get_fred():
+    """Lazy init so env var is read at call time, not import time."""
+    global _fred_client
+    if _fred_client is None:
+        key = os.getenv('FRED_API_KEY')
+        if key:
+            _fred_client = Fred(api_key=key)
+    return _fred_client
 
 # Supported FRED indicators (FRED code: friendly name)
 FRED_INDICATORS = {
@@ -25,6 +33,7 @@ FRED_INDICATORS = {
 }
 
 def fetch_fred_series(series_code, start_date, end_date):
+    fred = _get_fred()
     if not fred:
         raise ValueError('FRED_API_KEY not set.')
     data = fred.get_series(series_code, observation_start=start_date, observation_end=end_date)

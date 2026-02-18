@@ -5,7 +5,10 @@ Sentiment analysis module for processing social media and news sentiment.
 
 import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from transformers import pipeline
+try:
+    from transformers import pipeline as transformers_pipeline
+except ImportError:
+    transformers_pipeline = None
 import pandas as pd
 from datetime import datetime, timedelta
 import time

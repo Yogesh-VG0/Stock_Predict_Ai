@@ -1126,8 +1126,8 @@ class MongoDBClient:
             logger.error(f"Error storing prediction session for {ticker}: {e}")
             return False
 
-    def get_prediction_history(self, ticker: str, days: int = 30) -> List[Dict]:
-        """Get prediction history for a ticker over specified days."""
+    def get_prediction_history_simple(self, ticker: str, days: int = 30) -> List[Dict]:
+        """Get prediction history for a ticker over specified days (API use)."""
         try:
             collection = self.collections[MONGO_COLLECTIONS["predictions"]]
             

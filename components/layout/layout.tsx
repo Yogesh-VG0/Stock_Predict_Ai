@@ -93,6 +93,10 @@ export default function Layout({ children }: LayoutProps) {
           >
             {children}
           </motion.main>
+
+          <footer className="border-t border-zinc-800/50 px-4 md:px-6 py-3 text-[11px] text-zinc-500 leading-relaxed">
+            Educational project — not financial advice. Predictions are probabilistic estimates based on historical data and may be inaccurate.
+          </footer>
         </div>
       </div>
     </SidebarProvider>

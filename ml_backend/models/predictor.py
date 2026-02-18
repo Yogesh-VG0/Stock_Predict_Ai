@@ -939,6 +939,9 @@ class StockPredictor:
             # Select features to match model's training columns (pruning-aware)
             model_cols = meta_w.get("feature_columns")
             X_pred = self._select_features(X_full, current_cols, model_cols)
+            pred_cols = model_cols if model_cols else current_cols
+            if len(pred_cols) == X_pred.shape[1]:
+                X_pred = pd.DataFrame(X_pred, columns=pred_cols)
             pred_return = float(model.predict(X_pred)[0])
             # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
             # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true
@@ -1083,6 +1086,9 @@ class StockPredictor:
             # Feature selection: match model's training columns
             model_cols = meta_w.get("feature_columns")
             X_pred = self._select_features(features, current_cols, model_cols)
+            pred_cols = model_cols if model_cols else current_cols
+            if len(pred_cols) == X_pred.shape[1]:
+                X_pred = pd.DataFrame(X_pred, columns=pred_cols)
 
             # Vectorized prediction
             preds_ret = model.predict(X_pred)
