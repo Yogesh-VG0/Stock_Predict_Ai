@@ -12,10 +12,16 @@ from ratelimit import limits, sleep_and_retry
 from ..utils.mongodb import MongoDBClient
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-from transformers import pipeline
+try:
+    from transformers import pipeline as transformers_pipeline
+except ImportError:
+    transformers_pipeline = None
 import aiohttp
 import statistics
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 # Load environment variables from various possible locations
 import os.path
@@ -39,6 +45,12 @@ if not env_loaded:
     load_dotenv()  # Try default location anyway
 
 logger = logging.getLogger(__name__)
+
+def _has_transformers() -> bool:
+    return transformers_pipeline is not None
+
+def _has_torch() -> bool:
+    return torch is not None
 
 class BaseSECFormParser:
     """Base class for SEC form parsers."""
@@ -439,20 +451,27 @@ class SECFilingsAnalyzer:
         if not self.kaleidoscope_api_key and not self.fmp_api_key:
             logger.warning("⚠️  No API keys available for SEC filings analysis!")
         
-        # Initialize FinBERT for sentiment analysis
-        try:
-            self.finbert = pipeline(
-                "sentiment-analysis",
-                model="yiyanghkust/finbert-tone",
-                framework="pt",
-                device=-1
-            )
-            self.finbert_tokenizer = self.finbert.tokenizer
-            self.finbert_model = self.finbert.model
-            logger.info("Loaded FinBERT model for sentiment analysis")
-        except Exception as e:
-            logger.error(f"Error initializing FinBERT: {str(e)}")
-            self.finbert = None
+        # Initialize FinBERT for sentiment analysis (optional dependency)
+        self.finbert = None
+        self.finbert_tokenizer = None
+        self.finbert_model = None
+
+        if not _has_transformers() or not _has_torch():
+            logger.info("Transformers/torch not installed; skipping FinBERT (SEC filings will use VADER fallback).")
+        else:
+            try:
+                self.finbert = transformers_pipeline(
+                    "sentiment-analysis",
+                    model="yiyanghkust/finbert-tone",
+                    framework="pt",
+                    device=-1
+                )
+                self.finbert_tokenizer = getattr(self.finbert, "tokenizer", None)
+                self.finbert_model = getattr(self.finbert, "model", None)
+                logger.info("Loaded FinBERT model for sentiment analysis")
+            except Exception as e:
+                logger.error(f"Error initializing FinBERT: {str(e)}")
+                self.finbert = None
         
         # Initialize form parsers
         self.form_parsers = {
@@ -553,7 +572,11 @@ class SECFilingsAnalyzer:
             
             # Method 1: Try FinBERT (if available)
             try:
-                if hasattr(self, 'finbert_tokenizer') and hasattr(self, 'finbert_model'):
+                if (
+                    _has_torch()
+                    and getattr(self, "finbert_tokenizer", None) is not None
+                    and getattr(self, "finbert_model", None) is not None
+                ):
                     inputs = self.finbert_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
                     with torch.no_grad():
                         outputs = self.finbert_model(**inputs)
