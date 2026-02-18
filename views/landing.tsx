@@ -504,12 +504,12 @@ export default function LandingPage() {
             based on historical data and may be inaccurate. Do your own research and consult a licensed advisor before investing.
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-zinc-500">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-sm text-zinc-500">
             <div className="flex items-center gap-2">
               <LineChart className="h-4 w-4 text-emerald-500" />
               <span>StockPredict AI</span>
             </div>
-            <div className="flex items-center gap-6">
+            <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-6 gap-y-2">
               <Link href="/dashboard" className="hover:text-white transition-colors">
                 Dashboard
               </Link>
@@ -534,7 +534,7 @@ export default function LandingPage() {
                 GitHub
               </Link>
             </div>
-            <span>Built by Yogesh Vadivel</span>
+            <span className="text-center sm:text-right">Built by Yogesh Vadivel</span>
           </div>
         </div>
       </footer>
