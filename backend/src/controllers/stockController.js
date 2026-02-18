@@ -1,5 +1,6 @@
 const axios = require('axios');
 const mongoConnection = require('../config/mongodb');
+const { normalizeTickerForDB } = require('../config/mongodb');
 const massiveService = require('../services/massiveService');
 
 // Company overview data mapping for all 25 tickers

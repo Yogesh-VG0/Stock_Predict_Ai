@@ -7,6 +7,13 @@ require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 // MongoDB connection string from environment variable
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/stock_predictor';
 
+// Normalize ticker for MongoDB queries: the ML pipeline stores BRK-B (hyphen)
+// but Finnhub/frontend uses BRK.B (dot). Convert dots to hyphens for DB lookups.
+function normalizeTickerForDB(ticker) {
+  if (!ticker) return ticker;
+  return ticker.toUpperCase().replace(/\./g, '-');
+}
+
 class MongoDBConnection {
   constructor() {
     this.connection = null;
@@ -80,10 +87,11 @@ class MongoDBConnection {
       }
 
       const collection = this.db.collection('prediction_explanations');
+      const dbTicker = normalizeTickerForDB(ticker);
 
       const explanation = await collection.findOne(
-        { ticker: ticker.toUpperCase(), window: window },
-        { sort: { timestamp: -1 } } // Get most recent
+        { ticker: dbTicker, window: window },
+        { sort: { timestamp: -1 } }
       );
 
       return explanation;
@@ -167,28 +175,25 @@ class MongoDBConnection {
         return null;
       }
 
-      console.log(`🔍 MongoDB: Fetching latest predictions for ${ticker}`);
-
+      const dbTicker = normalizeTickerForDB(ticker);
+      console.log(`🔍 MongoDB: Fetching latest predictions for ${dbTicker}`);
 
       const collection = this.db.collection('stock_predictions');
 
-      // Get the most recent timestamp for this ticker
       const latestDoc = await collection.findOne(
-        { ticker: ticker.toUpperCase() },
+        { ticker: dbTicker },
         { sort: { timestamp: -1 } }
       );
 
       if (!latestDoc) {
-        console.log(`❌ MongoDB: No predictions found for ${ticker}`);
+        console.log(`❌ MongoDB: No predictions found for ${dbTicker}`);
         return null;
       }
 
-      console.log(`✅ MongoDB: Found latest doc for ${ticker} at ${latestDoc.timestamp}`);
+      console.log(`✅ MongoDB: Found latest doc for ${dbTicker} at ${latestDoc.timestamp}`);
 
-
-      // Get all predictions from that timestamp
       const cursor = collection.find({
-        ticker: ticker.toUpperCase(),
+        ticker: dbTicker,
         timestamp: latestDoc.timestamp
       });
 
@@ -225,4 +230,5 @@ class MongoDBConnection {
 // Create singleton instance
 const mongoConnection = new MongoDBConnection();
 
-module.exports = mongoConnection; 
+module.exports = mongoConnection;
+module.exports.normalizeTickerForDB = normalizeTickerForDB;

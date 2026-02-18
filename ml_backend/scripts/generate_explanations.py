@@ -1009,11 +1009,16 @@ def generate_explanations(
             break
 
         # 0. Check for existing explanation for today (avoid redundant API calls)
+        # Query both nested (explanation_data.explanation_date) and top-level
+        # (explanation_date) patterns so it works regardless of schema.
         existing_explanation = mongo.db["prediction_explanations"].find_one(
             {
                 "ticker": ticker,
                 "window": "comprehensive",
-                "explanation_data.explanation_date": target_date
+                "$or": [
+                    {"explanation_data.explanation_date": target_date},
+                    {"explanation_date": target_date},
+                ],
             },
             sort=[("timestamp", -1)]
         )

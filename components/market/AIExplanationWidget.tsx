@@ -202,8 +202,17 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
         switch (key) {
           case 'outlook': outlook = content.split('\n')[0].trim(); break
           case 'confidence': {
-            const num = parseInt(content.split('\n')[0].trim(), 10)
-            if (!isNaN(num)) aiConfidence = Math.min(100, Math.max(0, num))
+            const raw = content.split('\n')[0].trim().toLowerCase()
+            const numMatch = raw.match(/(\d{1,3})/)
+            if (numMatch) {
+              aiConfidence = Math.min(100, Math.max(0, parseInt(numMatch[1], 10)))
+            } else if (raw.includes('high') || raw.includes('strong')) {
+              aiConfidence = 80
+            } else if (raw.includes('moderate') || raw.includes('medium')) {
+              aiConfidence = 55
+            } else if (raw.includes('low') || raw.includes('weak')) {
+              aiConfidence = 30
+            }
             break
           }
           case 'summary': summary = content; break

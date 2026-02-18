@@ -46,6 +46,11 @@ from ml_backend.api.utils import normalize_prediction_dict
 # Load environment variables
 load_dotenv()
 
+
+def _normalize_ticker(ticker: str) -> str:
+    """Normalize ticker for DB lookups: BRK.B → BRK-B (ML pipeline standard)."""
+    return ticker.upper().replace(".", "-")
+
 # Only set up logging once
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -209,6 +214,7 @@ class TrainingRequest(BaseModel):
 async def get_metadata(ticker: str) -> Dict:
     """Get metadata for a specific ticker."""
     try:
+        ticker = _normalize_ticker(ticker)
         if ticker not in TOP_100_TICKERS:
             raise HTTPException(status_code=404, detail="Ticker not found in S&P 100")
         
@@ -365,6 +371,7 @@ async def _set_predictions_cache(ticker: str, predictions: Dict) -> None:
 async def get_predictions(ticker: str) -> Dict:
     """Get predictions for a specific ticker."""
     try:
+        ticker = _normalize_ticker(ticker)
         if ticker not in TOP_100_TICKERS:
             raise HTTPException(status_code=404, detail="Ticker not found in S&P 100")
         cached = await _get_predictions_cached(ticker)
@@ -405,6 +412,7 @@ async def get_predictions(ticker: str) -> Dict:
 async def get_sentiment(ticker: str) -> Dict:
     """Get sentiment analysis for a specific ticker."""
     try:
+        ticker = _normalize_ticker(ticker)
         if ticker not in TOP_100_TICKERS:
             raise HTTPException(status_code=404, detail="Ticker not found in S&P 100")
         sentiment = app.state.mongo_client.get_latest_sentiment(ticker)
@@ -421,6 +429,7 @@ async def get_sentiment(ticker: str) -> Dict:
 async def get_historical(ticker: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict:
     """Get historical data for a specific ticker."""
     try:
+        ticker = _normalize_ticker(ticker)
         if ticker not in TOP_100_TICKERS:
             raise HTTPException(status_code=404, detail="Ticker not found in S&P 100")
         if not start_date:
@@ -2101,7 +2110,7 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
     Returns detailed, actionable investment analysis.
     """
     try:
-        ticker = ticker.upper()
+        ticker = _normalize_ticker(ticker)
         
         # Validate date format
         try:
@@ -2794,12 +2803,12 @@ async def get_stored_ai_explanation(ticker: str, window: str = "comprehensive"):
         Stored explanation data or 404 if not found
     """
     try:
-        # Query MongoDB for stored explanation
+        ticker = _normalize_ticker(ticker)
         collection = app.state.mongo_client.db['prediction_explanations']
         
         stored_doc = collection.find_one(
-            {"ticker": ticker.upper(), "window": window},
-            sort=[("timestamp", -1)]  # Get the most recent
+            {"ticker": ticker, "window": window},
+            sort=[("timestamp", -1)]
         )
         
         if not stored_doc:

@@ -70,7 +70,7 @@ TICKER_SUBREDDITS = {
     "GOOG": ["stocks", "investing", "wallstreetbets"],
     "GOOGL": ["stocks", "investing", "wallstreetbets"],
     "META": ["MetaStock", "Facebook", "stocks", "wallstreetbets"],
-    "BRK.B": ["brkb", "stocks", "investing"],
+    "BRK-B": ["brkb", "stocks", "investing"],
     "TSLA": ["teslainvestorsclub", "TSLA", "stocks", "wallstreetbets"],
     "AVGO": ["stocks", "investing", "wallstreetbets"],
     "LLY": ["stocks", "investing"],
@@ -220,8 +220,9 @@ RETRY_CONFIG = {
 }
 
 # Ticker mapping for yfinance special cases
+# Pipeline uses BRK-B everywhere; yfinance also accepts BRK-B.
 TICKER_YFINANCE_MAP = {
-    "BRK.B": "BRK-B"
+    "BRK-B": "BRK-B",
 }
 
 # Canary tickers for data freshness checks

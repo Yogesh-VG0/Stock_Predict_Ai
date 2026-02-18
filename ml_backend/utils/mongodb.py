@@ -1058,7 +1058,11 @@ class MongoDBClient:
             logger.error(f"Error creating advanced indexes: {e}")
 
     def store_prediction_explanation(self, ticker: str, window: str, explanation_data: Dict) -> bool:
-        """Store prediction explanation data including feature importance and LLM explanations."""
+        """Store prediction explanation data including feature importance and LLM explanations.
+
+        Uses upsert keyed on (ticker, window, explanation_date) so the same
+        ticker+date never accumulates duplicate documents.
+        """
         try:
             collection = self.db['prediction_explanations']
             
@@ -1091,8 +1095,16 @@ class MongoDBClient:
                 "timestamp": datetime.utcnow(),
                 "explanation_data": converted_explanation_data
             }
-            
-            result = collection.insert_one(document)
+
+            # Upsert on (ticker, window, explanation_date) so re-runs on
+            # the same day overwrite rather than duplicate.
+            explanation_date = converted_explanation_data.get("explanation_date", "")
+            filter_key = {
+                "ticker": ticker,
+                "window": window,
+                "explanation_data.explanation_date": explanation_date,
+            }
+            collection.update_one(filter_key, {"$set": document}, upsert=True)
             logger.info(f"Stored prediction explanation for {ticker}-{window}")
             return True
             
