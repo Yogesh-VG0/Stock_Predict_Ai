@@ -821,6 +821,12 @@ export default function StockDetail({ }: StockDetailProps) {
               <AIExplanationWidget
                 ticker={selectedStock}
                 currentPrice={currentPrice}
+                recentNews={stockNews.slice(0, 5).map((n: any) => ({
+                  title: n.title,
+                  source: n.source,
+                  sentiment: n.sentiment,
+                  published_at: n.published_at || n.date,
+                }))}
               />
             </Suspense>
           </motion.div>

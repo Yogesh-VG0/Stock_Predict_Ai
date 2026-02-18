@@ -239,10 +239,9 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GEMINI_MODEL: gemini-2.5-flash
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          echo "===== Generating Gemini AI explanations (model=$GEMINI_MODEL) ====="
+          echo "===== Generating Gemini AI explanations (auto-fallback: pro→flash→flash-lite) ====="
           python -m ml_backend.scripts.generate_explanations || echo "Explanation generation failed (non-fatal)"
 
       - name: Evaluate stored predictions (last 60 days)

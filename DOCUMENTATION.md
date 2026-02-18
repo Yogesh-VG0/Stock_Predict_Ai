@@ -1,6 +1,6 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-02-17
+> **Last updated**: 2026-02-18
 
 ---
 
@@ -312,7 +312,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **ML Backend** | FastAPI (Python) | ML serving |
 | **Predictor** | LightGBM | Stock price prediction (the ONLY price predictor) |
 | **Sentiment Scorers** | FinBERT, RoBERTa, VADER | Sentiment analysis (INPUT features, not predictors) |
-| **Explainer** | SHAP + Google Gemini 2.5 Flash | SHAP decomposes predictions; Gemini writes English text |
+| **Explainer** | SHAP + Google Gemini 2.5 (Pro/Flash auto-fallback) | SHAP decomposes predictions; Gemini writes stock-specific English text |
 | **Database** | MongoDB Atlas | Primary data store |
 | **Cache** | Redis (optional) | Caching & rate limiting |
 | **Real-time** | Finnhub WebSocket | Live stock prices |
@@ -336,7 +336,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **RapidAPI** | Fear & Greed Index | Node backend | `/v1/fgi` | `RAPIDAPI_KEY` | Per-plan limits | Not stored (returned to frontend only) |
 | **Calendarific** | US market holidays | Node backend | `/v2/holidays` | `CALENDARIFIC_API_KEY` | Per-plan limits | Redis `us_holidays_{year}` (1yr TTL) + in-memory |
 | **financialdata.net** | Stock prices for technical indicators | Node backend | `/api/v1/stock-prices` | `FINANCIALDATA_API_KEY` | Free: 300 req/day; 5 calls/min enforced | In-memory cache only (24hr indicators, 12hr prices) |
-| **Google Gemini** | AI-powered explanation generation | ML backend (GitHub Actions) | `generate_content` API | `GOOGLE_API_KEY` | Flash: 15 RPM (2s sleep); Pro: 5 RPM (4s sleep) | `prediction_explanations` (MongoDB) |
+| **Google Gemini** | AI-powered stock-specific explanation generation | ML backend (GitHub Actions) | `generate_content` API (auto-fallback: pro→flash→flash-lite) | `GOOGLE_API_KEY` | Pro: 15 RPM, 1.5K RPD; Flash: 5 RPM, 20 RPD | `prediction_explanations` (MongoDB) |
 | **Nasdaq** | Short interest data | ML backend | `/api/quote/{ticker}/short-interest` | None (public) | Not explicitly limited | Within `sentiment` collection (MongoDB) |
 | **Finviz** | Short interest fallback + news headlines | ML backend | Web scraping | None | Sequential with delays | Within `sentiment` collection (MongoDB) |
 | **Seeking Alpha** | Comment sentiment | ML backend | Web scraping (Playwright) | None | Sequential with locks; proxy rotation | `seeking_alpha_comments`, `seeking_alpha_sentiment` (MongoDB) |
@@ -1098,24 +1098,37 @@ This is a mathematical decomposition, not a language model. For each ticker:
 
 This step uses Google Gemini (a language model) to translate all the numeric data into plain English. Gemini does NOT predict prices — it reads the LightGBM prediction and explains it.
 
-**Data fed to Gemini:**
-- LightGBM predictions (all 3 horizons)
-- Technical analysis (RSI, MACD, Bollinger, SMAs, volume, performance)
-- News headlines (from all sources)
-- Sentiment scores (blended + per-source)
-- SHAP feature drivers (with human-readable names)
-- Macro economic context (Fed rate, CPI, yield curve)
-- Insider trading activity (buy/sell ratio, recent transactions)
-- Short interest data (short float %, days to cover)
+**Stock-Specific Prompts**: Each prompt is tailored to the individual stock using a `STOCK_META` lookup table that provides the company name, sector, and industry for all 100 S&P 100 tickers. The prompt includes sector-specific analysis guidance (e.g., interest rate sensitivity for financials, pipeline catalysts for healthcare, AI/cloud narratives for tech).
 
-**Output format:**
-- `OVERALL_OUTLOOK`: Bullish/Bearish/Neutral
-- `SUMMARY`: 2-3 sentence overview
-- `WHAT_THIS_MEANS`: Plain-language actionable insight
-- `KEY_DRIVERS`: Bullish (+) and bearish (-) factors
-- `NEWS_IMPACT`: Recent news analysis
-- `KEY_LEVELS`: Support and resistance prices
-- `BOTTOM_LINE`: Single most important takeaway
+**Data fed to Gemini (11 sources):**
+- LightGBM predictions (all 3 horizons with confidence, alpha vs SPY, price ranges)
+- Technical analysis (RSI, MACD, Bollinger, SMAs, EMAs, volume ratio, 52-week range, performance)
+- News headlines (Finviz, RSS, Reddit, Marketaux + aggregated news from MongoDB)
+- Sentiment scores (blended + per-source breakdown)
+- SHAP feature drivers (with human-readable names and contribution values)
+- Macro economic context (Fed rate, CPI, unemployment, yield curve, GDP)
+- Insider trading activity (buy/sell ratio, recent transactions with names/prices)
+- Short interest data (short float %, days to cover)
+- Finnhub basic financials (P/E, P/B, ROE, dividend yield, market cap, beta)
+- FMP earnings data (EPS actual vs estimated, earnings surprise)
+- FMP analyst ratings and price targets
+
+**Gemini Model Fallback Chain**: The script automatically selects the best available model based on in-process RPD tracking:
+1. `gemini-2.5-pro` (1.5K RPD) — preferred for quality and headroom
+2. `gemini-2.5-flash` (20 RPD) — first fallback
+3. `gemini-2.5-flash-lite` (20 RPD) — last resort
+
+If `GEMINI_MODEL` env var is explicitly set, it locks to that model (no fallback). The workflow does NOT set this variable, allowing automatic fallback.
+
+**Output format (structured sections):**
+- `OVERALL_OUTLOOK`: Bullish/Bearish/Neutral/Slightly Bullish/Slightly Bearish
+- `CONFIDENCE`: 1-100 integer score based on data agreement
+- `SUMMARY`: 2-3 sentences referencing specific numbers and the company by name
+- `WHAT_THIS_MEANS`: Plain-language actionable insight specific to the stock's business
+- `KEY_DRIVERS`: Bullish (+) and bearish (-) factors, each citing a specific data value
+- `NEWS_IMPACT`: References actual headlines from the data; states when unavailable
+- `KEY_LEVELS`: Support and resistance prices from Bollinger Bands / prediction ranges
+- `BOTTOM_LINE`: Single most important takeaway with predicted price/percentage
 
 Stored in `prediction_explanations` collection.
 
@@ -1296,7 +1309,7 @@ Step 8: GENERATE SHAP FEATURE IMPORTANCE (10 batches x 10 tickers)
 Step 9: GENERATE AI EXPLANATIONS (Gemini)
   → python -m ml_backend.scripts.generate_explanations
   → Uses all MongoDB data (predictions, sentiment, technicals, SHAP, macro, insider, short interest)
-  → Calls Gemini 2.5 Flash API to EXPLAIN (not predict) each ticker
+  → Calls Gemini API (auto-fallback: pro→flash→flash-lite) to EXPLAIN (not predict) each ticker with stock-specific prompts
   → Stores in MongoDB prediction_explanations collection
   → Non-fatal if fails
 
@@ -2117,13 +2130,15 @@ React Router DOM has been fully removed and routing consolidated to Next.js App 
 |-------|------------------|--------|
 | **gemini-2.5-flash** | 5 RPM, 250K TPM, **20 RPD** | ❌ Only 20 requests/day — insufficient for 100 tickers |
 | **gemini-2.5-pro** | 15 RPM, Unlimited TPM, **1.5K RPD** | ✅ 1,500 requests/day — sufficient for daily batch (100 tickers) |
+| **gemini-2.5-flash-lite** | 10 RPM, 250K TPM, **20 RPD** | ❌ Only 20 requests/day — last-resort fallback |
 
 **Solutions implemented** (Feb 2026):
 
-1. **Default model switched to `gemini-2.5-pro`** — Provides 1.5K RPD (vs 20 for flash), sufficient for daily batch processing of 100 tickers
-2. **Check for existing explanations** — Script now checks MongoDB for existing explanations for today's date before calling Gemini API, avoiding redundant API calls
-3. **Quota exceeded handling** — Script detects quota/rate limit errors and stops processing remaining tickers gracefully (no wasted API calls)
-4. **Error messages** — Clear error messages inform users when quota is exceeded, suggesting upgrade to paid tier for production use
+1. **Automatic model fallback chain** (`_pick_model()`) — Cycles through `gemini-2.5-pro` → `gemini-2.5-flash` → `gemini-2.5-flash-lite` based on in-process RPD usage tracking. Each model has a headroom buffer (e.g., 1,400 of 1,500 for pro) to avoid hitting hard limits.
+2. **RPD tracking** (`_model_rpd_count`) — Tracks per-model request counts within a single pipeline run. When a model approaches its limit, the script automatically falls back to the next model.
+3. **Check for existing explanations** — Script now checks MongoDB for existing explanations for today's date before calling Gemini API, avoiding redundant API calls
+4. **Quota exceeded handling** — After 3 consecutive quota failures, script stops processing remaining tickers gracefully (no wasted API calls)
+5. **GitHub Actions workflow** — Does NOT force `GEMINI_MODEL`, allowing the automatic fallback chain to work. Previously was locked to `gemini-2.5-flash` (20 RPD), now uses the full chain starting with pro.
 
 **For production**: Consider upgrading to Gemini API paid tier for:
 - Higher rate limits (unlimited RPD on paid tier)
@@ -2158,6 +2173,32 @@ React Router DOM has been fully removed and routing consolidated to Next.js App 
 10. **Rename `alpha_vantage_data` collection** — Align naming with actual contents (FMP data)
 11. ~~**Add data retention policy**~~ — DONE (Feb 2026): `ml_backend/scripts/data_retention.py` runs daily in GitHub Actions, removes data older than 12 months
 
+### Pipeline Health Summary (`run_pipeline.py`)
+
+The `PipelineHealthSummary` class tracks the status of every pipeline stage and prints a clear summary at the end of each run. This turns "it didn't crash" into "we know exactly what happened."
+
+```
+========================================================
+  PIPELINE HEALTH SUMMARY
+========================================================
+  MongoDB connected:        YES
+  Historical data fetched:  100 tickers
+  Training status:          success (100 tickers)
+  Backtest status:          skipped
+  Predictions stored:       100 tickers x 3 horizons
+  SeekingAlpha scraped:     SKIPPED (not in pipeline)
+  Gemini explanations:      not run (separate script)
+  Evaluation samples found: 0 (expected early)
+========================================================
+```
+
+Tracked fields: `mongo_connected`, `data_fetched`, `data_failed`, `training_status`, `training_tickers`, `backtest_status`, `predictions_stored`, `predictions_failed`, `predictions_skipped`, `horizons_used`, `seeking_alpha_status`, `gemini_explanations`, `evaluation_samples`.
+
+### Hardened Prediction History Methods (`utils/mongodb.py`)
+
+- **`get_prediction_history()`** — Logs the effective query range (`start`/`end`) and result count at `INFO` level on every call. Used for drift detection and accuracy tracking.
+- **`get_prediction_history_simple()`** — Raises `TypeError` if caller passes `start_date` or `end_date` via `**kwargs`. This guards against accidentally using the simple helper where the full method is needed.
+
 ### Code Fixes Applied in This Review
 
 The following code changes were made to address data storage gaps and pipeline issues:
@@ -2172,6 +2213,12 @@ The following code changes were made to address data storage gaps and pipeline i
 | **Gemini reads short interest directly** | `ml_backend/scripts/generate_explanations.py` | Updated `_get_short_interest_context()` to read from `short_interest_data` collection first (more granular), with fallback to `sentiment` collection |
 | **Gemini API rate limit handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | Default model switched to `gemini-2.5-pro` (1.5K RPD vs 20 for flash); added check for existing explanations to avoid redundant API calls; added quota exceeded detection and graceful stopping |
 | **Gemini API error handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | `_call_gemini()` now returns error type (`quota_exceeded`, `rate_limit`, `api_error`); batch script stops processing when quota exceeded; API route returns clear error messages |
+| **Stock-specific Gemini prompts** | `ml_backend/scripts/generate_explanations.py` | Added `STOCK_META` dictionary (100 tickers → company name, sector, industry). Prompt now addresses each stock by name, includes sector-specific guidance, and requires every KEY_DRIVER to cite a specific data value |
+| **Gemini model auto-fallback** | `ml_backend/scripts/generate_explanations.py` + `.github/workflows/daily-predictions.yml` | `_pick_model()` auto-selects best model via in-process RPD tracking (pro→flash→flash-lite). Workflow no longer forces `GEMINI_MODEL=gemini-2.5-flash` |
+| **Pipeline health summary** | `ml_backend/scripts/run_pipeline.py` | `PipelineHealthSummary` class tracks every pipeline stage and prints clear summary at end of run |
+| **Hardened prediction history** | `ml_backend/utils/mongodb.py` | `get_prediction_history()` logs effective query range; `get_prediction_history_simple()` rejects `start_date`/`end_date` kwargs with `TypeError` |
+| **CONFIDENCE in AI output** | `components/market/AIExplanationWidget.tsx` | Parser extracts the new `CONFIDENCE:` section from Gemini output |
+| **News in AI Insights** | `views/stock-detail.tsx` + `components/market/AIExplanationWidget.tsx` | Stock detail view now passes `recentNews` prop to AI widget; widget displays news with sentiment indicators even when AI text lacks specific headlines |
 
 ---
 

@@ -34,10 +34,12 @@ import { getCachedData, setCachedData } from "@/hooks/use-prefetch"
 interface AIExplanationWidgetProps {
   ticker: string;
   currentPrice: number;
+  recentNews?: Array<{ title: string; source?: string; sentiment?: string; published_at?: string }>;
 }
 
 interface ParsedExplanation {
   outlook: string;
+  confidence: number;
   summary: string;
   whatThisMeans: string;
   keyDrivers: { text: string; type: 'bullish' | 'bearish' }[];
@@ -47,7 +49,7 @@ interface ParsedExplanation {
   raw: string;
 }
 
-export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanationWidgetProps) {
+export default function AIExplanationWidget({ ticker, currentPrice, recentNews }: AIExplanationWidgetProps) {
   const [explanation, setExplanation] = useState<AIExplanation | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
@@ -171,6 +173,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
       .trim()
 
     let outlook = ''
+    let aiConfidence = 0
     let summary = ''
     let whatThisMeans = ''
     let newsImpact = ''
@@ -181,6 +184,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
     // Parse structured sections
     const sectionPatterns: [RegExp, string][] = [
       [/OVERALL_OUTLOOK:\s*/i, 'outlook'],
+      [/CONFIDENCE:\s*/i, 'confidence'],
       [/SUMMARY:\s*/i, 'summary'],
       [/WHAT_THIS_MEANS:\s*/i, 'whatThisMeans'],
       [/KEY_DRIVERS:\s*/i, 'keyDrivers'],
@@ -197,6 +201,11 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
         const content = match[1].trim()
         switch (key) {
           case 'outlook': outlook = content.split('\n')[0].trim(); break
+          case 'confidence': {
+            const num = parseInt(content.split('\n')[0].trim(), 10)
+            if (!isNaN(num)) aiConfidence = Math.min(100, Math.max(0, num))
+            break
+          }
           case 'summary': summary = content; break
           case 'whatThisMeans': whatThisMeans = content; break
           case 'newsImpact': newsImpact = content; break
@@ -262,7 +271,7 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
       }
     }
 
-    return { outlook, summary, whatThisMeans, keyDrivers, newsImpact, keyLevels, bottomLine, raw: clean }
+    return { outlook, confidence: aiConfidence, summary, whatThisMeans, keyDrivers, newsImpact, keyLevels, bottomLine, raw: clean }
   }
 
   // ── Loading ──
@@ -497,12 +506,34 @@ export default function AIExplanationWidget({ ticker, currentPrice }: AIExplanat
                   )}
 
                   {/* News Impact */}
-                  {parsed.newsImpact && (
+                  {(parsed.newsImpact || (recentNews && recentNews.length > 0)) && (
                     <div className="rounded-lg p-3 bg-amber-500/5 border border-amber-500/15">
                       <div className="text-[10px] text-amber-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
                         <Newspaper className="h-3 w-3" /> News & Sentiment Impact
                       </div>
-                      <p className="text-xs text-zinc-300 leading-relaxed">{parsed.newsImpact}</p>
+                      {parsed.newsImpact && (
+                        <p className="text-xs text-zinc-300 leading-relaxed">{parsed.newsImpact}</p>
+                      )}
+                      {recentNews && recentNews.length > 0 && (
+                        <div className={parsed.newsImpact ? "mt-2 pt-2 border-t border-amber-500/10" : ""}>
+                          <div className="space-y-1.5">
+                            {recentNews.slice(0, 4).map((item, i) => (
+                              <div key={i} className="flex items-start gap-1.5 text-[11px]">
+                                <span className={`mt-0.5 shrink-0 ${
+                                  item.sentiment === 'positive' ? 'text-emerald-400' :
+                                  item.sentiment === 'negative' ? 'text-red-400' : 'text-zinc-500'
+                                }`}>
+                                  {item.sentiment === 'positive' ? '▲' : item.sentiment === 'negative' ? '▼' : '•'}
+                                </span>
+                                <span className="text-zinc-300 leading-relaxed line-clamp-1">{item.title}</span>
+                                {item.source && (
+                                  <span className="text-zinc-600 shrink-0 ml-auto text-[9px]">{item.source}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 

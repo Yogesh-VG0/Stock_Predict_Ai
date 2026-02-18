@@ -450,12 +450,24 @@ class MongoDBClient:
                     date_filter["$lte"] = end_date
                 query["asof_date"] = date_filter
 
+            effective_start = start_date.isoformat() if start_date else "unbounded"
+            effective_end = end_date.isoformat() if end_date else "unbounded"
+            logger.info(
+                "get_prediction_history: %s/%s range=[%s, %s] limit=%d",
+                ticker, window, effective_start, effective_end, limit,
+            )
+
             cursor = (
                 collection.find(query, {"_id": 0})
                 .sort("asof_date", DESCENDING)
                 .limit(limit)
             )
-            return list(cursor)
+            results = list(cursor)
+            logger.info(
+                "get_prediction_history: %s/%s returned %d docs",
+                ticker, window, len(results),
+            )
+            return results
         except Exception as e:
             logger.error("Error getting prediction history for %s-%s: %s", ticker, window, e)
             return []
@@ -1126,8 +1138,17 @@ class MongoDBClient:
             logger.error(f"Error storing prediction session for {ticker}: {e}")
             return False
 
-    def get_prediction_history_simple(self, ticker: str, days: int = 30) -> List[Dict]:
-        """Get prediction history for a ticker over specified days (API use)."""
+    def get_prediction_history_simple(self, ticker: str, days: int = 30, **kwargs) -> List[Dict]:
+        """Get prediction history for a ticker over specified days (API use).
+
+        This is the *simple* helper — it does NOT accept start_date / end_date.
+        Use ``get_prediction_history()`` for date-range queries.
+        """
+        if "start_date" in kwargs or "end_date" in kwargs:
+            raise TypeError(
+                "get_prediction_history_simple does not accept start_date/end_date. "
+                "Use get_prediction_history() for date-range queries."
+            )
         try:
             collection = self.collections[MONGO_COLLECTIONS["predictions"]]
             

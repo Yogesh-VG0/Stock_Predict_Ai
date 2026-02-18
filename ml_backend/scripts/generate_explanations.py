@@ -98,6 +98,116 @@ def _friendly_feature_name(raw: str) -> str:
     return FEATURE_DISPLAY_NAMES.get(raw, raw.replace("_", " ").title())
 
 
+# ── Per-stock metadata for stock-specific prompts ──
+STOCK_META: Dict[str, Dict[str, str]] = {
+    "AAPL": {"name": "Apple Inc.", "sector": "Technology", "industry": "Consumer Electronics"},
+    "MSFT": {"name": "Microsoft Corp.", "sector": "Technology", "industry": "Software"},
+    "NVDA": {"name": "NVIDIA Corp.", "sector": "Technology", "industry": "Semiconductors"},
+    "GOOGL": {"name": "Alphabet Inc.", "sector": "Technology", "industry": "Internet Services"},
+    "META": {"name": "Meta Platforms", "sector": "Technology", "industry": "Social Media"},
+    "AVGO": {"name": "Broadcom Inc.", "sector": "Technology", "industry": "Semiconductors"},
+    "ORCL": {"name": "Oracle Corp.", "sector": "Technology", "industry": "Enterprise Software"},
+    "CRM": {"name": "Salesforce Inc.", "sector": "Technology", "industry": "Cloud Software"},
+    "AMD": {"name": "Advanced Micro Devices", "sector": "Technology", "industry": "Semiconductors"},
+    "INTC": {"name": "Intel Corp.", "sector": "Technology", "industry": "Semiconductors"},
+    "CSCO": {"name": "Cisco Systems", "sector": "Technology", "industry": "Networking Equipment"},
+    "ADBE": {"name": "Adobe Inc.", "sector": "Technology", "industry": "Software"},
+    "QCOM": {"name": "Qualcomm Inc.", "sector": "Technology", "industry": "Semiconductors"},
+    "TXN": {"name": "Texas Instruments", "sector": "Technology", "industry": "Semiconductors"},
+    "NOW": {"name": "ServiceNow Inc.", "sector": "Technology", "industry": "Cloud Software"},
+    "INTU": {"name": "Intuit Inc.", "sector": "Technology", "industry": "Financial Software"},
+    "AMZN": {"name": "Amazon.com Inc.", "sector": "Consumer Cyclical", "industry": "E-Commerce / Cloud"},
+    "TSLA": {"name": "Tesla Inc.", "sector": "Consumer Cyclical", "industry": "Electric Vehicles"},
+    "HD": {"name": "Home Depot Inc.", "sector": "Consumer Cyclical", "industry": "Home Improvement Retail"},
+    "NFLX": {"name": "Netflix Inc.", "sector": "Communication Services", "industry": "Streaming"},
+    "LOW": {"name": "Lowe's Companies", "sector": "Consumer Cyclical", "industry": "Home Improvement Retail"},
+    "SBUX": {"name": "Starbucks Corp.", "sector": "Consumer Cyclical", "industry": "Restaurants"},
+    "NKE": {"name": "Nike Inc.", "sector": "Consumer Cyclical", "industry": "Footwear / Apparel"},
+    "MCD": {"name": "McDonald's Corp.", "sector": "Consumer Cyclical", "industry": "Restaurants"},
+    "DIS": {"name": "Walt Disney Co.", "sector": "Communication Services", "industry": "Entertainment"},
+    "BKNG": {"name": "Booking Holdings", "sector": "Consumer Cyclical", "industry": "Online Travel"},
+    "TGT": {"name": "Target Corp.", "sector": "Consumer Defensive", "industry": "Discount Retail"},
+    "JPM": {"name": "JPMorgan Chase", "sector": "Financial Services", "industry": "Diversified Banking"},
+    "V": {"name": "Visa Inc.", "sector": "Financial Services", "industry": "Payment Processing"},
+    "MA": {"name": "Mastercard Inc.", "sector": "Financial Services", "industry": "Payment Processing"},
+    "BAC": {"name": "Bank of America", "sector": "Financial Services", "industry": "Diversified Banking"},
+    "WFC": {"name": "Wells Fargo", "sector": "Financial Services", "industry": "Diversified Banking"},
+    "GS": {"name": "Goldman Sachs", "sector": "Financial Services", "industry": "Investment Banking"},
+    "MS": {"name": "Morgan Stanley", "sector": "Financial Services", "industry": "Investment Banking"},
+    "AXP": {"name": "American Express", "sector": "Financial Services", "industry": "Credit Services"},
+    "BLK": {"name": "BlackRock Inc.", "sector": "Financial Services", "industry": "Asset Management"},
+    "SCHW": {"name": "Charles Schwab", "sector": "Financial Services", "industry": "Brokerage"},
+    "C": {"name": "Citigroup Inc.", "sector": "Financial Services", "industry": "Diversified Banking"},
+    "COF": {"name": "Capital One Financial", "sector": "Financial Services", "industry": "Credit Services"},
+    "BK": {"name": "Bank of New York Mellon", "sector": "Financial Services", "industry": "Custody Banking"},
+    "MET": {"name": "MetLife Inc.", "sector": "Financial Services", "industry": "Insurance"},
+    "AIG": {"name": "American International Group", "sector": "Financial Services", "industry": "Insurance"},
+    "USB": {"name": "U.S. Bancorp", "sector": "Financial Services", "industry": "Regional Banking"},
+    "XOM": {"name": "Exxon Mobil", "sector": "Energy", "industry": "Oil & Gas Integrated"},
+    "CVX": {"name": "Chevron Corp.", "sector": "Energy", "industry": "Oil & Gas Integrated"},
+    "COP": {"name": "ConocoPhillips", "sector": "Energy", "industry": "Oil & Gas E&P"},
+    "JNJ": {"name": "Johnson & Johnson", "sector": "Healthcare", "industry": "Pharmaceuticals / MedTech"},
+    "UNH": {"name": "UnitedHealth Group", "sector": "Healthcare", "industry": "Health Insurance"},
+    "LLY": {"name": "Eli Lilly", "sector": "Healthcare", "industry": "Pharmaceuticals"},
+    "PFE": {"name": "Pfizer Inc.", "sector": "Healthcare", "industry": "Pharmaceuticals"},
+    "ABBV": {"name": "AbbVie Inc.", "sector": "Healthcare", "industry": "Pharmaceuticals"},
+    "ABT": {"name": "Abbott Laboratories", "sector": "Healthcare", "industry": "Medical Devices"},
+    "TMO": {"name": "Thermo Fisher Scientific", "sector": "Healthcare", "industry": "Life Sciences Tools"},
+    "DHR": {"name": "Danaher Corp.", "sector": "Healthcare", "industry": "Life Sciences Tools"},
+    "MRK": {"name": "Merck & Co.", "sector": "Healthcare", "industry": "Pharmaceuticals"},
+    "AMGN": {"name": "Amgen Inc.", "sector": "Healthcare", "industry": "Biotechnology"},
+    "GILD": {"name": "Gilead Sciences", "sector": "Healthcare", "industry": "Biotechnology"},
+    "ISRG": {"name": "Intuitive Surgical", "sector": "Healthcare", "industry": "Medical Devices"},
+    "MDT": {"name": "Medtronic plc", "sector": "Healthcare", "industry": "Medical Devices"},
+    "BMY": {"name": "Bristol-Myers Squibb", "sector": "Healthcare", "industry": "Pharmaceuticals"},
+    "CVS": {"name": "CVS Health Corp.", "sector": "Healthcare", "industry": "Healthcare Plans / Pharmacy"},
+    "WMT": {"name": "Walmart Inc.", "sector": "Consumer Defensive", "industry": "Discount Retail"},
+    "COST": {"name": "Costco Wholesale", "sector": "Consumer Defensive", "industry": "Warehouse Clubs"},
+    "PG": {"name": "Procter & Gamble", "sector": "Consumer Defensive", "industry": "Household Products"},
+    "KO": {"name": "Coca-Cola Co.", "sector": "Consumer Defensive", "industry": "Beverages"},
+    "PEP": {"name": "PepsiCo Inc.", "sector": "Consumer Defensive", "industry": "Beverages / Snacks"},
+    "MDLZ": {"name": "Mondelez International", "sector": "Consumer Defensive", "industry": "Packaged Foods"},
+    "CL": {"name": "Colgate-Palmolive", "sector": "Consumer Defensive", "industry": "Household Products"},
+    "MO": {"name": "Altria Group", "sector": "Consumer Defensive", "industry": "Tobacco"},
+    "CAT": {"name": "Caterpillar Inc.", "sector": "Industrials", "industry": "Construction Equipment"},
+    "HON": {"name": "Honeywell International", "sector": "Industrials", "industry": "Industrial Conglomerate"},
+    "UNP": {"name": "Union Pacific Corp.", "sector": "Industrials", "industry": "Railroads"},
+    "BA": {"name": "Boeing Co.", "sector": "Industrials", "industry": "Aerospace & Defense"},
+    "RTX": {"name": "RTX Corp.", "sector": "Industrials", "industry": "Aerospace & Defense"},
+    "LMT": {"name": "Lockheed Martin", "sector": "Industrials", "industry": "Aerospace & Defense"},
+    "DE": {"name": "Deere & Co.", "sector": "Industrials", "industry": "Farm Machinery"},
+    "GE": {"name": "GE Aerospace", "sector": "Industrials", "industry": "Aerospace & Defense"},
+    "GD": {"name": "General Dynamics", "sector": "Industrials", "industry": "Aerospace & Defense"},
+    "EMR": {"name": "Emerson Electric", "sector": "Industrials", "industry": "Industrial Automation"},
+    "FDX": {"name": "FedEx Corp.", "sector": "Industrials", "industry": "Logistics / Freight"},
+    "UPS": {"name": "United Parcel Service", "sector": "Industrials", "industry": "Logistics / Freight"},
+    "MMM": {"name": "3M Company", "sector": "Industrials", "industry": "Industrial Conglomerate"},
+    "CMCSA": {"name": "Comcast Corp.", "sector": "Communication Services", "industry": "Cable / Telecom"},
+    "VZ": {"name": "Verizon Communications", "sector": "Communication Services", "industry": "Telecom"},
+    "T": {"name": "AT&T Inc.", "sector": "Communication Services", "industry": "Telecom"},
+    "CHTR": {"name": "Charter Communications", "sector": "Communication Services", "industry": "Cable"},
+    "BRK-B": {"name": "Berkshire Hathaway", "sector": "Financial Services", "industry": "Diversified Holding"},
+    "ACN": {"name": "Accenture plc", "sector": "Technology", "industry": "IT Consulting"},
+    "IBM": {"name": "IBM Corp.", "sector": "Technology", "industry": "IT Services / Cloud"},
+    "PYPL": {"name": "PayPal Holdings", "sector": "Financial Services", "industry": "Digital Payments"},
+    "LIN": {"name": "Linde plc", "sector": "Basic Materials", "industry": "Industrial Gases"},
+    "NEE": {"name": "NextEra Energy", "sector": "Utilities", "industry": "Electric Utilities / Renewables"},
+    "SO": {"name": "Southern Company", "sector": "Utilities", "industry": "Electric Utilities"},
+    "DUK": {"name": "Duke Energy", "sector": "Utilities", "industry": "Electric Utilities"},
+    "AMT": {"name": "American Tower Corp.", "sector": "Real Estate", "industry": "Cell Tower REITs"},
+    "SPG": {"name": "Simon Property Group", "sector": "Real Estate", "industry": "Retail REITs"},
+    "PLTR": {"name": "Palantir Technologies", "sector": "Technology", "industry": "Data Analytics / AI"},
+    "TMUS": {"name": "T-Mobile US", "sector": "Communication Services", "industry": "Wireless Telecom"},
+    "PM": {"name": "Philip Morris International", "sector": "Consumer Defensive", "industry": "Tobacco"},
+    "AMAT": {"name": "Applied Materials", "sector": "Technology", "industry": "Semiconductor Equipment"},
+}
+
+
+def _get_stock_meta(ticker: str) -> Dict[str, str]:
+    """Return company name, sector, and industry for a ticker."""
+    return STOCK_META.get(ticker, {"name": ticker, "sector": "Unknown", "industry": "Unknown"})
+
+
 # ── Technical indicator calculator (standalone, no FastAPI dependency) ──
 def calculate_technicals(df: pd.DataFrame) -> Dict:
     """Calculate key technicals from OHLCV DataFrame."""
@@ -166,14 +276,43 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
         return {}
 
 
-# Default model: gemini-2.5-pro (free tier: 1.5K RPD, better quality)
-# gemini-2.5-flash has only 20 RPD on free tier (too restrictive)
-# Override: set GEMINI_MODEL env var (e.g., GEMINI_MODEL=gemini-2.5-flash)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
-
+# Model priority: try pro first (1.5K RPD), fall back to flash (20 RPD) or flash-lite (20 RPD).
+# Override: set GEMINI_MODEL env var to lock to a single model.
+_MODEL_FALLBACK_CHAIN = [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", _MODEL_FALLBACK_CHAIN[0])
 
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 30
+
+# Per-model RPD tracking within this process run
+_model_rpd_count: Dict[str, int] = {}
+_MODEL_RPD_LIMITS: Dict[str, int] = {
+    "gemini-2.5-pro": 1400,       # leave headroom vs 1.5K limit
+    "gemini-2.5-flash": 18,       # leave headroom vs 20 limit
+    "gemini-2.5-flash-lite": 18,
+}
+
+
+def _pick_model() -> str:
+    """Pick the best available model based on RPD usage tracking.
+
+    If GEMINI_MODEL env var is explicitly set by the user, lock to that model
+    (no fallback).  Otherwise cycle through the fallback chain.
+    """
+    forced = os.getenv("GEMINI_MODEL")
+    if forced:
+        return forced
+
+    for model in _MODEL_FALLBACK_CHAIN:
+        used = _model_rpd_count.get(model, 0)
+        limit = _MODEL_RPD_LIMITS.get(model, 1400)
+        if used < limit:
+            return model
+    return _MODEL_FALLBACK_CHAIN[0]
 
 
 def _parse_retry_after(error_str: str) -> int:
@@ -187,7 +326,7 @@ def _parse_retry_after(error_str: str) -> int:
 
 def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
     """
-    Synchronous Gemini API call using GEMINI_MODEL with retry + backoff.
+    Synchronous Gemini API call with automatic model fallback and RPD tracking.
 
     Returns (explanation_text, error_type) where error_type is None on success,
     or "quota_exceeded" (daily limit hit), "rate_limit" (transient 429),
@@ -201,18 +340,23 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
         return ("AI explanation unavailable: GOOGLE_API_KEY not set", "api_error")
 
     client = genai.Client(api_key=api_key)
+    model = _pick_model()
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             response = client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=model,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     thinking_config=types.ThinkingConfig(thinking_budget=2000)
                 ),
             )
             if response and response.text:
-                logger.info("%s response for %s: %d chars", GEMINI_MODEL, ticker, len(response.text))
+                _model_rpd_count[model] = _model_rpd_count.get(model, 0) + 1
+                logger.info(
+                    "%s response for %s: %d chars (RPD usage: %d)",
+                    model, ticker, len(response.text), _model_rpd_count[model],
+                )
                 return (response.text, None)
             return ("AI explanation unavailable: empty response", "api_error")
 
@@ -221,23 +365,37 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
             is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
             is_quota = "quota" in error_str
 
-            if is_rate_limit and not is_quota and attempt < MAX_RETRIES:
+            if is_quota or (is_rate_limit and attempt >= MAX_RETRIES):
+                # Mark this model as exhausted and try the next one in the chain
+                _model_rpd_count[model] = _MODEL_RPD_LIMITS.get(model, 9999)
+                next_model = _pick_model()
+                if next_model != model:
+                    logger.warning(
+                        "%s quota exhausted for %s — falling back to %s",
+                        model, ticker, next_model,
+                    )
+                    model = next_model
+                    continue
+
+                logger.error(
+                    "All Gemini models exhausted for %s after %d attempts: %s",
+                    ticker, attempt, e,
+                )
+                return (
+                    f"AI explanation unavailable: Gemini API quota exceeded (all models at limit)",
+                    "quota_exceeded",
+                )
+
+            if is_rate_limit and attempt < MAX_RETRIES:
                 retry_secs = _parse_retry_after(error_str) or (INITIAL_BACKOFF * attempt)
                 logger.warning(
                     "%s rate-limited for %s (attempt %d/%d) — sleeping %ds",
-                    GEMINI_MODEL, ticker, attempt, MAX_RETRIES, retry_secs,
+                    model, ticker, attempt, MAX_RETRIES, retry_secs,
                 )
                 time.sleep(retry_secs)
                 continue
 
-            if is_quota or (is_rate_limit and attempt >= MAX_RETRIES):
-                logger.error("%s quota/rate limit exceeded for %s after %d attempts: %s", GEMINI_MODEL, ticker, attempt, e)
-                return (
-                    f"AI explanation unavailable: Gemini API quota exceeded ({GEMINI_MODEL} free tier limit)",
-                    "quota_exceeded",
-                )
-
-            logger.error("%s API error for %s: %s", GEMINI_MODEL, ticker, e)
+            logger.error("%s API error for %s: %s", model, ticker, e)
             return (f"AI explanation unavailable: {e}", "api_error")
 
     return ("AI explanation unavailable: max retries exceeded", "quota_exceeded")
@@ -368,6 +526,46 @@ def _get_financials_context(mongo, ticker: str) -> Dict:
     return fin_ctx
 
 
+def _get_recent_news(mongo, ticker: str) -> List[Dict]:
+    """Fetch recent news headlines from the aggregated_news collection.
+
+    This supplements sentiment-based headlines with actual stored news articles,
+    solving the problem where sentiment docs lack raw headline data but the
+    news aggregation pipeline has fresh articles.
+    """
+    headlines: List[Dict] = []
+    try:
+        for coll_name in ("aggregated_news", "news_articles", "rss_news"):
+            try:
+                coll = mongo.db[coll_name]
+            except Exception:
+                continue
+            cutoff = datetime.utcnow() - timedelta(days=7)
+            query = {
+                "$or": [
+                    {"tickers": ticker.upper()},
+                    {"symbols": ticker.upper()},
+                    {"ticker": ticker.upper()},
+                ],
+                "published_at": {"$gte": cutoff},
+            }
+            docs = list(coll.find(query).sort("published_at", -1).limit(8))
+            for doc in docs:
+                title = doc.get("title", "")
+                if title and title not in [h.get("title") for h in headlines]:
+                    headlines.append({
+                        "title": title,
+                        "source": doc.get("source", doc.get("provider", "")),
+                        "published_at": str(doc.get("published_at", "")),
+                        "sentiment": doc.get("sentiment", "neutral"),
+                    })
+            if headlines:
+                break
+    except Exception as e:
+        logger.warning("Recent news fetch failed for %s: %s", ticker, e)
+    return headlines[:8]
+
+
 def _get_fmp_context(mongo, ticker: str) -> Dict:
     """Fetch FMP earnings, ratings, and price target data from MongoDB."""
     fmp_ctx = {}
@@ -419,6 +617,7 @@ def _build_prompt(
     short_interest: Optional[Dict] = None,
     financials_context: Optional[Dict] = None,
     fmp_context: Optional[Dict] = None,
+    recent_news: Optional[List[Dict]] = None,
 ) -> str:
     """Build a comprehensive explanation prompt using all available data."""
     sections = []
@@ -452,7 +651,10 @@ def _build_prompt(
                 line += " [TRADE RECOMMENDED]"
             pred_lines.append(line)
 
-    header = f"STOCK: {ticker} | Current Price: ${current_price:.2f}" if current_price else f"STOCK: {ticker}"
+    meta = _get_stock_meta(ticker)
+    header = f"STOCK: {ticker} ({meta['name']}) | Sector: {meta['sector']} | Industry: {meta['industry']}"
+    if current_price:
+        header += f" | Current Price: ${current_price:.2f}"
     header += f" | Date: {date}"
     sections.append(header + "\n\nML PRICE PREDICTIONS:\n" + "\n".join(pred_lines))
 
@@ -554,6 +756,15 @@ def _build_prompt(
             title = item.get("title", "") if isinstance(item, dict) else str(item)
             if title.strip() and title.strip() not in news_headlines:
                 news_headlines.append(title.strip())
+
+    # Supplement with recent_news from aggregated news collection
+    if recent_news:
+        for item in recent_news:
+            title = item.get("title", "")
+            if title and title not in news_headlines:
+                source = item.get("source", "")
+                suffix = f" ({source})" if source else ""
+                news_headlines.append(f"{title}{suffix}")
 
     if news_headlines:
         sent_lines.append("  Recent headlines:")
@@ -694,32 +905,70 @@ def _build_prompt(
             sections.append("\n".join(fmp_lines))
 
     # ── 10. INSTRUCTIONS (the actual prompt to Gemini) ──
+    meta = _get_stock_meta(ticker)
+    company_name = meta["name"]
+    sector = meta["sector"]
+    industry = meta["industry"]
+
+    # Build sector-specific analysis guidance
+    sector_guidance = ""
+    if sector == "Technology":
+        sector_guidance = "For this tech stock, pay special attention to AI/cloud growth narratives, semiconductor cycle positioning, valuation multiples relative to growth, and sector ETF rotation signals."
+    elif sector == "Financial Services":
+        sector_guidance = "For this financial stock, factor in interest rate sensitivity (yield curve shape, Fed funds rate), credit risk signals, capital ratios, and how bank earnings link to the macro cycle."
+    elif sector == "Healthcare":
+        sector_guidance = "For this healthcare stock, consider pipeline catalysts, FDA approval cycles, patent cliffs, drug pricing risks, and whether recent earnings beat/miss reflects one-time items or trend."
+    elif sector == "Energy":
+        sector_guidance = "For this energy stock, link analysis to oil/gas price trends, OPEC dynamics, capital discipline, and how macro data (CPI, GDP) affects energy demand expectations."
+    elif sector == "Consumer Cyclical":
+        sector_guidance = "For this consumer cyclical stock, focus on consumer spending trends (retail sales data), discretionary vs staple rotation, and how the macro cycle affects demand."
+    elif sector == "Consumer Defensive":
+        sector_guidance = "For this consumer staple, note its defensive characteristics — how it performs in risk-off environments, dividend stability, and pricing power vs inflation."
+    elif sector == "Industrials":
+        sector_guidance = "For this industrial stock, connect analysis to manufacturing PMI, capex cycles, infrastructure spending, and order backlog trends."
+    elif sector == "Utilities":
+        sector_guidance = "For this utility stock, highlight its interest-rate sensitivity (bond proxy), dividend yield relative to treasuries, and any renewable energy transition exposure."
+    elif sector == "Communication Services":
+        sector_guidance = "For this communication services stock, consider ad revenue trends, subscriber growth, content spending ROI, and regulatory risk."
+    else:
+        sector_guidance = "Relate the analysis to the company's specific industry dynamics and competitive position."
+
     sections.append(f"""
-INSTRUCTIONS: You are an expert stock market analyst writing for a retail investor dashboard.
-Generate a clear, insightful analysis for {ticker} using ALL the data provided above.
+INSTRUCTIONS: You are a senior equity analyst writing a concise, stock-specific briefing for {company_name} ({ticker}) — a {industry} company in the {sector} sector.
+
+{sector_guidance}
+
+Your audience is a retail investor viewing a stock dashboard. They want to understand what the ML model predicts, why, and what to watch. Be specific to {ticker} — do NOT write generic market commentary.
 
 OUTPUT FORMAT — use this EXACT structure with these EXACT section headers. No markdown formatting (no **, no ##, no bold). Plain text only.
 
 OVERALL_OUTLOOK: [Bullish/Bearish/Neutral/Slightly Bullish/Slightly Bearish]
 
-SUMMARY: [2-3 sentences explaining the overall picture in plain English. What is the stock doing? What is the model predicting? Reference specific news if available. Speak to a regular investor, not a quant.]
+CONFIDENCE: [Integer 1-100 representing how confident this outlook is based on data agreement]
 
-WHAT_THIS_MEANS: [2-3 sentences in simple terms. Example: "The stock may drift lower over the next week" or "Strong upward momentum suggests further gains." Translate the data into actionable plain-language insight.]
+SUMMARY: [{company_name} ({ticker}) is currently trading at $X. 2-3 sentences: what is the stock doing right now? What does the ML model predict across the three horizons? Reference the most important data point (a specific news headline, a SHAP driver, an earnings surprise, or a technical level). Be concrete — use numbers from the data above.]
 
-KEY_DRIVERS: [3-5 bullet points, each starting with "+" for bullish or "-" for bearish. Include the REASON from the data, not just feature names. Example: "+ Strong insider buying: 5 buys vs 0 sells in 30 days signals executive confidence" or "- RSI at 75 suggests overbought conditions, pullback likely"]
+WHAT_THIS_MEANS: [2-3 sentences translating the numbers into a plain-English investment implication. Be specific to {ticker}'s business. Example for AAPL: "iPhone cycle concerns and elevated VIX suggest Apple may underperform the S&P over the next month." Example for JPM: "Rising 10Y yields typically boost JPM's net interest margin, supporting the model's bullish 30-day view."]
 
-NEWS_IMPACT: [1-3 sentences about recent news and sentiment. If no news is available, say "No significant recent news detected. The analysis is based on technical and quantitative factors."]
+KEY_DRIVERS: [3-5 bullet points, each starting with "+" for bullish or "-" for bearish. Each MUST include a specific number from the data. Examples:
++ Treasury yield curve (2Y-10Y spread): A positive spread of +0.45% historically boosts bank earnings and is the model's top bullish input
+- Sector ETF volatility (20-day): At 22%, elevated sector vol is creating headwinds for {ticker}'s near-term outlook
++ Insider cluster buying: 4 buys vs 0 sells in 30 days by C-suite executives signals strong internal conviction]
 
-KEY_LEVELS: [Support and resistance prices from Bollinger Bands or price range data. Format: "Support around $X | Resistance around $Y"]
+NEWS_IMPACT: [1-3 sentences referencing SPECIFIC headlines from the data above — quote or paraphrase the actual headline text. If headlines mention earnings, AI, regulation, or sector-specific catalysts, explain how they affect {ticker}'s outlook. If no news is available, say "No significant recent news detected for {company_name}. The analysis relies on technical, quantitative, and macro factors."]
 
-BOTTOM_LINE: [1-2 punchy sentences. The single most important takeaway for the investor. Be direct. Example: "MSFT looks poised for a 2.5% gain over the next month based on strong sector momentum, but watch the $390 support level."]
+KEY_LEVELS: [Support around $X | Resistance around $Y — derived from Bollinger Bands, 52-week range, or price prediction ranges provided above]
+
+BOTTOM_LINE: [1-2 punchy sentences. The single most important takeaway for {ticker} specifically. Reference the predicted price or percentage move. Example: "{ticker} is predicted to decline 1.9% over the next month to $X, driven primarily by elevated sector volatility — watch the $Y support level."]
 
 STRICT RULES:
-- Maximum 1500 characters total
-- Use ONLY data provided above. NEVER invent numbers, prices, percentages, or news events
+- Maximum 1800 characters total
+- Use ONLY data provided above. NEVER invent numbers, prices, percentages, or news
+- Every KEY_DRIVER must cite a specific value from the data sections above
+- Reference {company_name} or {ticker} by name — do NOT say "the stock" generically
 - Do NOT add disclaimers like "not financial advice" or "past performance"
-- Write in plain English for regular investors, not financial jargon
-- If sentiment data shows 0 articles, say news is unavailable — do NOT make up news
+- Write for a regular investor, not a quant — but be precise with numbers
+- If sentiment data shows 0 articles, say news is unavailable — do NOT fabricate news
 - Each section header must be on its own line followed by its content
 - Do NOT use any markdown formatting (no **, no ##, no bold, no italics)
 """)
@@ -854,7 +1103,12 @@ def generate_explanations(
         # 8. Get FMP earnings, ratings, price targets
         fmp_context = _get_fmp_context(mongo, ticker)
 
-        # 9. Build prompt & call Gemini
+        # 9. Get recent news from aggregated news collections
+        recent_news = _get_recent_news(mongo, ticker)
+        if recent_news:
+            logger.info("  Found %d recent news articles for %s", len(recent_news), ticker)
+
+        # 10. Build prompt & call Gemini
         prompt = _build_prompt(
             ticker, target_date, predictions, sentiment, technicals, shap_data,
             macro_context=macro_context,
@@ -862,6 +1116,7 @@ def generate_explanations(
             short_interest=short_interest,
             financials_context=financials_context,
             fmp_context=fmp_context,
+            recent_news=recent_news,
         )
         explanation_text, error_type = _call_gemini(prompt, ticker)
 
@@ -903,10 +1158,12 @@ def generate_explanations(
         news_count = (len(sentiment.get("finviz_raw_data", [])) +
                       len(sentiment.get("rss_news_raw_data", [])) +
                       len(sentiment.get("reddit_raw_data", [])) +
-                      len(sentiment.get("marketaux_raw_data", [])))
+                      len(sentiment.get("marketaux_raw_data", [])) +
+                      len(recent_news))
         if news_count > 0:
             data_sources.append(f"News Headlines ({news_count} sources)")
-        data_sources.append(f"Google {GEMINI_MODEL}")
+        active_model = _pick_model()
+        data_sources.append(f"Google {active_model}")
 
         explanation_data = {
             "ticker": ticker,
@@ -963,9 +1220,14 @@ def generate_explanations(
             logger.error("  MongoDB store failed for %s", ticker)
 
         # Rate limit: gemini-2.5-pro free tier ~15 RPM, 1.5K RPD; flash ~5 RPM, 20 RPD
-        # Use longer sleep for pro to avoid hitting daily limits
-        sleep_secs = 5 if "pro" in GEMINI_MODEL else 3
+        current_model = _pick_model()
+        sleep_secs = 5 if "pro" in current_model else 3
         time.sleep(sleep_secs)
+
+    # Log RPD usage summary
+    if _model_rpd_count:
+        logger.info("Gemini RPD usage this run: %s",
+                     ", ".join(f"{m}={c}" for m, c in _model_rpd_count.items()))
 
     return results
 
