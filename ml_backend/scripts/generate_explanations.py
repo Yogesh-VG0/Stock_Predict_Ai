@@ -1,11 +1,18 @@
 """
 Batch AI Explanation Generator for CI/CD
 
-Generates Gemini AI explanations for all tickers with stored predictions
-and stores them in the ``prediction_explanations`` MongoDB collection.
-Model defaults to gemini-2.5-pro (free tier: 1.5K RPD, better quality).
-gemini-2.5-flash has only 20 RPD (too restrictive for 100 tickers).
-Override with GEMINI_MODEL env var.
+Generates AI explanations for all tickers with stored predictions using Groq (preferred)
+or Gemini (fallback) APIs and stores them in the ``prediction_explanations`` MongoDB collection.
+
+API Provider Selection:
+- Groq (preferred): Uses GROQ_API_KEY if available
+  - llama-3.3-70b-versatile: 1K RPD (best quality)
+  - llama-3.1-8b-instant: 14.4K RPD (fast fallback)
+- Gemini (fallback): Uses GOOGLE_API_KEY if Groq not available
+  - gemini-2.5-flash: 20 RPD (free tier limit)
+  - gemini-2.5-flash-lite: 20 RPD
+
+Groq free tier is MUCH better than Gemini (1K-14K RPD vs 20 RPD).
 
 Usage (CI):
     python -m ml_backend.scripts.generate_explanations
@@ -276,14 +283,36 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
         return {}
 
 
-# Model priority: try pro first (1.5K RPD), fall back to flash (20 RPD) or flash-lite (20 RPD).
-# Override: set GEMINI_MODEL env var to lock to a single model.
-_MODEL_FALLBACK_CHAIN = [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
+# API Provider Selection: Use GROQ_API_KEY if available (better free tier), else fall back to Gemini
+USE_GROQ = os.getenv("GROQ_API_KEY") is not None
+USE_GEMINI = os.getenv("GOOGLE_API_KEY") is not None
+
+# Groq models (much better free tier: 1K-14K RPD vs Gemini's 20 RPD)
+GROQ_MODEL_FALLBACK_CHAIN = [
+    "llama-3.3-70b-versatile",  # Best quality: 1K RPD (vs Gemini's 20)
+    "llama-3.1-8b-instant",      # Fast fallback: 14.4K RPD
 ]
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", _MODEL_FALLBACK_CHAIN[0])
+
+# Gemini models (free tier: 20 RPD max)
+GEMINI_MODEL_FALLBACK_CHAIN = [
+    "gemini-2.5-pro",      # Free tier: 0 RPD (not available)
+    "gemini-2.5-flash",    # Free tier: 20 RPD
+    "gemini-2.5-flash-lite",  # Free tier: 20 RPD
+]
+
+# Select provider and model (Groq preferred if both are available)
+if USE_GROQ:
+    _MODEL_FALLBACK_CHAIN = GROQ_MODEL_FALLBACK_CHAIN
+    API_PROVIDER = "groq"
+    DEFAULT_MODEL = GROQ_MODEL_FALLBACK_CHAIN[0]
+elif USE_GEMINI:
+    _MODEL_FALLBACK_CHAIN = GEMINI_MODEL_FALLBACK_CHAIN
+    API_PROVIDER = "gemini"
+    DEFAULT_MODEL = os.getenv("GEMINI_MODEL", GEMINI_MODEL_FALLBACK_CHAIN[1])  # Skip pro (0 RPD)
+else:
+    _MODEL_FALLBACK_CHAIN = []
+    API_PROVIDER = None
+    DEFAULT_MODEL = None
 
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 30
@@ -297,8 +326,12 @@ _MIN_CALL_INTERVAL = 1.0  # Minimum seconds between API calls per model
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
 _MODEL_RPD_LIMITS: Dict[str, int] = {
-    "gemini-2.5-pro": 1400,       # leave headroom vs 1.5K limit
-    "gemini-2.5-flash": 18,       # leave headroom vs 20 limit
+    # Groq models (much higher limits)
+    "llama-3.3-70b-versatile": 900,    # leave headroom vs 1K limit
+    "llama-3.1-8b-instant": 14000,     # leave headroom vs 14.4K limit
+    # Gemini models (very low free tier limits)
+    "gemini-2.5-pro": 0,               # Free tier: 0 RPD (not available)
+    "gemini-2.5-flash": 18,             # leave headroom vs 20 limit
     "gemini-2.5-flash-lite": 18,
 }
 
@@ -306,19 +339,27 @@ _MODEL_RPD_LIMITS: Dict[str, int] = {
 def _pick_model() -> str:
     """Pick the best available model based on RPD usage tracking.
 
-    If GEMINI_MODEL env var is explicitly set by the user, lock to that model
-    (no fallback).  Otherwise cycle through the fallback chain.
+    If model env var is explicitly set by the user, lock to that model (no fallback).
+    Otherwise cycle through the fallback chain for the selected provider.
     """
-    forced = os.getenv("GEMINI_MODEL")
+    if not _MODEL_FALLBACK_CHAIN:
+        return None
+    
+    # Check for forced model selection
+    if API_PROVIDER == "groq":
+        forced = os.getenv("GROQ_MODEL")
+    else:
+        forced = os.getenv("GEMINI_MODEL")
+    
     if forced:
         return forced
 
     for model in _MODEL_FALLBACK_CHAIN:
         used = _model_rpd_count.get(model, 0)
-        limit = _MODEL_RPD_LIMITS.get(model, 1400)
+        limit = _MODEL_RPD_LIMITS.get(model, 900)
         if used < limit:
             return model
-    return _MODEL_FALLBACK_CHAIN[0]
+    return _MODEL_FALLBACK_CHAIN[0] if _MODEL_FALLBACK_CHAIN else None
 
 
 def _parse_retry_after(error_str: str) -> int:
@@ -347,7 +388,65 @@ def _rate_limit_wait(model: str):
     _last_api_call_time[model] = time.time()
 
 
-def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
+def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]]:
+    """
+    Call Groq API (much better free tier limits).
+    
+    Returns (explanation_text, error_type) where error_type is None on success,
+    or "quota_exceeded", "rate_limit", or "api_error" on failure.
+    """
+    try:
+        from groq import Groq
+    except ImportError:
+        return ("AI explanation unavailable: groq package not installed", "api_error")
+    
+    api_key = os.getenv("GROQ_API_KEY")
+    if not api_key:
+        return ("AI explanation unavailable: GROQ_API_KEY not set", "api_error")
+    
+    client = Groq(api_key=api_key)
+    
+    try:
+        # Rate limit: wait if needed before making API call
+        _rate_limit_wait(model)
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a financial analyst providing clear, concise stock market explanations."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=2048,
+        )
+        
+        if response and response.choices and len(response.choices) > 0:
+            explanation_text = response.choices[0].message.content
+            if explanation_text:
+                _model_rpd_count[model] = _model_rpd_count.get(model, 0) + 1
+                logger.info(
+                    "Groq %s response for %s: %d chars (RPD usage: %d)",
+                    model, ticker, len(explanation_text), _model_rpd_count[model],
+                )
+                return (explanation_text, None)
+        
+        return ("AI explanation unavailable: empty response from Groq", "api_error")
+        
+    except Exception as e:
+        error_str = str(e).lower()
+        is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
+        is_quota = "quota" in error_str or "limit" in error_str
+        
+        if is_quota:
+            return (f"AI explanation unavailable: Groq API quota exceeded ({model})", "quota_exceeded")
+        elif is_rate_limit:
+            return (f"AI explanation unavailable: Groq API rate limited ({model})", "rate_limit")
+        else:
+            logger.error("Groq API error for %s (%s): %s", ticker, model, e)
+            return (f"AI explanation unavailable: Groq API error: {str(e)[:100]}", "api_error")
+
+
+def _call_gemini(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]]:
     """
     Synchronous Gemini API call with automatic model fallback and RPD tracking.
 
@@ -363,7 +462,6 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
         return ("AI explanation unavailable: GOOGLE_API_KEY not set", "api_error")
 
     client = genai.Client(api_key=api_key)
-    model = _pick_model()
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -433,6 +531,82 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
             return (f"AI explanation unavailable: {e}", "api_error")
 
     return ("AI explanation unavailable: max retries exceeded", "quota_exceeded")
+
+
+def _call_llm_api(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
+    """
+    Unified LLM API caller that uses Groq (preferred) or Gemini (fallback).
+    
+    Returns (explanation_text, error_type) where error_type is None on success,
+    or "quota_exceeded", "rate_limit", or "api_error" on failure.
+    """
+    global API_PROVIDER, _MODEL_FALLBACK_CHAIN
+    
+    if not API_PROVIDER:
+        return ("AI explanation unavailable: No API provider configured (set GROQ_API_KEY or GOOGLE_API_KEY)", "api_error")
+    
+    model = _pick_model()
+    if not model:
+        return ("AI explanation unavailable: No available models", "quota_exceeded")
+    
+    # Try Groq first if available
+    if API_PROVIDER == "groq":
+        current_model = model
+        for attempt in range(1, MAX_RETRIES + 1):
+            explanation_text, error_type = _call_groq(prompt, ticker, current_model)
+            
+            if error_type is None:
+                return (explanation_text, None)
+            
+            if error_type == "quota_exceeded":
+                # Try next model in fallback chain
+                _model_rpd_count[current_model] = _MODEL_RPD_LIMITS.get(current_model, 9999)
+                next_model = _pick_model()
+                if next_model != current_model and next_model:
+                    logger.warning(
+                        "Groq %s quota exhausted for %s — falling back to %s",
+                        current_model, ticker, next_model,
+                    )
+                    current_model = next_model
+                    continue
+                else:
+                    # All Groq models exhausted, try Gemini if available
+                    if USE_GEMINI:
+                        logger.warning("All Groq models exhausted, falling back to Gemini")
+                        # Temporarily switch to Gemini fallback chain
+                        original_chain = _MODEL_FALLBACK_CHAIN
+                        original_provider = API_PROVIDER
+                        _MODEL_FALLBACK_CHAIN = GEMINI_MODEL_FALLBACK_CHAIN
+                        API_PROVIDER = "gemini"
+                        gemini_model = _pick_model()
+                        if gemini_model and gemini_model != "gemini-2.5-pro":  # Skip pro (0 RPD)
+                            result = _call_gemini(prompt, ticker, gemini_model)
+                            _MODEL_FALLBACK_CHAIN = original_chain  # Restore original chain
+                            API_PROVIDER = original_provider
+                            return result
+                        _MODEL_FALLBACK_CHAIN = original_chain  # Restore original chain
+                        API_PROVIDER = original_provider
+                    return (explanation_text, error_type)
+            
+            elif error_type == "rate_limit" and attempt < MAX_RETRIES:
+                retry_after = _parse_retry_after(explanation_text)
+                retry_secs = retry_after if retry_after > 0 else _exponential_backoff(attempt)
+                logger.warning(
+                    "Groq %s rate-limited for %s (attempt %d/%d) — sleeping %ds",
+                    current_model, ticker, attempt, MAX_RETRIES, retry_secs,
+                )
+                time.sleep(retry_secs)
+                continue
+            
+            return (explanation_text, error_type)
+        
+        return ("AI explanation unavailable: max retries exceeded", "quota_exceeded")
+    
+    # Fall back to Gemini
+    elif API_PROVIDER == "gemini":
+        return _call_gemini(prompt, ticker, model)
+    
+    return ("AI explanation unavailable: Unknown API provider", "api_error")
 
 
 def _get_macro_context(mongo) -> Dict:
@@ -810,40 +984,36 @@ def _build_prompt(
     sections.append("\n".join(sent_lines))
 
     # ── 4. ML MODEL DRIVERS (SHAP) ──
+    # Provide SHAP data but instruct AI to translate it into plain English
     if shap_data:
         pos = shap_data.get("top_positive_contrib", [])
         neg = shap_data.get("top_negative_contrib", [])
         global_imp = shap_data.get("global_gain_importance", [])
-        shap_lines = ["ML MODEL KEY DRIVERS (what's influencing the prediction):"]
+        shap_lines = ["ML MODEL KEY DRIVERS (translate these into plain English for users):"]
 
         if pos:
-            shap_lines.append("  Bullish factors pushing price UP:")
+            shap_lines.append("  Bullish factors:")
             for f in pos[:6]:
                 fname = _friendly_feature_name(f.get("feature", "?"))
                 contrib = f.get("contrib", 0)
                 value = f.get("value")
-                line = f"    + {fname} (impact: {contrib:+.4f})"
-                if value is not None:
-                    line += f" [current value: {value:.4f}]" if isinstance(value, float) else f" [value: {value}]"
-                shap_lines.append(line)
+                # Provide data but don't expose raw technical values in final output
+                shap_lines.append(f"    {fname}: contribution={contrib:+.4f}, current_value={value:.4f if isinstance(value, (int, float)) else value}")
         if neg:
-            shap_lines.append("  Bearish factors pushing price DOWN:")
+            shap_lines.append("  Bearish factors:")
             for f in neg[:6]:
                 fname = _friendly_feature_name(f.get("feature", "?"))
                 contrib = f.get("contrib", 0)
                 value = f.get("value")
-                line = f"    - {fname} (impact: {contrib:+.4f})"
-                if value is not None:
-                    line += f" [current value: {value:.4f}]" if isinstance(value, float) else f" [value: {value}]"
-                shap_lines.append(line)
+                shap_lines.append(f"    {fname}: contribution={contrib:+.4f}, current_value={value:.4f if isinstance(value, (int, float)) else value}")
 
         if global_imp:
             top_global = [g for g in global_imp[:5] if g.get("gain_pct", 0) > 0]
             if top_global:
-                shap_lines.append("  Most important features overall:")
+                shap_lines.append("  Most influential factors (for context only - translate to plain English):")
                 for g in top_global:
                     fname = _friendly_feature_name(g.get("feature", "?"))
-                    shap_lines.append(f"    {fname}: {g.get('gain_pct', 0):.1f}% importance")
+                    shap_lines.append(f"    {fname}: relative_importance={g.get('gain_pct', 0):.1f}%")
 
         sections.append("\n".join(shap_lines))
 
@@ -967,44 +1137,96 @@ def _build_prompt(
     else:
         sector_guidance = "Relate the analysis to the company's specific industry dynamics and competitive position."
 
+    # Extract key prediction numbers for consistency
+    pred_30d = predictions.get("30_day", {})
+    pred_7d = predictions.get("7_day", {})
+    pred_next = predictions.get("next_day", {})
+    
+    # Use 30-day prediction as primary (most reliable)
+    primary_pred = pred_30d if pred_30d else (pred_7d if pred_7d else pred_next)
+    predicted_price = primary_pred.get("predicted_price", 0) if isinstance(primary_pred, dict) else 0
+    price_change = primary_pred.get("price_change", 0) if isinstance(primary_pred, dict) else 0
+    price_change_pct = (price_change / current_price * 100) if current_price and price_change else 0
+    
+    # Determine outlook from predictions
+    if price_change_pct > 2:
+        outlook_hint = "Bullish"
+    elif price_change_pct > 0.5:
+        outlook_hint = "Slightly Bullish"
+    elif price_change_pct < -2:
+        outlook_hint = "Bearish"
+    elif price_change_pct < -0.5:
+        outlook_hint = "Slightly Bearish"
+    else:
+        outlook_hint = "Neutral"
+    
+    # Calculate confidence from prediction confidence scores
+    conf_scores = []
+    for w in [pred_next, pred_7d, pred_30d]:
+        if isinstance(w, dict) and w.get("confidence"):
+            conf_scores.append(w["confidence"])
+    avg_confidence = int(sum(conf_scores) / len(conf_scores) * 100) if conf_scores else 50
+    
     sections.append(f"""
-INSTRUCTIONS: You are a senior equity analyst writing a concise, stock-specific briefing for {company_name} ({ticker}) — a {industry} company in the {sector} sector.
+INSTRUCTIONS: You are a professional equity analyst writing a clear, concise market intelligence briefing for {company_name} ({ticker}) — a {industry} company in the {sector} sector.
 
 {sector_guidance}
 
-Your audience is a retail investor viewing a stock dashboard. They want to understand what the ML model predicts, why, and what to watch. Be specific to {ticker} — do NOT write generic market commentary.
+Your audience is retail investors who want clear, actionable insights. Write like Bloomberg or professional investment platforms — professional but accessible. Be specific to {ticker}, not generic market commentary.
 
-OUTPUT FORMAT — use this EXACT structure with these EXACT section headers. No markdown formatting (no **, no ##, no bold). Plain text only.
+CRITICAL: Translate ALL technical ML data into plain English. NEVER mention:
+- SHAP values, feature importance percentages, or model coefficients
+- Raw numeric impacts like "+0.0009" or "impact: -0.0015"
+- Technical ML jargon like "model driver context" or "feature importance"
+- Internal model mechanics
 
-OVERALL_OUTLOOK: [Bullish/Bearish/Neutral/Slightly Bullish/Slightly Bearish]
+Instead, convert technical signals into human meaning:
+- "Treasury yield curve (2Y-10Y spread) at 41.5% importance, value 0.0000" → "Yield curve conditions are currently neutral"
+- "Sector ETF volatility: 0.0179, impact -0.0015" → "Rising technology sector volatility is creating headwinds"
+- "Feature importance 41.5%" → Just describe what the factor means, don't mention the percentage
 
-CONFIDENCE: [Integer 1-100 representing how confident this outlook is based on data agreement]
+OUTPUT FORMAT — use this EXACT structure. Plain text only, no markdown.
 
-SUMMARY: [{company_name} ({ticker}) is currently trading at $X. 2-3 sentences: what is the stock doing right now? What does the ML model predict across the three horizons? Reference the most important data point (a specific news headline, a SHAP driver, an earnings surprise, or a technical level). Be concrete — use numbers from the data above.]
+OVERALL_OUTLOOK: {outlook_hint}
 
-WHAT_THIS_MEANS: [2-3 sentences translating the numbers into a plain-English investment implication. Be specific to {ticker}'s business. Example for AAPL: "iPhone cycle concerns and elevated VIX suggest Apple may underperform the S&P over the next month." Example for JPM: "Rising 10Y yields typically boost JPM's net interest margin, supporting the model's bullish 30-day view."]
+CONFIDENCE: {avg_confidence}
 
-KEY_DRIVERS: [3-5 bullet points, each starting with "+" for bullish or "-" for bearish. Each MUST include a specific number from the data. Examples:
-+ Treasury yield curve (2Y-10Y spread): A positive spread of +0.45% historically boosts bank earnings and is the model's top bullish input
-- Sector ETF volatility (20-day): At 22%, elevated sector vol is creating headwinds for {ticker}'s near-term outlook
-+ Insider cluster buying: 4 buys vs 0 sells in 30 days by C-suite executives signals strong internal conviction]
+PREDICTION: {price_change_pct:+.2f}% avg. predicted move
 
-NEWS_IMPACT: [1-3 sentences referencing SPECIFIC headlines from the data above — quote or paraphrase the actual headline text. If headlines mention earnings, AI, regulation, or sector-specific catalysts, explain how they affect {ticker}'s outlook. If no news is available, say "No significant recent news detected for {company_name}. The analysis relies on technical, quantitative, and macro factors."]
+EXPECTED_PRICE: ${predicted_price:.2f}
 
-KEY_LEVELS: [Support around $X | Resistance around $Y — derived from Bollinger Bands, 52-week range, or price prediction ranges provided above]
+CURRENT_PRICE: ${current_price:.2f}
 
-BOTTOM_LINE: [1-2 punchy sentences. The single most important takeaway for {ticker} specifically. Reference the predicted price or percentage move. Example: "{ticker} is predicted to decline 1.9% over the next month to $X, driven primarily by elevated sector volatility — watch the $Y support level."]
+SUMMARY: [{company_name} ({ticker}) is currently trading at ${current_price:.2f}. The ML model predicts {"slight declines" if price_change_pct < 0 else "modest gains" if price_change_pct > 0 else "minimal movement"} for {ticker} across all time horizons, with next day at ${pred_next.get("predicted_price", 0):.2f if isinstance(pred_next, dict) else 0:.2f}, 1 week at ${pred_7d.get("predicted_price", 0):.2f if isinstance(pred_7d, dict) else 0:.2f}, and 1 month at ${predicted_price:.2f}. Reference ONE key driver from the data — a specific news headline, technical indicator, or macro factor — that explains the prediction.]
+
+WHAT_THIS_MEANS: [2-3 sentences translating the prediction into investment implications. Be specific to {ticker}'s business model and sector. Example: "The model anticipates {ticker} may experience {"modest downward pressure" if price_change_pct < 0 else "moderate upward momentum"} in the near term, with a projected {"decline" if price_change_pct < 0 else "gain"} of ${abs(price_change):.2f} over the next month. This suggests {"potential headwinds" if price_change_pct < 0 else "supportive conditions"} from {"sector volatility" if price_change_pct < 0 else "favorable market conditions"}."]
+
+BULLISH_FACTORS: [2-4 bullet points, each starting with "+". Translate technical factors into plain English. Examples:
++ Treasury yield curve conditions: A positive yield curve spread supports {ticker}'s outlook
++ Price momentum: Currently trading above its 20-day moving average, indicating short-term strength
++ Insider activity: Recent buying by executives signals internal confidence]
+
+BEARISH_FACTORS: [2-4 bullet points, each starting with "-". Translate technical factors into plain English. Examples:
+- Sector volatility: Elevated volatility in the {sector.lower()} sector is creating headwinds
+- Market sentiment: Rising fear levels (VIX elevated) suggest broader market caution
+- Technical indicators: MACD shows weakening momentum signals]
+
+NEWS_IMPACT: [1-2 sentences referencing SPECIFIC headlines from above. If news is available, quote or paraphrase actual headlines and explain relevance. If no news: "No significant recent news detected for {company_name}. The analysis relies on technical, quantitative, and macro factors."]
+
+KEY_LEVELS: [Support around ${technicals.get("Bollinger_Lower", 0):.2f if technicals else 0:.2f} | Resistance around ${technicals.get("Bollinger_Upper", 0):.2f if technicals else 0:.2f}]
+
+BOTTOM_LINE: [1-2 sentences. The single most important takeaway. Use the 30-day prediction: "{company_name} ({ticker}) is predicted to {"decline" if price_change_pct < 0 else "rise"} {abs(price_change_pct):.1f}% over the next month to ${predicted_price:.2f}, primarily driven by {"elevated sector volatility" if price_change_pct < 0 else "supportive market conditions"} — watch the ${technicals.get("Bollinger_Lower", 0):.2f if technicals else 0:.2f} support level."]
 
 STRICT RULES:
-- Maximum 1800 characters total
-- Use ONLY data provided above. NEVER invent numbers, prices, percentages, or news
-- Every KEY_DRIVER must cite a specific value from the data sections above
-- Reference {company_name} or {ticker} by name — do NOT say "the stock" generically
-- Do NOT add disclaimers like "not financial advice" or "past performance"
-- Write for a regular investor, not a quant — but be precise with numbers
-- If sentiment data shows 0 articles, say news is unavailable — do NOT fabricate news
-- Each section header must be on its own line followed by its content
-- Do NOT use any markdown formatting (no **, no ##, no bold, no italics)
+- Maximum 2000 characters total
+- Use ONLY data provided above. NEVER invent numbers
+- Translate ALL technical ML jargon into plain English
+- NEVER mention SHAP %, feature importance %, or model coefficients
+- Use consistent numbers: primary prediction is 30-day (${predicted_price:.2f}, {price_change_pct:+.2f}%)
+- Reference {company_name} or {ticker} by name, not "the stock"
+- Write for regular investors, not quants
+- No markdown formatting (no **, ##, bold, italics)
+- Each section header on its own line
 """)
     return "\n\n".join(sections)
 
@@ -1014,7 +1236,11 @@ def generate_explanations(
     max_tickers: int = 100,
     date: Optional[str] = None,
 ) -> Dict:
-    """Generate and store Gemini explanations for tickers with predictions."""
+    """Generate and store AI explanations for tickers with predictions.
+    
+    Uses Groq API (preferred) or Gemini API (fallback) based on available API keys.
+    Groq free tier: 1K-14K RPD vs Gemini's 20 RPD.
+    """
     from ml_backend.utils.mongodb import MongoDBClient
 
     mongo = MongoDBClient()
@@ -1023,6 +1249,18 @@ def generate_explanations(
     ticker_list = ticker_list[:max_tickers]
 
     results = {"success": 0, "skipped": 0, "failed": 0, "details": []}
+
+    # Log API provider selection
+    if API_PROVIDER == "groq":
+        logger.info("Using Groq API (better free tier limits: 1K-14K RPD)")
+    elif API_PROVIDER == "gemini":
+        logger.info("Using Gemini API (free tier: 20 RPD max)")
+    else:
+        logger.warning("No API provider configured! Set GROQ_API_KEY or GOOGLE_API_KEY")
+        results["failed"] = len(ticker_list)
+        for ticker in ticker_list:
+            results["details"].append({"ticker": ticker, "status": "failed", "reason": "no_api_key"})
+        return results
 
     # Fetch macro context once for all tickers
     macro_context = _get_macro_context(mongo)
@@ -1157,21 +1395,23 @@ def generate_explanations(
             fmp_context=fmp_context,
             recent_news=recent_news,
         )
-        explanation_text, error_type = _call_gemini(prompt, ticker)
+        explanation_text, error_type = _call_llm_api(prompt, ticker)
 
         if error_type == "quota_exceeded":
             quota_failures += 1
-            logger.error("  Gemini quota exceeded (%d/%d consecutive failures)", quota_failures, MAX_QUOTA_FAILURES)
+            provider_name = "Groq" if API_PROVIDER == "groq" else "Gemini"
+            logger.error("  %s quota exceeded (%d/%d consecutive failures)", provider_name, quota_failures, MAX_QUOTA_FAILURES)
             results["failed"] += 1
             results["details"].append({"ticker": ticker, "status": "failed", "reason": "quota_exceeded"})
             
             # Early exit: if quota is exhausted, stop processing remaining tickers
             if quota_failures >= MAX_QUOTA_FAILURES:
                 remaining = len(ticker_list) - i
+                provider_name = "Groq" if API_PROVIDER == "groq" else "Gemini"
                 logger.error(
-                    "  ⚠️  QUOTA EXHAUSTED: Stopping explanation generation after %d consecutive failures. "
-                    "Remaining %d tickers will be skipped. Consider enabling billing or reducing max_tickers.",
-                    quota_failures, remaining
+                    "  ⚠️  %s QUOTA EXHAUSTED: Stopping explanation generation after %d consecutive failures. "
+                    "Remaining %d tickers will be skipped. Consider enabling billing, switching API provider, or reducing max_tickers.",
+                    provider_name, quota_failures, remaining
                 )
                 results["quota_exhausted"] = True
                 # Mark remaining tickers as skipped

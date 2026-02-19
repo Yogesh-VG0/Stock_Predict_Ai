@@ -235,13 +235,14 @@ jobs:
             exit 1
           fi
 
-      - name: Generate AI explanations (Gemini)
+      - name: Generate AI explanations (Groq/Gemini)
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          echo "===== Generating Gemini AI explanations (auto-fallback: pro→flash→flash-lite) ====="
+          echo "===== Generating AI explanations (Groq preferred, Gemini fallback) ====="
           python -m ml_backend.scripts.generate_explanations || echo "Explanation generation failed (non-fatal)"
 
       - name: Evaluate stored predictions (last 60 days)

@@ -42,8 +42,9 @@ fredapi>=0.5
 beautifulsoup4>=4.12
 pandas_market_calendars>=4.1
 
-# --- Google Gemini AI ---
-google-genai>=1.0
+# --- AI / LLM APIs ---
+google-genai>=1.0  # Gemini API
+groq>=0.4.0        # Groq API (better free tier: 1K-14K RPD vs Gemini's 20)
 
 # --- Misc ---
 python-dotenv>=1.0
