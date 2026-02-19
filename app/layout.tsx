@@ -71,10 +71,17 @@ export const metadata: Metadata = {
       "max-snippet": -1,
     },
   },
+  // Favicon for Google/search and browsers (favicon.ico is required for crawlers)
   icons: {
-    icon: "/icon.svg",
-    apple: "/icon.svg",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon-32x32.png", type: "image/png", sizes: "32x32" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: "/apple-touch-icon.png",
   },
+  themeColor: "#0f172a",
 }
 
 export default function RootLayout({
