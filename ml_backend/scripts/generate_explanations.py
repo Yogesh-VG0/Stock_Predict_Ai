@@ -287,6 +287,12 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", _MODEL_FALLBACK_CHAIN[0])
 
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 30
+MAX_BACKOFF = 300  # Max 5 minutes between retries
+BASE_BACKOFF = 2   # Exponential base
+
+# Global rate limiter: track last API call time per model to prevent hammering
+_last_api_call_time: Dict[str, float] = {}
+_MIN_CALL_INTERVAL = 1.0  # Minimum seconds between API calls per model
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
@@ -320,8 +326,25 @@ def _parse_retry_after(error_str: str) -> int:
     import re
     m = re.search(r"retry.*?(\d+)\s*s", error_str, re.IGNORECASE)
     if m:
-        return min(int(m.group(1)), 120)
+        return min(int(m.group(1)), MAX_BACKOFF)
     return 0
+
+
+def _exponential_backoff(attempt: int) -> float:
+    """Calculate exponential backoff delay in seconds."""
+    delay = INITIAL_BACKOFF * (BASE_BACKOFF ** (attempt - 1))
+    return min(delay, MAX_BACKOFF)
+
+
+def _rate_limit_wait(model: str):
+    """Wait if needed to respect minimum call interval per model."""
+    import time
+    last_call = _last_api_call_time.get(model, 0)
+    elapsed = time.time() - last_call
+    if elapsed < _MIN_CALL_INTERVAL:
+        sleep_time = _MIN_CALL_INTERVAL - elapsed
+        time.sleep(sleep_time)
+    _last_api_call_time[model] = time.time()
 
 
 def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
@@ -344,6 +367,9 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
+            # Rate limit: wait if needed before making API call
+            _rate_limit_wait(model)
+            
             response = client.models.generate_content(
                 model=model,
                 contents=prompt,
@@ -363,7 +389,7 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
         except Exception as e:
             error_str = str(e).lower()
             is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
-            is_quota = "quota" in error_str
+            is_quota = "quota" in error_str or "limit: 0" in error_str
 
             if is_quota or (is_rate_limit and attempt >= MAX_RETRIES):
                 # Mark this model as exhausted and try the next one in the chain
@@ -375,6 +401,8 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
                         model, ticker, next_model,
                     )
                     model = next_model
+                    # Reset attempt counter when switching models
+                    attempt = 0
                     continue
 
                 logger.error(
@@ -387,7 +415,13 @@ def _call_gemini(prompt: str, ticker: str) -> tuple[str, Optional[str]]:
                 )
 
             if is_rate_limit and attempt < MAX_RETRIES:
-                retry_secs = _parse_retry_after(error_str) or (INITIAL_BACKOFF * attempt)
+                # Use exponential backoff with retry-after hint if available
+                retry_after = _parse_retry_after(error_str)
+                if retry_after > 0:
+                    retry_secs = retry_after
+                else:
+                    retry_secs = _exponential_backoff(attempt)
+                
                 logger.warning(
                     "%s rate-limited for %s (attempt %d/%d) — sleeping %ds",
                     model, ticker, attempt, MAX_RETRIES, retry_secs,
@@ -1130,10 +1164,27 @@ def generate_explanations(
             logger.error("  Gemini quota exceeded (%d/%d consecutive failures)", quota_failures, MAX_QUOTA_FAILURES)
             results["failed"] += 1
             results["details"].append({"ticker": ticker, "status": "failed", "reason": "quota_exceeded"})
+            
+            # Early exit: if quota is exhausted, stop processing remaining tickers
             if quota_failures >= MAX_QUOTA_FAILURES:
-                continue
-            logger.info("  Sleeping 60s before retrying next ticker…")
-            time.sleep(60)
+                remaining = len(ticker_list) - i
+                logger.error(
+                    "  ⚠️  QUOTA EXHAUSTED: Stopping explanation generation after %d consecutive failures. "
+                    "Remaining %d tickers will be skipped. Consider enabling billing or reducing max_tickers.",
+                    quota_failures, remaining
+                )
+                results["quota_exhausted"] = True
+                # Mark remaining tickers as skipped
+                if remaining > 0:
+                    results["skipped"] += remaining
+                    for remaining_ticker in ticker_list[i:]:
+                        results["details"].append({"ticker": remaining_ticker, "status": "skipped", "reason": "quota_exceeded"})
+                break  # Exit the loop early instead of continuing
+            
+            # Exponential backoff before trying next ticker
+            backoff_time = min(60 * (2 ** (quota_failures - 1)), 300)  # Max 5 minutes
+            logger.info("  Sleeping %ds before retrying next ticker…", backoff_time)
+            time.sleep(backoff_time)
             continue
 
         if "unavailable" in explanation_text.lower() or error_type:

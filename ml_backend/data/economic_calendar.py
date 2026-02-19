@@ -12,38 +12,62 @@ from typing import Dict, List, Optional, Tuple
 import time
 from bs4 import BeautifulSoup
 import json
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
 import re
 import os
 import aiohttp
 import asyncio
 import traceback
-from selenium.webdriver.common.action_chains import ActionChains
 import random
-import undetected_chromedriver as uc
-from fake_useragent import UserAgent
-import cloudscraper
-from selenium_stealth import stealth
 import sys
 import platform
-from selenium.webdriver.common.proxy import Proxy, ProxyType
 import pickle
 import hashlib
 from pathlib import Path
-import json
 import numpy as np
-from typing import Optional, Dict, Any
-from selenium.webdriver.remote.webdriver import WebDriver
-from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
 from pymongo import MongoClient
 from dotenv import load_dotenv
+
+# Conditional selenium imports - only import if available (not in CI/prod)
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.common.action_chains import ActionChains
+    import undetected_chromedriver as uc
+    from fake_useragent import UserAgent
+    import cloudscraper
+    from selenium_stealth import stealth
+    from selenium.webdriver.common.proxy import Proxy, ProxyType
+    from selenium.webdriver.remote.webdriver import WebDriver
+    from selenium.webdriver.common.keys import Keys
+    from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    # Create dummy classes for type hints
+    webdriver = None
+    Options = None
+    By = None
+    WebDriverWait = None
+    EC = None
+    ChromeDriverManager = None
+    Service = None
+    ActionChains = None
+    uc = None
+    UserAgent = None
+    cloudscraper = None
+    stealth = None
+    Proxy = None
+    ProxyType = None
+    WebDriver = None
+    Keys = None
+    TimeoutException = Exception
+    NoSuchElementException = Exception
+    ElementClickInterceptedException = Exception
 
 logger = logging.getLogger(__name__)
 
@@ -355,10 +379,32 @@ class EconomicCalendar:
     def __init__(self, mongo_client=None):
         self.mongo_client = mongo_client
         self.rate_limit_delay = 2.0
-        self.proxy_manager = ProxyManager()
-        self.session_manager = SessionManager()
-        self.fingerprint_manager = BrowserFingerprint()
-        self.human_behavior = HumanBehavior()
+        self.selenium_available = SELENIUM_AVAILABLE
+        
+        # Only initialize selenium-dependent components if selenium is available
+        if SELENIUM_AVAILABLE:
+            try:
+                self.proxy_manager = ProxyManager()
+                self.session_manager = SessionManager()
+                self.fingerprint_manager = BrowserFingerprint()
+                self.human_behavior = HumanBehavior()
+                
+                # Initialize proxy list (you should add your proxies here)
+                self.proxy_manager.add_proxy("http://proxy1.example.com:8080")
+                self.proxy_manager.add_proxy("http://proxy2.example.com:8080")
+                
+                # Setup Chrome options for undetected scraping
+                self.chrome_options = uc.ChromeOptions()
+            except Exception as e:
+                logger.warning("Failed to initialize selenium components: %s", e)
+                self.selenium_available = False
+        else:
+            logger.info("Selenium not available - economic calendar scraping disabled (CI/prod mode)")
+            self.proxy_manager = None
+            self.session_manager = None
+            self.fingerprint_manager = None
+            self.human_behavior = None
+            self.chrome_options = None
         
         # Instance-level cache to prevent multiple fetches per session
         self._events_cache = {
@@ -367,48 +413,47 @@ class EconomicCalendar:
             'cache_duration': timedelta(hours=6)
         }
         
-        # Initialize proxy list (you should add your proxies here)
-        self.proxy_manager.add_proxy("http://proxy1.example.com:8080")
-        self.proxy_manager.add_proxy("http://proxy2.example.com:8080")
-        
-        # Setup Chrome options for undetected scraping
-        self.chrome_options = uc.ChromeOptions()
-        
-        # Basic settings
-        self.chrome_options.add_argument('--no-sandbox')
-        self.chrome_options.add_argument('--disable-dev-shm-usage')
-        self.chrome_options.add_argument('--disable-gpu')
-        self.chrome_options.add_argument('--window-size=1920,1080')
-        self.chrome_options.add_argument('--start-maximized')
-        
-        # Security and CSP settings
-        self.chrome_options.add_argument('--disable-web-security')
-        self.chrome_options.add_argument('--allow-running-insecure-content')
-        self.chrome_options.add_argument('--disable-site-isolation-trials')
-        self.chrome_options.add_argument('--disable-features=IsolateOrigins,site-per-process')
-        self.chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-        
-        # WebGL settings
-        self.chrome_options.add_argument('--enable-unsafe-swiftshader')
-        self.chrome_options.add_argument('--ignore-gpu-blocklist')
-        self.chrome_options.add_argument('--enable-gpu-rasterization')
-        
-        # Network settings
-        self.chrome_options.add_argument('--dns-prefetch-disable')
-        self.chrome_options.add_argument('--disable-background-networking')
-        self.chrome_options.add_argument('--disable-default-apps')
-        self.chrome_options.add_argument('--disable-extensions')
-        self.chrome_options.add_argument('--disable-sync')
-        self.chrome_options.add_argument('--disable-translate')
-        self.chrome_options.add_argument('--hide-scrollbars')
-        self.chrome_options.add_argument('--metrics-recording-only')
-        self.chrome_options.add_argument('--mute-audio')
-        self.chrome_options.add_argument('--no-first-run')
-        self.chrome_options.add_argument('--safebrowsing-disable-auto-update')
-        
-        # Random user agent
-        ua = UserAgent()
-        self.chrome_options.add_argument(f'--user-agent={ua.random}')
+        # Only configure Chrome options if selenium is available
+        if self.selenium_available and self.chrome_options is not None:
+            try:
+                # Basic settings
+                self.chrome_options.add_argument('--no-sandbox')
+                self.chrome_options.add_argument('--disable-dev-shm-usage')
+                self.chrome_options.add_argument('--disable-gpu')
+                self.chrome_options.add_argument('--window-size=1920,1080')
+                self.chrome_options.add_argument('--start-maximized')
+                
+                # Security and CSP settings
+                self.chrome_options.add_argument('--disable-web-security')
+                self.chrome_options.add_argument('--allow-running-insecure-content')
+                self.chrome_options.add_argument('--disable-site-isolation-trials')
+                self.chrome_options.add_argument('--disable-features=IsolateOrigins,site-per-process')
+                self.chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+                
+                # WebGL settings
+                self.chrome_options.add_argument('--enable-unsafe-swiftshader')
+                self.chrome_options.add_argument('--ignore-gpu-blocklist')
+                self.chrome_options.add_argument('--enable-gpu-rasterization')
+                
+                # Network settings
+                self.chrome_options.add_argument('--dns-prefetch-disable')
+                self.chrome_options.add_argument('--disable-background-networking')
+                self.chrome_options.add_argument('--disable-default-apps')
+                self.chrome_options.add_argument('--disable-extensions')
+                self.chrome_options.add_argument('--disable-sync')
+                self.chrome_options.add_argument('--disable-translate')
+                self.chrome_options.add_argument('--hide-scrollbars')
+                self.chrome_options.add_argument('--metrics-recording-only')
+                self.chrome_options.add_argument('--mute-audio')
+                self.chrome_options.add_argument('--no-first-run')
+                self.chrome_options.add_argument('--safebrowsing-disable-auto-update')
+                
+                # Random user agent
+                ua = UserAgent()
+                self.chrome_options.add_argument(f'--user-agent={ua.random}')
+            except Exception as e:
+                logger.warning("Failed to configure Chrome options: %s", e)
+                self.selenium_available = False
         
         # Additional preferences
         prefs = {
@@ -438,16 +483,22 @@ class EconomicCalendar:
             'profile.managed_default_content_settings.popups': 2,
             'profile.managed_default_content_settings.geolocation': 2,
             'profile.managed_default_content_settings.media_stream': 2,
-        }
-        self.chrome_options.add_experimental_option('prefs', prefs)
-        
-        # Add random viewport size
-        viewport_width = random.randint(1024, 1920)
-        viewport_height = random.randint(768, 1080)
-        self.chrome_options.add_argument(f'--window-size={viewport_width},{viewport_height}')
+                }
+                self.chrome_options.add_experimental_option('prefs', prefs)
+                
+                # Add random viewport size
+                viewport_width = random.randint(1024, 1920)
+                viewport_height = random.randint(768, 1080)
+                self.chrome_options.add_argument(f'--window-size={viewport_width},{viewport_height}')
+            except Exception as e:
+                logger.warning("Failed to configure Chrome options: %s", e)
+                self.selenium_available = False
         
     def _create_undetected_driver(self):
         """Create an undetected Chrome driver instance"""
+        if not self.selenium_available:
+            logger.warning("Selenium not available - cannot create Chrome driver")
+            return None
         try:
             # Create new ChromeOptions instance each time
             chrome_options = uc.ChromeOptions()
