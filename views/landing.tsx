@@ -232,8 +232,52 @@ export default function LandingPage() {
         </div>
       </nav>
 
+      {/* Red Disclaimer Banner */}
+      <div className="fixed top-16 left-0 right-0 z-40 border-b border-red-500/30 bg-gradient-to-r from-red-950/90 via-red-900/90 to-red-950/90 backdrop-blur-sm">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-2 sm:py-2.5">
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="flex items-center justify-center gap-1.5 sm:gap-2 text-center"
+          >
+            <motion.div
+              animate={{
+                opacity: [1, 0.5, 1],
+                scale: [1, 1.05, 1],
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                ease: "easeInOut",
+              }}
+              className="flex-shrink-0 w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-red-500"
+            />
+            <p className="text-[10px] xs:text-xs sm:text-sm font-semibold text-red-200 leading-tight px-1">
+              <span className="inline-block animate-pulse">⚠️</span>{" "}
+              <span className="font-bold text-red-100">Educational project — not financial advice.</span>{" "}
+              <span className="hidden xs:inline">Predictions are probabilistic and may be wrong.</span>
+              <span className="xs:hidden">Predictions may be wrong.</span>
+            </p>
+            <motion.div
+              animate={{
+                opacity: [1, 0.5, 1],
+                scale: [1, 1.05, 1],
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                ease: "easeInOut",
+                delay: 0.5,
+              }}
+              className="flex-shrink-0 w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-red-500"
+            />
+          </motion.div>
+        </div>
+      </div>
+
       {/* Hero Section */}
-      <section id="main-content" className="relative pt-32 pb-20 sm:pt-40 sm:pb-28 px-4 overflow-hidden">
+      <section id="main-content" className="relative pt-40 pb-20 sm:pt-48 sm:pb-28 px-4 overflow-hidden">
         {/* Background glow */}
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none" />
         <div className="absolute top-20 right-0 w-[400px] h-[400px] bg-purple-500/5 rounded-full blur-[100px] pointer-events-none" />
@@ -294,41 +338,6 @@ export default function LandingPage() {
               View AAPL Analysis
             </Link>
           </motion.div>
-
-          <motion.p
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.38 }}
-            className="mt-4 text-xs sm:text-sm font-semibold text-red-300 max-w-2xl mx-auto flex items-center justify-center gap-2"
-          >
-            <motion.span
-              animate={{
-                opacity: [1, 0.5, 1],
-                scale: [1, 1.1, 1],
-              }}
-              transition={{
-                duration: 2,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="inline-block w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-red-500"
-            />
-            <span className="font-bold text-red-200">Educational project — not financial advice.</span>{" "}
-            Predictions are probabilistic and may be wrong.
-            <motion.span
-              animate={{
-                opacity: [1, 0.5, 1],
-                scale: [1, 1.1, 1],
-              }}
-              transition={{
-                duration: 2,
-                repeat: Infinity,
-                ease: "easeInOut",
-                delay: 0.5,
-              }}
-              className="inline-block w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-red-500"
-            />
-          </motion.p>
 
           {/* Floating stock logos */}
           <motion.div
