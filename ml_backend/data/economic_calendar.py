@@ -455,38 +455,38 @@ class EconomicCalendar:
                 logger.warning("Failed to configure Chrome options: %s", e)
                 self.selenium_available = False
         
-        # Additional preferences
-        prefs = {
-            'profile.default_content_setting_values': {
-                'notifications': 2,
-                'images': 2,
-                'javascript': 1,
-                'cookies': 1,
-                'plugins': 2,
-                'popups': 2,
-                'geolocation': 2,
-                'media_stream': 2,
-            },
-            'profile.managed_default_content_settings': {
-                'javascript': 1,
-                'cookies': 1,
-            },
-            'profile.cookie_controls_mode': 0,
-            'credentials_enable_service': False,
-            'profile.password_manager_enabled': False,
-            'profile.default_content_settings.popups': 0,
-            'profile.managed_default_content_settings.images': 2,
-            'profile.default_content_setting_values.notifications': 2,
-            'profile.managed_default_content_settings.javascript': 1,
-            'profile.managed_default_content_settings.cookies': 1,
-            'profile.managed_default_content_settings.plugins': 2,
-            'profile.managed_default_content_settings.popups': 2,
-            'profile.managed_default_content_settings.geolocation': 2,
-            'profile.managed_default_content_settings.media_stream': 2,
+        # Additional preferences (only if selenium is available)
+        if self.selenium_available and self.chrome_options is not None:
+            try:
+                prefs = {
+                    'profile.default_content_setting_values': {
+                        'notifications': 2,
+                        'images': 2,
+                        'javascript': 1,
+                        'cookies': 1,
+                        'plugins': 2,
+                        'popups': 2,
+                        'geolocation': 2,
+                        'media_stream': 2,
+                    },
+                    'profile.managed_default_content_settings': {
+                        'javascript': 1,
+                        'cookies': 1,
+                    },
+                    'profile.cookie_controls_mode': 0,
+                    'credentials_enable_service': False,
+                    'profile.password_manager_enabled': False,
+                    'profile.default_content_settings.popups': 0,
+                    'profile.managed_default_content_settings.images': 2,
+                    'profile.default_content_setting_values.notifications': 2,
+                    'profile.managed_default_content_settings.javascript': 1,
+                    'profile.managed_default_content_settings.cookies': 1,
+                    'profile.managed_default_content_settings.plugins': 2,
+                    'profile.managed_default_content_settings.popups': 2,
+                    'profile.managed_default_content_settings.geolocation': 2,
+                    'profile.managed_default_content_settings.media_stream': 2,
                 }
                 self.chrome_options.add_experimental_option('prefs', prefs)
-                
-                # Add random viewport size
                 viewport_width = random.randint(1024, 1920)
                 viewport_height = random.randint(768, 1080)
                 self.chrome_options.add_argument(f'--window-size={viewport_width},{viewport_height}')

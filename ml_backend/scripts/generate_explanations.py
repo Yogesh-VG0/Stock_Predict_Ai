@@ -998,14 +998,16 @@ def _build_prompt(
                 contrib = f.get("contrib", 0)
                 value = f.get("value")
                 # Provide data but don't expose raw technical values in final output
-                shap_lines.append(f"    {fname}: contribution={contrib:+.4f}, current_value={value:.4f if isinstance(value, (int, float)) else value}")
+                val_str = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                shap_lines.append(f"    {fname}: contribution={contrib:+.4f}, current_value={val_str}")
         if neg:
             shap_lines.append("  Bearish factors:")
             for f in neg[:6]:
                 fname = _friendly_feature_name(f.get("feature", "?"))
                 contrib = f.get("contrib", 0)
                 value = f.get("value")
-                shap_lines.append(f"    {fname}: contribution={contrib:+.4f}, current_value={value:.4f if isinstance(value, (int, float)) else value}")
+                val_str = f"{value:.4f}" if isinstance(value, (int, float)) else str(value)
+                shap_lines.append(f"    {fname}: contribution={contrib:+.4f}, current_value={val_str}")
 
         if global_imp:
             top_global = [g for g in global_imp[:5] if g.get("gain_pct", 0) > 0]

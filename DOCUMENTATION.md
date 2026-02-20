@@ -1050,6 +1050,10 @@ This means the model predicts how much the stock will beat or lag the market, no
 - Built-in feature importance
 - Supports Huber loss (robust to outliers)
 
+**Why not LSTM (or other deep learning)?**
+- Tabular cross-sectional features (many tickers, many numeric features) suit tree models better than sequential RNNs; LSTMs excel at long raw sequences (e.g. tick-by-tick), not pre-engineered panel data.
+- LightGBM needs less data and compute, is easier to tune and deploy in CI, and gives interpretable feature importance and fast TreeSHAP for explanations.
+
 **Hyperparameters:**
 ```
 Objective:        huber (robust to outlier returns)
@@ -1171,6 +1175,12 @@ Step 3: For each trading day:
    f. Track daily portfolio value
 Step 4: Compute metrics vs SPY benchmark
 ```
+
+**How to run backtest:**
+- **Standalone:** `python -m ml_backend.scripts.run_backtest [--tickers AAPL MSFT NVDA] [--horizon next_day|7_day|30_day] [--no-mongo]`  
+  Uses `ml_backend/backtest.py` under the hood. With `--no-mongo`, data is fetched from yfinance.
+- **As part of pipeline:** `python -m ml_backend.scripts.run_pipeline --tickers AAPL MSFT NVDA [--no-mongo]`  
+  After training, the pipeline runs the same backtest automatically (OOS period from training cutoff to latest data) and prints the summary.
 
 ### Metrics Computed
 
