@@ -33,6 +33,8 @@
 25. [Risks, Bugs & Improvements](#25-risks-bugs--improvements)
 26. [Pipeline Hardening & Reliability](#26-pipeline-hardening--reliability)
 27. [API Rate Limit Compliance & Data Priority](#27-api-rate-limit-compliance--data-priority)
+28. [Technical Deep Dive: The AI Machine](#28-technical-deep-dive-the-ai-machine)
+29. [Stateless-to-Stateful Bridge: The Role of MongoDB](#29-stateless-to-stateful-bridge-the-role-of-mongodb)
 
 ---
 
@@ -2484,6 +2486,55 @@ Dropped endpoints (lower sentiment value): `dividends`, `dividends_calendar`, `e
 No new env vars are required. The rate limits are hardcoded in `rate_limiter.py` as conservative defaults. The Marketaux top-50 ticker list is defined as `_MARKETAUX_TICKERS` in the `SentimentAnalyzer` class.
 
 To adjust limits, modify the singleton instantiation in `rate_limiter.py`.
+
+---
+
+## 28. Technical Deep Dive: The AI Machine
+
+This section explains the "Black Magic" of how a free GitHub Actions runner can handle a massive 100-stock AI pipeline daily without crashing, timing out, or getting banned.
+
+### 28.1 The Orchestrator: Disposable Virtual Machines
+GitHub Actions provides a **standard Ubuntu VM** (approx. 7GB RAM, 2 CPUs) for every run. 
+- **Disposable**: Every VM starts fresh. Any files written to disk are deleted at the end of the run.
+- **Stateless**: The system doesn't "remember" yesterday's run unless it reads from MongoDB.
+- **Life Limit**: A single run can last up to 6 hours. Our pipeline optimizes this down to ~40 minutes.
+
+### 28.2 Parallel Data Fetching via Concurrency
+Fetching news, sentiment, and prices for 100 stocks sequentially would take hours.
+- **Asyncio Semaphores**: `sentiment_cron.py` uses `asyncio.Semaphore(3)`. This means the machine works on **3 stocks at the exact same time**.
+- **Bounded Parallelism**: We use 3 (not 100) to avoid overwhelming the CPU and getting IP-banned by news sources.
+
+### 28.3 Hybrid Model Strategy (Pooled vs. Per-Ticker)
+Training 100 deep-learning models would exceed the 7GB RAM limit. We use a more efficient approach:
+- **The Pooled Model**: We train one large "Base Model" using the historical data of *all* 100 stocks combined. This lets the AI learn general market patterns (e.g., "When inflation rises, Tech stocks usually drop").
+- **LightGBM**: This algorithm is used because it is an order of magnitude faster and lighter than Neural Networks, while maintaining top-tier accuracy for tabular data.
+- **Personalization**: The model uses "Ticker Labels" as a feature, allowing it to learn the unique "personality" of AAPL vs. JPM without needing 100 separate files.
+
+### 28.4 Batched Prediction & The "Cool Down" Cycle
+Calculating predictions and **SHAP explanations** is the most CPU-intensive part. 
+- **Batching**: We split the 100 stocks into **10 batches of 10**.
+- **The Loop**: The workflow pick 10 tickers, runs the AI, saves data, then **sleeps for 10 seconds**.
+- **The Wait**: This 10-second pause is critical. It prevents the GitHub runner's CPU from thermal throttling and ensures external APIs (like Finnhub) have time to reset their rate limits.
+
+---
+
+## 29. Stateless-to-Stateful Bridge: The Role of MongoDB
+
+GitHub Actions is **stateless** (it forgets everything), but a Stock platform needs to be **stateful** (it must remember prices and trends).
+
+### 29.1 MongoDB as the "Persistent Brain"
+The MongoDB Atlas cluster acts as the bridge between the **Worker VM** (GitHub) and the **Frontend** (Your browser).
+1. **GitHub** fetches data → Saves it to MongoDB.
+2. **GitHub** trains model → Saves weights/metrics to MongoDB.
+3. **Frontend** loads → Reads directly from MongoDB.
+
+The Frontend never talks to GitHub; it just reads the "Knowledge" that the worker left behind in the database.
+
+### 29.2 Resiliency via Persistence
+If the GitHub VM crashes halfway through Batch #5:
+- All data from Batches #1 to #4 is **already safe** in MongoDB. 
+- The Frontend will continue showing the latest successful data.
+- The next day's run will simply overwrite the old data with fresh numbers.
 
 ---
 
