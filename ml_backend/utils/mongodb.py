@@ -599,15 +599,23 @@ class MongoDBClient:
                     "date": pd.Timestamp(doc["date"]).normalize(),
                     "composite_sentiment": composite,
                     "news_count": news_count,
+                    # FMP analyst fields (already stored by sentiment cron)
+                    "fmp_analyst": float(doc.get("fmp_analyst_sentiment", 0.0) or 0.0),
+                    "fmp_rating": float(doc.get("fmp_ratings_sentiment", 0.0) or 0.0),
+                    "fmp_price_target": float(doc.get("fmp_price_target_sentiment", 0.0) or 0.0),
                 })
+            _cols = ["date", "composite_sentiment", "news_count",
+                     "fmp_analyst", "fmp_rating", "fmp_price_target"]
             if not rows:
-                return pd.DataFrame(columns=["date", "composite_sentiment", "news_count"])
+                return pd.DataFrame(columns=_cols)
             df = pd.DataFrame(rows)
             df = df.sort_values("date").drop_duplicates("date", keep="last").reset_index(drop=True)
             return df
         except Exception as e:
             logger.error("Error getting sentiment timeseries for %s: %s", ticker, e)
-            return pd.DataFrame(columns=["date", "composite_sentiment", "news_count"])
+            return pd.DataFrame(columns=["date", "composite_sentiment", "news_count",
+                                         "fmp_analyst", "fmp_rating", "fmp_price_target"])
+
 
     def get_historical_data(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         """Get historical data for a ticker within date range from the single collection."""

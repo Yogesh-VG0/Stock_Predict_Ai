@@ -72,6 +72,10 @@ def make_sentiment_features(
         "news_count_1d": 0.0,
         "news_count_7d": 0.0,
         "news_spike_1d": 0.0,
+        # FMP analyst features (v1.5 — sourced from sentiment collection)
+        "analyst_sentiment_7d": 0.0,
+        "analyst_rating_7d": 0.0,
+        "price_target_gap_7d": 0.0,
     }
     empty = pd.DataFrame(
         {col: [val] * len(price_df) for col, val in _defaults.items()},
@@ -109,6 +113,21 @@ def make_sentiment_features(
         news_count_30d_mean = count.rolling(30, min_periods=10).mean()
         sent_df["news_spike_1d"] = count / (news_count_30d_mean + 1e-6)
 
+        # --- FMP analyst features (v1.5) ---
+        # These fields are already stored in the sentiment collection but were
+        # previously unused by the ML pipeline.  Rolling 7-day mean smooths
+        # the noisy daily values into stable signals.
+        for col_src, col_dst in [
+            ("fmp_analyst", "analyst_sentiment_7d"),
+            ("fmp_rating", "analyst_rating_7d"),
+            ("fmp_price_target", "price_target_gap_7d"),
+        ]:
+            if col_src in sent_df.columns:
+                raw = sent_df[col_src].astype(float).fillna(0.0)
+                sent_df[col_dst] = raw.rolling(7, min_periods=3).mean().fillna(0.0)
+            else:
+                sent_df[col_dst] = 0.0
+
         feature_cols = list(_defaults.keys())
         sent_features = sent_df[["date"] + feature_cols].copy()
 
@@ -137,3 +156,4 @@ def make_sentiment_features(
     except Exception as e:
         logger.warning("Could not build sentiment features for %s: %s", ticker, e)
         return empty
+

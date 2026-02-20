@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 # Default model directory
 MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
+# Model version — bump when feature set, hyperparams, or architecture changes.
+# Stored in every prediction document for reproducibility.
+MODEL_VERSION = "v1.5.0"
+
 
 class StockPredictor:
     """
@@ -1079,6 +1083,8 @@ class StockPredictor:
                 "min_return_for_profit": min_return_for_profit,
                 "covers_transaction_cost": covers_transaction_cost,
                 "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
+                "model_version": MODEL_VERSION,
+                "training_timestamp": datetime.utcnow().isoformat(),
             }
 
         # Add best_window: highest normalized_return among trade_recommended, else highest normalized_return
@@ -1336,3 +1342,24 @@ class StockPredictor:
                 except Exception as e:
                     logger.warning("Could not save metadata for %s: %s", ticker, e)
         logger.info(f"Saved {len(self.models)} models")
+
+        # Write model_metadata.json — single source of truth for the current model version
+        try:
+            model_meta = {
+                "model_version": MODEL_VERSION,
+                "trained_at": datetime.utcnow().isoformat(),
+                "n_pooled_models": len(self.pooled_models),
+                "n_ticker_models": len(self.models),
+                "windows": list(self.pooled_models.keys()),
+                "feature_counts": {
+                    w: len(m.get("feature_columns", []))
+                    for w, m in self.pooled_metadata.items()
+                },
+            }
+            meta_path = os.path.join(base, "model_metadata.json")
+            with open(meta_path, "w") as f:
+                json.dump(model_meta, f, indent=2)
+            logger.info("Saved model_metadata.json (version=%s)", MODEL_VERSION)
+        except Exception as e:
+            logger.warning("Could not save model_metadata.json: %s", e)
+
