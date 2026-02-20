@@ -1034,11 +1034,20 @@ def _build_prompt(
         }
         for key, info in macro_context.items():
             name = display_map.get(key, key)
-            macro_lines.append(f"  {name}: {info['value']:,.2f} (as of {info['date']})")
+            value = info.get('value')
+            # Handle non-numeric values (None, string, etc.)
+            if isinstance(value, (int, float)):
+                val_str = f"{value:,.2f}"
+            else:
+                val_str = str(value) if value is not None else "N/A"
+            macro_lines.append(f"  {name}: {val_str} (as of {info.get('date', 'N/A')})")
         if "TREASURY_10Y" in macro_context and "TREASURY_2Y" in macro_context:
-            spread = macro_context["TREASURY_10Y"]["value"] - macro_context["TREASURY_2Y"]["value"]
-            inversion = " (INVERTED - recession signal)" if spread < 0 else ""
-            macro_lines.append(f"  Yield Curve Spread (10Y-2Y): {spread:+.2f}%{inversion}")
+            val_10y = macro_context["TREASURY_10Y"].get("value")
+            val_2y = macro_context["TREASURY_2Y"].get("value")
+            if isinstance(val_10y, (int, float)) and isinstance(val_2y, (int, float)):
+                spread = val_10y - val_2y
+                inversion = " (INVERTED - recession signal)" if spread < 0 else ""
+                macro_lines.append(f"  Yield Curve Spread (10Y-2Y): {spread:+.2f}%{inversion}")
         sections.append("\n".join(macro_lines))
 
     # ── 6. INSIDER TRADING ──
@@ -1169,6 +1178,25 @@ def _build_prompt(
             conf_scores.append(w["confidence"])
     avg_confidence = int(sum(conf_scores) / len(conf_scores) * 100) if conf_scores else 50
     
+    # Format numeric values before f-string to avoid format specifier errors
+    current_price_str = f"{current_price:.2f}" if isinstance(current_price, (int, float)) and current_price else "N/A"
+    predicted_price_str = f"{predicted_price:.2f}" if isinstance(predicted_price, (int, float)) else "0.00"
+    price_change_pct_str = f"{price_change_pct:+.2f}" if isinstance(price_change_pct, (int, float)) else "0.00"
+    price_change_abs_str = f"{abs(price_change):.2f}" if isinstance(price_change, (int, float)) else "0.00"
+    
+    # Format prediction prices safely
+    pred_next_price = pred_next.get("predicted_price", 0) if isinstance(pred_next, dict) else 0
+    pred_next_str = f"{pred_next_price:.2f}" if isinstance(pred_next_price, (int, float)) else "0.00"
+    pred_7d_price = pred_7d.get("predicted_price", 0) if isinstance(pred_7d, dict) else 0
+    pred_7d_str = f"{pred_7d_price:.2f}" if isinstance(pred_7d_price, (int, float)) else "0.00"
+    
+    # Determine movement direction text
+    movement_text = "slight declines" if price_change_pct < 0 else "modest gains" if price_change_pct > 0 else "minimal movement"
+    pressure_text = "modest downward pressure" if price_change_pct < 0 else "moderate upward momentum"
+    change_type = "decline" if price_change_pct < 0 else "gain"
+    conditions_text = "potential headwinds" if price_change_pct < 0 else "supportive conditions"
+    source_text = "sector volatility" if price_change_pct < 0 else "favorable market conditions"
+    
     sections.append(f"""
 INSTRUCTIONS: You are a professional equity analyst writing a clear, concise market intelligence briefing for {company_name} ({ticker}) — a {industry} company in the {sector} sector.
 
@@ -1193,15 +1221,15 @@ OVERALL_OUTLOOK: {outlook_hint}
 
 CONFIDENCE: {avg_confidence}
 
-PREDICTION: {price_change_pct:+.2f}% avg. predicted move
+PREDICTION: {price_change_pct_str}% avg. predicted move
 
-EXPECTED_PRICE: ${predicted_price:.2f}
+EXPECTED_PRICE: ${predicted_price_str}
 
-CURRENT_PRICE: ${current_price:.2f}
+CURRENT_PRICE: ${current_price_str}
 
-SUMMARY: [{company_name} ({ticker}) is currently trading at ${current_price:.2f}. The ML model predicts {"slight declines" if price_change_pct < 0 else "modest gains" if price_change_pct > 0 else "minimal movement"} for {ticker} across all time horizons, with next day at ${pred_next.get("predicted_price", 0):.2f if isinstance(pred_next, dict) else 0:.2f}, 1 week at ${pred_7d.get("predicted_price", 0):.2f if isinstance(pred_7d, dict) else 0:.2f}, and 1 month at ${predicted_price:.2f}. Reference ONE key driver from the data — a specific news headline, technical indicator, or macro factor — that explains the prediction.]
+SUMMARY: [{company_name} ({ticker}) is currently trading at ${current_price_str}. The ML model predicts {movement_text} for {ticker} across all time horizons, with next day at ${pred_next_str}, 1 week at ${pred_7d_str}, and 1 month at ${predicted_price_str}. Reference ONE key driver from the data — a specific news headline, technical indicator, or macro factor — that explains the prediction.]
 
-WHAT_THIS_MEANS: [2-3 sentences translating the prediction into investment implications. Be specific to {ticker}'s business model and sector. Example: "The model anticipates {ticker} may experience {"modest downward pressure" if price_change_pct < 0 else "moderate upward momentum"} in the near term, with a projected {"decline" if price_change_pct < 0 else "gain"} of ${abs(price_change):.2f} over the next month. This suggests {"potential headwinds" if price_change_pct < 0 else "supportive conditions"} from {"sector volatility" if price_change_pct < 0 else "favorable market conditions"}."]
+WHAT_THIS_MEANS: [2-3 sentences translating the prediction into investment implications. Be specific to {ticker}'s business model and sector. Example: "The model anticipates {ticker} may experience {pressure_text} in the near term, with a projected {change_type} of ${price_change_abs_str} over the next month. This suggests {conditions_text} from {source_text}."]
 
 BULLISH_FACTORS: [2-4 bullet points, each starting with "+". Translate technical factors into plain English. Examples:
 + Treasury yield curve conditions: A positive yield curve spread supports {ticker}'s outlook

@@ -115,11 +115,12 @@ jobs:
             SUCCESS=0
             for attempt in 1 2 3; do
               echo "  Attempt $attempt..."
-              if python -m ml_backend.scripts.run_pipeline --predict-only --tickers $BATCH; then
+              if python -m ml_backend.scripts.run_pipeline --predict-only --tickers $BATCH 2>&1 | tee "batch_${BATCH_NUM}_attempt_${attempt}.log"; then
                 SUCCESS=1
                 break
               fi
-              echo "  Attempt $attempt failed."
+              echo "  Attempt $attempt failed. Last error:"
+              tail -50 "batch_${BATCH_NUM}_attempt_${attempt}.log" || echo "  (log file not found)"
               sleep $((attempt * 20))
             done
 
@@ -238,6 +239,7 @@ jobs:
       - name: Generate AI explanations (Groq/Gemini)
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}
@@ -280,6 +282,7 @@ jobs:
           path: |
             ml_backend/**/*.log
             **/*.log
+            batch_*_attempt_*.log
             eval_report.txt
             drift_report.txt
             retention_report.txt

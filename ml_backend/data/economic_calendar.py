@@ -8,7 +8,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import time
 from bs4 import BeautifulSoup
 import json
