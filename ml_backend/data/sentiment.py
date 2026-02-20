@@ -42,12 +42,74 @@ from .fred_macro import fetch_and_store_all_fred_indicators
 import sys
 import traceback
 import math
+import random
+
+from ml_backend.utils.rate_limiter import (
+    finnhub_limiter,
+    fmp_limiter,
+    marketaux_limiter,
+    reddit_limiter,
+    BudgetExhausted,
+)
 
 # Load environment variables
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- Finnhub retry configuration ---
+_FINNHUB_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_FINNHUB_MAX_RETRIES = 3
+_FINNHUB_BASE_DELAY = 2.0   # seconds
+_FINNHUB_MAX_DELAY = 30.0   # cap
+
+
+async def _finnhub_get_with_retry(url: str, params: dict, ticker: str, label: str) -> dict:
+    """HTTP GET with retry on 429/5xx/timeout.  Returns parsed JSON or {}."""
+    last_exc = None
+    for attempt in range(1, _FINNHUB_MAX_RETRIES + 1):
+        try:
+            await finnhub_limiter.acquire()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=15) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    if resp.status in _FINNHUB_RETRYABLE_STATUSES:
+                        body_snippet = (await resp.text())[:200]
+                        logger.warning(
+                            "[FINNHUB-RETRY] %s %s | status=%d | attempt=%d/%d | body=%s",
+                            label, ticker, resp.status, attempt, _FINNHUB_MAX_RETRIES, body_snippet,
+                        )
+                        if attempt < _FINNHUB_MAX_RETRIES:
+                            delay = min(_FINNHUB_BASE_DELAY * (2 ** (attempt - 1)), _FINNHUB_MAX_DELAY)
+                            # Honor Retry-After on 429
+                            if resp.status == 429:
+                                retry_after = resp.headers.get("Retry-After")
+                                if retry_after and retry_after.isdigit():
+                                    delay = max(delay, int(retry_after))
+                            delay *= random.uniform(0.8, 1.2)
+                            await asyncio.sleep(delay)
+                            continue
+                        return {}
+                    # Non-retryable non-200
+                    logger.warning(
+                        "Finnhub %s API returned status %d for %s",
+                        label, resp.status, ticker,
+                    )
+                    return {}
+        except (asyncio.TimeoutError, aiohttp.ClientError) as exc:
+            last_exc = exc
+            logger.warning(
+                "[FINNHUB-RETRY] %s %s | err=%r | attempt=%d/%d",
+                label, ticker, exc, attempt, _FINNHUB_MAX_RETRIES,
+            )
+            if attempt < _FINNHUB_MAX_RETRIES:
+                delay = min(_FINNHUB_BASE_DELAY * (2 ** (attempt - 1)), _FINNHUB_MAX_DELAY) * random.uniform(0.8, 1.2)
+                await asyncio.sleep(delay)
+                continue
+    logger.error("Finnhub %s failed for %s after %d attempts: %r", label, ticker, _FINNHUB_MAX_RETRIES, last_exc)
+    return {}
 
 # Global locks for sequential processing to prevent bot detection
 SEEKING_ALPHA_LOCK = asyncio.Lock()
@@ -550,6 +612,7 @@ class SentimentAnalyzer:
             return {}
         
         try:
+            await finnhub_limiter.acquire()
             finnhub_client = finnhub.Client(api_key=api_key)
             from_date = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
             to_date = datetime.utcnow().strftime("%Y-%m-%d")
@@ -604,7 +667,8 @@ class SentimentAnalyzer:
             cached = self.mongo_client.get_alpha_vantage_data(ticker, 'quote')
             if cached:
                 return cached
-                
+            
+            await finnhub_limiter.acquire()
             finnhub_client = finnhub.Client(api_key=api_key)
             data = finnhub_client.quote(ticker)
             
@@ -752,11 +816,28 @@ class SentimentAnalyzer:
         logger.warning(f"_analyze_yahoo_news_sentiment_sync REMOVED for {ticker} - use RSS news instead")
         return {"yahoo_news_sentiment": 0.0, "yahoo_news_volume": 0, "yahoo_news_confidence": 0.0}
 
+    # Top 50 tickers to receive Marketaux data (daily budget = 95 calls)
+    _MARKETAUX_TICKERS = {
+        "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AVGO",
+        "JPM", "V", "MA", "UNH", "LLY", "HD", "NFLX", "JNJ", "XOM",
+        "PG", "COST", "ABBV", "BAC", "CRM", "WMT", "CVX", "MRK",
+        "KO", "PEP", "ORCL", "AMD", "ADBE", "TMO", "CSCO", "MCD",
+        "ABT", "INTC", "DIS", "NKE", "PFE", "QCOM", "GS", "CAT",
+        "BA", "GE", "HON", "AMGN", "TXN", "BLK", "ISRG", "NOW", "PLTR",
+    }
+
     async def analyze_marketaux_sentiment(self, ticker: str) -> dict:
-        """Analyze sentiment from Marketaux."""
+        """Analyze sentiment from Marketaux (daily budget limited to top 50 tickers)."""
+        if ticker not in self._MARKETAUX_TICKERS:
+            logger.info(f"Skipping Marketaux for {ticker} — not in top-50 budget")
+            return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0}
         try:
+            await marketaux_limiter.acquire()
             # Run in threadpool since this is a blocking operation
             return await run_in_threadpool(self._analyze_marketaux_sentiment_sync, ticker)
+        except BudgetExhausted:
+            logger.warning(f"[MARKETAUX-BUDGET] daily budget exhausted, skipping {ticker}")
+            return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0}
         except Exception as e:
             logger.warning(f"Marketaux sentiment analysis failed for {ticker}: {e}")
             return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0}
@@ -1340,6 +1421,7 @@ class SentimentAnalyzer:
             logger.warning("FINNHUB_API_KEY not set. Skipping Finnhub Recommendation Trends.")
             return {"finnhub_recommendation_sentiment": 0.0, "finnhub_recommendation_volume": 0, "finnhub_recommendation_confidence": 0.0}
         try:
+            await finnhub_limiter.acquire()
             finnhub_client = finnhub.Client(api_key=api_key)
             data = finnhub_client.recommendation_trends(ticker)
             if not data or len(data) == 0:
@@ -1414,6 +1496,7 @@ class SentimentAnalyzer:
     async def analyze_reddit_sentiment(self, ticker: str) -> Dict[str, float]:
         """Analyze sentiment from Reddit posts using Twitter-Roberta."""
         try:
+            await reddit_limiter.acquire()
             # Run in threadpool for async compatibility
             logger.info("Running Reddit sentiment analysis in threadpool for async compatibility.")
             return await run_in_threadpool(self._analyze_reddit_sentiment_sync, ticker)
@@ -1445,7 +1528,7 @@ class SentimentAnalyzer:
                         user_agent=os.getenv("REDDIT_USER_AGENT")
                     )
                     
-                    for subreddit_name in target_subreddits:
+                    for subreddit_name in target_subreddits[:3]:  # Cap at 3 subreddits to control API call volume
                         try:
                             logger.info(f"  Searching r/{subreddit_name} for {ticker}")
                             posts = reddit.subreddit(subreddit_name).search(ticker, sort="new", time_filter="week", limit=20)
@@ -2230,13 +2313,14 @@ class SentimentAnalyzer:
                 return {}
                 
         except Exception as e:
-            logger.error(f"Error fetching Finnhub insider sentiment API for {ticker}: {e}")
+            logger.error(f"Error fetching Finnhub insider sentiment API for {ticker}: {repr(e)}")
             return {}
 
     async def get_finnhub_basic_financials(self, ticker: str) -> dict:
         """
         Get comprehensive basic financials from Finnhub with MongoDB storage.
         All fetched data is stored - nothing is lost.
+        Uses _finnhub_get_with_retry for transient error resilience.
         """
         try:
             # Check MongoDB cache first
@@ -2257,30 +2341,23 @@ class SentimentAnalyzer:
             }
             
             logger.info(f"  Fetching Finnhub basic financials for {ticker}")
+            data = await _finnhub_get_with_retry(url, params, ticker, "basic_financials")
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Store in MongoDB
-                        store_finnhub_data_in_mongodb(
-                            self.mongo_client, ticker, 'basic_financials', data, 'basic_financials'
-                        )
-                        
-                        logger.info(f"  Retrieved and stored basic financials for {ticker}")
-                        return data
-                    else:
-                        logger.warning(f"Finnhub basic financials API returned status {response.status}")
-                        return {}
+            if data:
+                store_finnhub_data_in_mongodb(
+                    self.mongo_client, ticker, 'basic_financials', data, 'basic_financials'
+                )
+                logger.info(f"  Retrieved and stored basic financials for {ticker}")
+            return data
                         
         except Exception as e:
-            logger.error(f"Error fetching Finnhub basic financials for {ticker}: {e}")
+            logger.error(f"Error fetching Finnhub basic financials for {ticker}: {repr(e)}")
             return {}
 
     async def get_finnhub_company_peers(self, ticker: str) -> dict:
         """
         Get company peers from Finnhub with MongoDB storage.
+        Uses _finnhub_get_with_retry for transient error resilience.
         """
         try:
             # Check MongoDB cache first
@@ -2300,32 +2377,23 @@ class SentimentAnalyzer:
             }
             
             logger.info(f"  Fetching Finnhub company peers for {ticker}")
+            data = await _finnhub_get_with_retry(url, params, ticker, "company_peers")
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Store in MongoDB
-                        store_finnhub_data_in_mongodb(
-                            self.mongo_client, ticker, 'company_peers', data, 'company_peers'
-                        )
-                        
-                        logger.info(f"  Retrieved and stored company peers for {ticker}")
-                        return data
-                    else:
-                        logger.warning(f"Finnhub company peers API returned status {response.status}")
-                        return {}
+            if data:
+                store_finnhub_data_in_mongodb(
+                    self.mongo_client, ticker, 'company_peers', data, 'company_peers'
+                )
+                logger.info(f"  Retrieved and stored company peers for {ticker}")
+            return data
                         
         except Exception as e:
-            logger.error(f"Error fetching Finnhub company peers for {ticker}: {e}")
+            logger.error(f"Error fetching Finnhub company peers for {ticker}: {repr(e)}")
             return {}
 
     async def get_finnhub_insider_sentiment_cached(self, ticker: str) -> dict:
         """
         Get insider sentiment (MSPR) from Finnhub with MongoDB cache.
-        (Renamed from get_finnhub_insider_sentiment_direct to avoid shadowing
-        fetch_finnhub_insider_sentiment_direct.)
+        Uses _finnhub_get_with_retry for transient error resilience.
         """
         try:
             # Check MongoDB cache first
@@ -2338,7 +2406,6 @@ class SentimentAnalyzer:
                 logger.warning("FINNHUB_API_KEY not found")
                 return {}
             
-            # Get insider sentiment for the past 12 months
             from_date = (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
             to_date = datetime.utcnow().strftime('%Y-%m-%d')
             
@@ -2351,25 +2418,17 @@ class SentimentAnalyzer:
             }
             
             logger.info(f"  Fetching Finnhub insider sentiment for {ticker}")
+            data = await _finnhub_get_with_retry(url, params, ticker, "insider_sentiment")
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Store in MongoDB
-                        store_finnhub_data_in_mongodb(
-                            self.mongo_client, ticker, 'insider_sentiment', data, 'insider_sentiment'
-                        )
-                        
-                        logger.info(f"  Retrieved and stored insider sentiment for {ticker}")
-                        return data
-                    else:
-                        logger.warning(f"Finnhub insider sentiment API returned status {response.status}")
-                        return {}
+            if data:
+                store_finnhub_data_in_mongodb(
+                    self.mongo_client, ticker, 'insider_sentiment', data, 'insider_sentiment'
+                )
+                logger.info(f"  Retrieved and stored insider sentiment for {ticker}")
+            return data
                         
         except Exception as e:
-            logger.error(f"Error fetching Finnhub insider sentiment for {ticker}: {e}")
+            logger.error(f"Error fetching Finnhub insider sentiment for {ticker}: {repr(e)}")
             return {}
 
     async def analyze_finnhub_insider_sentiment_enhanced(self, ticker: str) -> dict:
@@ -2749,6 +2808,7 @@ class FMPAPIManager:
             # Log the exact URL being called for debugging
             logger.info(f"  FMP STABLE API Call: {url} with params: {all_params}")
                 
+            await fmp_limiter.acquire()
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=all_params, timeout=15) as resp:
                     
@@ -2886,13 +2946,11 @@ class FMPAPIManager:
             logger.warning(f"  FMP API not working, returning empty data for {ticker}")
             return {}
         
-        # Make all calls concurrently to avoid sequential delays
+        # Reduced to 4 high-value endpoints to stay within FMP free-tier
+        # budget (250 total calls).  Dividends/earnings calendar data adds
+        # minimal sentiment signal vs cost.
         import asyncio
         results = await asyncio.gather(
-            self.get_dividends_company(ticker),
-            self.get_dividends_calendar(),
-            self.get_earnings_company(ticker),
-            self.get_earnings_calendar(),
             self.get_analyst_estimates(ticker),
             self.get_ratings_snapshot(ticker),
             self.get_price_target_summary(ticker),
@@ -2903,7 +2961,6 @@ class FMPAPIManager:
         # Combine all results
         consolidated_data = {}
         api_call_names = [
-            'company_dividends', 'dividends_calendar', 'company_earnings', 'earnings_calendar',
             'analyst_estimates', 'ratings_snapshot', 'price_target_summary', 'price_target_consensus'
         ]
         

@@ -68,7 +68,7 @@ if (-not $Quick) {
             Write-Host "  *** Batch $num FAILED after 3 attempts ***" -ForegroundColor Red
             $FailedBatches += $num
         }
-        if ($num -lt $Batches.Count) { Start-Sleep -Seconds 5 }
+        if ($num -lt $Batches.Count) { Start-Sleep -Seconds 10 }
     }
     Write-Host ''; Write-Host '===== Pipeline Summary =====' -ForegroundColor Cyan
     Write-Host ('Failed batches: ' + $FailedBatches.Count)

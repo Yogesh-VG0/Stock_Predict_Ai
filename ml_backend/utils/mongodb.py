@@ -3,7 +3,15 @@ MongoDB integration for data storage and retrieval.
 """
 
 from pymongo import MongoClient, ASCENDING, DESCENDING, UpdateOne
-from pymongo.errors import ServerSelectionTimeoutError, BulkWriteError
+from pymongo.errors import (
+    ServerSelectionTimeoutError,
+    BulkWriteError,
+    AutoReconnect,
+    ConnectionFailure,
+    NetworkTimeout,
+)
+import time
+import random
 from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime, timedelta
@@ -72,10 +80,10 @@ class MongoDBClient:
                 minPoolSize=10,
                 maxIdleTimeMS=45000,
                 waitQueueTimeoutMS=5000,
-                # Timeouts
-                serverSelectionTimeoutMS=5000,
-                connectTimeoutMS=10000,
-                socketTimeoutMS=20000,
+                # Timeouts — relaxed for Atlas under CI load
+                serverSelectionTimeoutMS=15000,
+                connectTimeoutMS=20000,
+                socketTimeoutMS=45000,
                 # Reliability
                 retryWrites=True,
                 retryReads=True,
@@ -92,6 +100,39 @@ class MongoDBClient:
             logger.error(f"Error connecting to MongoDB: {str(e)}")
             self.client = None
             self.db = None
+
+    # ------------------------------------------------------------------
+    # Retry helper for transient MongoDB errors (Atlas SSL handshake,
+    # replica-set failover, network blips).  Uses exponential backoff
+    # with the RETRY_CONFIG from constants.py.
+    # ------------------------------------------------------------------
+    _TRANSIENT_ERRORS = (AutoReconnect, ConnectionFailure, ServerSelectionTimeoutError, NetworkTimeout)
+
+    def _retry_operation(self, operation, description="MongoDB operation"):
+        """Execute *operation* (a zero-arg callable) with exponential backoff.
+
+        Retries on transient connection errors up to ``self.max_retries``
+        times.  Non-transient exceptions propagate immediately.
+        """
+        last_exc = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                return operation()
+            except self._TRANSIENT_ERRORS as exc:
+                last_exc = exc
+                if attempt < self.max_retries:
+                    delay = min(self.base_delay * (2 ** (attempt - 1)), self.max_delay) * random.uniform(0.8, 1.2)
+                    logger.warning(
+                        "[RETRY] op=%s | attempt=%d/%d | sleep=%.1fs | err=%r",
+                        description, attempt, self.max_retries, delay, exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error(
+                        "[RETRY] op=%s | FAILED after %d attempts | err=%r",
+                        description, self.max_retries, exc,
+                    )
+        raise last_exc
 
     def initialize_collections(self) -> None:
         """Initialize MongoDB collections."""
@@ -191,7 +232,10 @@ class MongoDBClient:
         fast "get latest" queries via the existing timestamp index.
         """
         try:
-            collection = self.collections[MONGO_COLLECTIONS["predictions"]]
+            collection = self._retry_operation(
+                lambda: self.collections[MONGO_COLLECTIONS["predictions"]],
+                f"get predictions collection for {ticker}",
+            )
             
             # Prepare documents for bulk insert
             documents = []
@@ -264,7 +308,10 @@ class MongoDBClient:
                 )
                 for doc in documents
             ]
-            result = collection.bulk_write(ops)
+            result = self._retry_operation(
+                lambda: collection.bulk_write(ops),
+                f"bulk_write predictions for {ticker}",
+            )
             logger.info(
                 f"Upserted {result.upserted_count + result.modified_count} predictions for {ticker} "
                 f"(upserted={result.upserted_count}, modified={result.modified_count})"
@@ -291,7 +338,10 @@ class MongoDBClient:
     def store_historical_data(self, ticker: str, data: pd.DataFrame) -> bool:
         """Store historical data in bulk, in a single collection."""
         try:
-            collection = self.historical_data_collection
+            collection = self._retry_operation(
+                lambda: self.historical_data_collection,
+                f"get historical_data collection for {ticker}",
+            )
             if isinstance(data, list):
                 data = pd.DataFrame(data)
             if isinstance(data.columns, pd.MultiIndex):
@@ -318,7 +368,10 @@ class MongoDBClient:
                     )
                     for doc in documents
                 ]
-                result = collection.bulk_write(ops, ordered=False)
+                result = self._retry_operation(
+                    lambda: collection.bulk_write(ops, ordered=False),
+                    f"bulk_write historical data for {ticker}",
+                )
                 logger.info(
                     f"Upserted {result.upserted_count + result.modified_count + result.matched_count} "
                     f"historical data points for {ticker} in historical_data collection"
@@ -332,7 +385,10 @@ class MongoDBClient:
             return False
 
     def store_sentiment(self, ticker: str, sentiment: dict):
-        collection = self.db['sentiment']
+        collection = self._retry_operation(
+            lambda: self.db['sentiment'],
+            f"get sentiment collection for {ticker}",
+        )
         sentiment['ticker'] = ticker
         sentiment['last_updated'] = datetime.utcnow()
         # Respect pre-set trading-day-aligned date from get_combined_sentiment().
@@ -355,13 +411,14 @@ class MongoDBClient:
             sentiment.pop(k, None)
 
         # Upsert on {ticker, date} so only the latest sentiment per ticker per day is kept
-        collection.update_one(
-            {"ticker": ticker, "date": sentiment["date"]},
-            {
-                "$set": sentiment,
-                "$unset": {k: "" for k in _stale_fields},
-            },
-            upsert=True,
+        _filter = {"ticker": ticker, "date": sentiment["date"]}
+        _update = {
+            "$set": sentiment,
+            "$unset": {k: "" for k in _stale_fields},
+        }
+        self._retry_operation(
+            lambda: collection.update_one(_filter, _update, upsert=True),
+            f"upsert sentiment for {ticker}",
         )
 
     def get_latest_predictions(self, ticker: str) -> Dict[str, Dict[str, float]]:
@@ -485,12 +542,15 @@ class MongoDBClient:
         """
         try:
             collection = self.db["sentiment"]
-            cursor = collection.find(
-                {
-                    "ticker": ticker,
-                    "date": {"$gte": start_date, "$lte": end_date},
-                },
-                sort=[("date", ASCENDING)],
+            cursor = self._retry_operation(
+                lambda: collection.find(
+                    {
+                        "ticker": ticker,
+                        "date": {"$gte": start_date, "$lte": end_date},
+                    },
+                    sort=[("date", ASCENDING)],
+                ),
+                f"find sentiment timeseries for {ticker}",
             )
             rows = []
             for doc in cursor:
@@ -553,14 +613,16 @@ class MongoDBClient:
         """Get historical data for a ticker within date range from the single collection."""
         try:
             collection = self.historical_data_collection
-            cursor = collection.find({
-                "ticker": ticker,
-                "date": {
-                    "$gte": start_date,
-                    "$lte": end_date
-                }
-            }, sort=[("date", ASCENDING)])
-            data = pd.DataFrame(list(cursor))
+            data = pd.DataFrame(list(self._retry_operation(
+                lambda: collection.find({
+                    "ticker": ticker,
+                    "date": {
+                        "$gte": start_date,
+                        "$lte": end_date
+                    }
+                }, sort=[("date", ASCENDING)]),
+                f"find historical data for {ticker}",
+            )))
             if not data.empty:
                 # Defensive: ensure 'date' column exists and is datetime
                 if 'date' not in data.columns:

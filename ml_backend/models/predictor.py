@@ -104,19 +104,44 @@ class StockPredictor:
             )
 
     def _select_features(
-        self, X: np.ndarray, current_cols: list, model_cols: list
-    ) -> np.ndarray:
+        self, X: np.ndarray, current_cols: list, model_cols: list,
+        ticker: str = "", window: str = "",
+    ) -> pd.DataFrame:
         """Select & reorder columns of *X* so they match *model_cols*.
 
-        If model_cols is None or identical to current_cols, returns X unchanged.
+        If model_cols is None or identical to current_cols, returns X as a
+        DataFrame.  Missing columns are zero-filled (missing-data marker)
+        and a warning is logged.  Always returns a DataFrame with model_cols
+        as column names to suppress sklearn feature-name warnings.
         """
-        if not model_cols or model_cols == current_cols:
-            return X
+        if not model_cols:
+            return pd.DataFrame(X, columns=current_cols) if current_cols else pd.DataFrame(X)
+        if model_cols == current_cols:
+            return pd.DataFrame(X, columns=model_cols)
+
         col_to_idx = {c: i for i, c in enumerate(current_cols)}
-        indices = [col_to_idx[c] for c in model_cols if c in col_to_idx]
-        if not indices or len(indices) == len(current_cols):
-            return X
-        return X[:, indices]
+        missing = [c for c in model_cols if c not in col_to_idx]
+        extra = [c for c in current_cols if c not in set(model_cols)]
+
+        if missing:
+            logger.warning(
+                "Feature mismatch [%s-%s]: %d missing cols (zero-filled): %s",
+                ticker, window, len(missing), missing[:10],
+            )
+        if extra and len(extra) <= 20:
+            logger.debug(
+                "Feature mismatch [%s-%s]: %d extra cols (ignored): %s",
+                ticker, window, len(extra), extra[:10],
+            )
+
+        # Build output array with model_cols ordering, zero-fill missing
+        n_rows = X.shape[0]
+        out = np.zeros((n_rows, len(model_cols)), dtype=np.float32)
+        for j, col in enumerate(model_cols):
+            if col in col_to_idx:
+                out[:, j] = X[:, col_to_idx[col]]
+            # else: stays zero (missing-data marker)
+        return pd.DataFrame(out, columns=model_cols)
 
     def get_oos_start_date(self) -> Optional[pd.Timestamp]:
         """Return the earliest date the backtest should start (after all training data).
@@ -938,10 +963,37 @@ class StockPredictor:
                 meta_w = {}
             # Select features to match model's training columns (pruning-aware)
             model_cols = meta_w.get("feature_columns")
-            X_pred = self._select_features(X_full, current_cols, model_cols)
-            pred_cols = model_cols if model_cols else current_cols
-            if len(pred_cols) == X_pred.shape[1]:
-                X_pred = pd.DataFrame(X_pred, columns=pred_cols)
+
+            # Hard check: if >50% of model columns are missing, skip this window
+            if model_cols:
+                col_set = set(current_cols)
+                n_missing = sum(1 for c in model_cols if c not in col_set)
+                if n_missing > len(model_cols) * 0.5:
+                    logger.error(
+                        "Skipping %s-%s: %d/%d model columns missing (>50%%)",
+                        ticker, window_name, n_missing, len(model_cols),
+                    )
+                    results[window_name] = {
+                        "prediction": 0.0, "alpha": 0.0, "alpha_pct": 0.0,
+                        "price_change": 0.0, "predicted_price": current_price,
+                        "alpha_implied_price": current_price,
+                        "confidence": 0.0, "current_price": current_price,
+                        "prob_positive": 0.5, "prob_above_threshold": 0.5,
+                        "trade_recommended": False,
+                        "trade_threshold": TRADE_MIN_ALPHA,
+                        "normalized_return": 0.0,
+                        "horizon_days": TARGET_CONFIG.get(window_name, {}).get("horizon", 1),
+                        "min_return_for_profit": ROUND_TRIP_COST_BPS / 10000,
+                        "covers_transaction_cost": False,
+                        "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
+                        "reason": "feature_mismatch",
+                    }
+                    continue
+
+            X_pred = self._select_features(
+                X_full, current_cols, model_cols,
+                ticker=ticker, window=window_name,
+            )
             pred_return = float(model.predict(X_pred)[0])
             # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
             # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true

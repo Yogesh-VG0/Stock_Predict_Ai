@@ -66,6 +66,9 @@ async def _process_ticker(
         except Exception as e:
             logger.error(f"  {ticker}: FAILED — {e}")
             return False
+        finally:
+            # Pace API calls: brief pause between tickers to avoid bursting rate limits
+            await asyncio.sleep(1.0)
 
 
 async def _run_pipeline(tickers: list[str]) -> tuple[int, int]:

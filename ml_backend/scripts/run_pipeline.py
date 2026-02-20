@@ -69,6 +69,50 @@ class PipelineHealthSummary:
         print(f"  Evaluation samples found: {self.evaluation_samples} (expected 0 early)")
         print("=" * 56 + "\n")
 
+    def check_quality_gate(self) -> bool:
+        """Return True if the pipeline run meets minimum quality thresholds.
+
+        Thresholds are configurable via environment variables.
+        """
+        min_pred_rate = float(os.environ.get("QG_MIN_PREDICTION_RATE", "0.80"))
+        max_data_fail_rate = float(os.environ.get("QG_MAX_DATA_FAILURE_RATE", "0.20"))
+
+        total_pred = self.predictions_stored + self.predictions_failed + self.predictions_skipped
+        total_data = len(self.data_fetched) + len(self.data_failed)
+        reasons = []
+
+        # Gate 1: prediction rate
+        if total_pred > 0:
+            pred_rate = self.predictions_stored / total_pred
+            if pred_rate < min_pred_rate:
+                reasons.append(
+                    f"Prediction rate {pred_rate:.0%} < {min_pred_rate:.0%} "
+                    f"({self.predictions_stored}/{total_pred} stored)"
+                )
+        elif total_data > 0:
+            # Predictions were expected but none attempted
+            reasons.append("No predictions attempted despite data being fetched")
+
+        # Gate 2: data fetch failure rate
+        if total_data > 0:
+            data_fail_rate = len(self.data_failed) / total_data
+            if data_fail_rate > max_data_fail_rate:
+                reasons.append(
+                    f"Data failure rate {data_fail_rate:.0%} > {max_data_fail_rate:.0%} "
+                    f"({len(self.data_failed)}/{total_data} failed)"
+                )
+
+        if reasons:
+            print("\n" + "!" * 56)
+            print("  QUALITY GATE: FAILED")
+            for r in reasons:
+                print(f"  • {r}")
+            print("!" * 56 + "\n")
+            return False
+
+        print("  QUALITY GATE: PASSED ✓")
+        return True
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run StockPredict ML Pipeline")
@@ -340,6 +384,14 @@ def main():
         health.seeking_alpha_status = "SKIPPED (playwright not installed)"
 
     health.print_summary()
+
+    # Quality gate: fail the pipeline if key metrics are below thresholds.
+    # Only apply when predictions were expected (not --no-predict).
+    if not args.no_predict:
+        if not health.check_quality_gate():
+            logger.error("Pipeline quality gate FAILED — exiting with error.")
+            sys.exit(1)
+
     logger.info("Pipeline completed successfully.")
 
 if __name__ == "__main__":

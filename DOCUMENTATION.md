@@ -1,6 +1,6 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-02-18
+> **Last updated**: 2026-02-21
 
 ---
 
@@ -31,6 +31,8 @@
 23. [How to Run Locally](#23-how-to-run-locally)
 24. [User Action Flows](#24-user-action-flows)
 25. [Risks, Bugs & Improvements](#25-risks-bugs--improvements)
+26. [Pipeline Hardening & Reliability](#26-pipeline-hardening--reliability)
+27. [API Rate Limit Compliance & Data Priority](#27-api-rate-limit-compliance--data-priority)
 
 ---
 
@@ -253,6 +255,15 @@ GitHub Actions wakes up and starts the daily pipeline.
 ║  Reports saved as artifacts. If things look bad, it logs a      ║
 ║  warning (but doesn't fail the job).                            ║
 ╠════════════════════════════════════════════════════════════════╣
+║  CHAPTER 6: "Quality Gate" (~instant)                          ║
+║                                                                ║
+║  The pipeline checks its own health: were ≥80% of tickers      ║
+║  predicted successfully? Did ≤20% of data fetches fail?        ║
+║  If either threshold is breached, the pipeline FAILS with a    ║
+║  clear error message — no silent degradation.                  ║
+║  Thresholds are configurable via QG_MIN_PREDICTION_RATE and    ║
+║  QG_MAX_DATA_FAILURE_RATE environment variables.               ║
+╠════════════════════════════════════════════════════════════════╣
 ║  DONE. All artifacts uploaded. Pipeline complete.               ║
 ║  Next morning, users see fresh predictions on the website.      ║
 ╚════════════════════════════════════════════════════════════════╝
@@ -327,9 +338,9 @@ GitHub Actions wakes up and starts the daily pipeline.
 
 | Provider | Purpose | Where It Runs | Endpoints | Key Env Var | Rate Limit Handling | What Gets Stored |
 |----------|---------|--------------|-----------|-------------|-------------------|-----------------|
-| **Finnhub** | Stock data, news, insider trades, WebSocket prices | Node backend + ML backend | `/quote`, `/stock/profile2`, `/search`, `/news`, `/stock/insider-transactions`, `/recommendation`, `/stock/insider-sentiment`, `/stock/metric`, `/stock/peers`, WebSocket | `FINNHUB_API_KEY` | 60 calls/min free tier; exponential backoff on 429; 1s between HTTP requests | `insider_transactions`, `finnhub_basic_financials`, `finnhub_company_peers`, `finnhub_insider_sentiment` (MongoDB); prices in-memory (60s) |
+| **Finnhub** | Stock data, news, insider trades, WebSocket prices | Node backend + ML backend | `/quote`, `/stock/profile2`, `/search`, `/news`, `/stock/insider-transactions`, `/recommendation`, `/stock/insider-sentiment`, `/stock/metric`, `/stock/peers`, WebSocket | `FINNHUB_API_KEY` | 60 calls/min free tier; `_finnhub_get_with_retry()` — 3 attempts with exponential backoff + jitter on 429/5xx/timeout; honors `Retry-After` header on 429; 1s between HTTP requests | `insider_transactions`, `finnhub_basic_financials`, `finnhub_company_peers`, `finnhub_insider_sentiment` (MongoDB); prices in-memory (60s) |
 | **Yahoo Finance** | Historical OHLCV data, RSS news | ML backend (yfinance) + Node backend (RSS) | yfinance library, RSS feeds | None (free) | 1.5-2.5s delay between requests | `historical_data` (MongoDB); RSS returned to frontend only |
-| **FRED** | Macro economic indicators (GDP, CPI, unemployment, etc.) | ML backend | fredapi library (13 indicators) | `FRED_API_KEY` | Handled by fredapi library | `macro_data_raw` / `macro_data` (MongoDB) |
+| **FRED** | Macro economic indicators (GDP, CPI, unemployment, etc.) | ML backend | fredapi library (13 indicators) | `FRED_API_KEY` | `fetch_fred_series()` — 2 attempts with exponential backoff + jitter on transient failures; explicit warning when `FRED_API_KEY` not set | `macro_data_raw` / `macro_data` (MongoDB) |
 | **FMP** | Earnings, dividends, analyst estimates, ratings, SEC filings (backup) | ML backend | `/dividend/`, `/earnings/`, `/analyst-estimates/`, `/ratings-snapshot/`, `/price-target-summary/`, `/price-target-consensus/`, `/grades-consensus/`, `/sec_filings/` | `FMP_API_KEY` | Cooldown tracking, 403/429 handling | `alpha_vantage_data` (MongoDB, multiple endpoints) |
 | **Marketaux** | Financial news articles | Node backend + ML backend | `/v1/news/all` | `MARKETAUX_API_KEY` | Per-plan limits | ML: within `sentiment` collection; Node: returned to frontend only |
 | **TickerTick** | News aggregation | Node backend | `/feed` | None (free) | 10 req/min (enforced in code) | Not stored (returned to frontend only) |
@@ -2316,4 +2327,164 @@ After the fixes applied in this review, `generate_explanations.py` reads:
 
 ---
 
-*End of documentation. This file was auto-generated from code analysis on 2026-02-17.*
+## 26. Pipeline Hardening & Reliability
+
+This section documents the reliability mechanisms built into the pipeline to prevent silent failures and data degradation.
+
+### API Retry Logic
+
+All external API calls use retry-with-backoff to handle transient errors (rate limits, server errors, timeouts).
+
+| Component | File | Retry Strategy | Retryable Errors | Max Attempts |
+|-----------|------|---------------|-----------------|-------------|
+| Finnhub API (Basic Financials, Peers, Insider Sentiment) | `sentiment.py` | `_finnhub_get_with_retry()` — async, exponential backoff with jitter, honors `Retry-After` on 429 | HTTP 429, 500, 502, 503, 504, `asyncio.TimeoutError`, `aiohttp.ClientError` | 3 |
+| FRED API (all 13 macro indicators) | `fred_macro.py` | `fetch_fred_series()` — exponential backoff with jitter, re-raises config errors immediately | All exceptions except `ValueError` | 2 |
+| MongoDB (reads + writes) | `mongodb.py` | `_retry_operation()` — exponential backoff with jitter for all CRUD | `AutoReconnect`, `ConnectionFailure`, `ServerSelectionTimeoutError`, `NetworkTimeout` | 3 (via `RETRY_CONFIG`) |
+
+**Log format convention**: All retry logs use a `[RETRY]`/`[FINNHUB-RETRY]`/`[FRED-RETRY]` prefix for easy CI log scanning. Example:
+```
+[RETRY] op=bulk_write predictions for AAPL | attempt=2/3 | sleep=2.1s | err=AutoReconnect(...)
+[FINNHUB-RETRY] basic_financials AAPL | status=429 | attempt=1/3 | body=...
+```
+
+**Error logging**: All exception handlers use `repr(e)` instead of `str(e)` to prevent blank error messages when exceptions have no message (e.g., bare `aiohttp.ClientError()`).
+
+### Feature-Name Enforcement
+
+The LightGBM predictor requires exact feature-column alignment between training and inference.
+
+**File**: `predictor.py` — `_select_features()` method
+
+| Scenario | Behavior |
+|----------|----------|
+| **Columns match** | Returns DataFrame unchanged |
+| **Extra columns in current data** | Ignored (debug-logged) |
+| **Missing columns** (<= 50%) | Zero-filled with missing-data marker; warning logged listing which columns are missing |
+| **Missing columns** (> 50%) | Prediction **skipped** for that ticker/window with `reason: "feature_mismatch"` — prevents garbage predictions |
+
+### Quality Gate
+
+The pipeline asserts minimum success thresholds before exiting successfully.
+
+**File**: `run_pipeline.py` — `PipelineHealthSummary.check_quality_gate()`
+
+| Gate | Default Threshold | Env Var | Description |
+|------|-------------------|---------|-------------|
+| **Prediction rate** | ≥ 80% | `QG_MIN_PREDICTION_RATE` | At least 80% of tickers must have predictions stored |
+| **Data failure rate** | ≤ 20% | `QG_MAX_DATA_FAILURE_RATE` | At most 20% of tickers can fail data fetch |
+
+When the quality gate fails, the pipeline exits with `sys.exit(1)` and prints a `QUALITY GATE: FAILED` banner listing which thresholds were breached. This ensures GitHub Actions marks the run as failed rather than silently degrading.
+
+The quality gate only applies when predictions are expected (i.e., not when running with `--no-predict`).
+
+### MongoDB Connection Hardening
+
+**File**: `mongodb.py`
+
+- **Connection timeouts** relaxed for Atlas under CI load: `serverSelectionTimeoutMS=15000`, `connectTimeoutMS=20000`, `socketTimeoutMS=45000`
+- **Connection pool**: `maxPoolSize=50`, `minPoolSize=10`
+- **Retry**: `retryWrites=True`, `retryReads=True` (driver-level) + `_retry_operation()` wrapper (application-level)
+
+---
+
+## 27. API Rate Limit Compliance & Data Priority
+
+This section documents the centralized rate-limiting layer added to protect every external API from throttling, bans, or silent data loss — **while guaranteeing that the most prediction-critical data is always fetched first**.
+
+### 27.1 Per-API Rate Limits (Enforced)
+
+| API | Plan | Hard Limit | Enforced Throttle | Mechanism | File |
+|-----|------|-----------|-------------------|-----------|------|
+| **Finnhub** | Free | 60/min overall, 30/sec | 55/min + 25/sec burst | `AsyncRateLimiter` token-bucket | `rate_limiter.py` |
+| **FMP** | Free | 250 total calls, 4/sec | 3/sec + 4 endpoints only | `AsyncRateLimiter` + endpoint reduction | `rate_limiter.py`, `sentiment.py` |
+| **Marketaux** | Free | 100/day | 95/day hard budget | `DailyBudgetLimiter` + top-50 tickers | `rate_limiter.py`, `sentiment.py` |
+| **Reddit** | Free (OAuth) | 100 QPM | 90/min + max 3 subreddits/ticker | `AsyncRateLimiter` | `rate_limiter.py`, `sentiment.py` |
+| **FRED** | Free | ~120/min | 100/min (defensive) | `AsyncRateLimiter` sync mode | `rate_limiter.py`, `fred_macro.py` |
+| **Alpha Vantage** | Free | 5/min, 25/day | N/A (disabled) | Methods gutted in code | `sentiment.py` |
+
+### 27.2 Rate Limiter Architecture
+
+**File**: `ml_backend/utils/rate_limiter.py`
+
+Two classes:
+
+1. **`AsyncRateLimiter`** — Sliding-window token-bucket with optional burst cap.
+   - `acquire()` — async; sleeps until a token is available (no request dropped).
+   - `acquire_sync()` — blocking version for synchronous callers (e.g., FRED).
+   - Configurable: `max_calls`, `period_seconds`, `burst_limit`.
+
+2. **`DailyBudgetLimiter`** — Hard daily cap resetting at UTC midnight.
+   - `acquire()` — async; raises `BudgetExhausted` when daily cap is hit.
+   - Logs `[MARKETAUX-BUDGET]` warnings when ≤10 calls remain.
+
+Global singletons are instantiated at module level and imported by calling modules:
+```python
+finnhub_limiter    = AsyncRateLimiter(55, 60, burst_limit=25, name="Finnhub")
+fmp_limiter        = AsyncRateLimiter(3,  1,  name="FMP")
+marketaux_limiter  = DailyBudgetLimiter(95, name="Marketaux")
+reddit_limiter     = AsyncRateLimiter(90, 60, name="Reddit")
+fred_limiter       = AsyncRateLimiter(100, 60, name="FRED")
+```
+
+### 27.3 Data Priority — Ensuring Best Prediction Accuracy Under Rate Limits
+
+The `get_combined_sentiment()` method in `sentiment.py` calls sources **sequentially** in a deliberate priority order. The blend weights determine each source's contribution to prediction accuracy:
+
+| Priority | Source | Blend Weight | API Type | Rate-Limited? | Notes |
+|----------|--------|-------------|----------|---------------|-------|
+| 1 | **FinViz** | 5% | Free scrape | No | Always succeeds — no API key needed |
+| 2 | **SEC Filings** | 10% | Free scrape | No | Always succeeds — no API key needed |
+| 3 | **Marketaux** | 15% | API (95/day) | Yes (daily budget) | Top 50 tickers only; skipped for others |
+| 4 | **RSS News** (Yahoo+SA) | **22%** | Free RSS | No | **Highest weight — always runs first among API sources** |
+| 5 | **Reddit** | 10% | OAuth API | Yes (90/min) | Capped at 3 subreddits per ticker |
+| 6 | **FMP** | 8% | API (3/sec) | Yes | Reduced to 4 high-value endpoints |
+| 7 | **Finnhub** | 10% + 10% insider | API (55/min) | Yes | Core calls (insider+recommendations) run before non-critical (basic_financials, peers) |
+| 8 | **SA Comments** | 5% | Free scrape | No | Always succeeds |
+
+**Key guarantee**: Even if all rate-limited APIs are exhausted, **42% of blend weight** (FinViz 5% + SEC 10% + RSS News 22% + SA Comments 5%) comes from **free, unlimited sources** that never fail due to rate limits. Adding Marketaux's top-50-ticker budget, **57% of blend weight** is available before any rate-limited source could be cut off.
+
+**Within Finnhub** (5 calls per ticker), the call order is:
+1. `insider_transactions` — contributes to `finnhub_insider_sentiment` (10% weight) ✅
+2. `recommendation_trends` — contributes to `finnhub_sentiment` (10% weight) ✅
+3. `basic_financials` — supplementary context only (0% blend weight, used in explanations)
+4. `company_peers` — supplementary context only (0% blend weight, used in explanations)
+5. `insider_sentiment` (MSPR) — supplementary context only
+
+Calls 3-5 are wrapped in try/except and marked as "non-critical" in code — failures are logged but never block the sentiment result.
+
+**Within FMP** (reduced from 8 to 4 endpoints), only the high-value endpoints remain:
+- `analyst_estimates` — analyst earnings estimates
+- `ratings_snapshot` — overall rating scores
+- `price_target_summary` — consensus price targets
+- `price_target_consensus` — target consensus
+
+Dropped endpoints (lower sentiment value): `dividends`, `dividends_calendar`, `earnings`, `earnings_calendar`.
+
+### 27.4 Pipeline Pacing
+
+| Component | Pacing | Purpose |
+|-----------|--------|---------|
+| `sentiment_cron.py` | `asyncio.sleep(1.0)` after each ticker (in `finally`) | Spreads 100 tickers over ~100s minimum |
+| `sentiment_cron.py` | `CONCURRENCY=3` (Semaphore) | Max 3 tickers processed in parallel |
+| `daily-predictions.yml` | `sleep 10` between prediction batches | Paces Finnhub calls across 10 batches |
+| `run-daily-pipeline-local.ps1` | `Start-Sleep -Seconds 10` between batches | Mirrors CI pacing locally |
+
+### 27.5 Post-Throttling Call Budget
+
+| API | Calls/Run | Limit | Headroom |
+|-----|-----------|-------|---------|
+| Finnhub | 500 (paced at 55/min) | 60/min | ~9% margin |
+| FMP | ~240 (4 endpoints × 60 tickers) | 250 total | ~4% margin |
+| Marketaux | 50 (top-50 tickers) | 100/day | 50% margin |
+| Reddit | ~300 (3 subs × 100 tickers, paced 90/min) | 100 QPM | 10% margin |
+| FRED | 13 indicators (one-time) | 120/min | ~89% margin |
+
+### 27.6 Env Vars for Rate Limiting
+
+No new env vars are required. The rate limits are hardcoded in `rate_limiter.py` as conservative defaults. The Marketaux top-50 ticker list is defined as `_MARKETAUX_TICKERS` in the `SentimentAnalyzer` class.
+
+To adjust limits, modify the singleton instantiation in `rate_limiter.py`.
+
+---
+
+*End of documentation. Last updated 2026-02-21.*

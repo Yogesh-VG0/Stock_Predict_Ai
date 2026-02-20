@@ -1197,6 +1197,15 @@ def _build_prompt(
     conditions_text = "potential headwinds" if price_change_pct < 0 else "supportive conditions"
     source_text = "sector volatility" if price_change_pct < 0 else "favorable market conditions"
     
+    # Pre-compute Bollinger and prediction values to avoid invalid f-string format specifiers
+    bb_lower_val = technicals.get("Bollinger_Lower", 0) if technicals else 0
+    bb_upper_val = technicals.get("Bollinger_Upper", 0) if technicals else 0
+    bb_lower_str = f"{bb_lower_val:.2f}" if isinstance(bb_lower_val, (int, float)) else "0.00"
+    bb_upper_str = f"{bb_upper_val:.2f}" if isinstance(bb_upper_val, (int, float)) else "0.00"
+    direction_text = "decline" if price_change_pct < 0 else "rise"
+    abs_pct_str = f"{abs(price_change_pct):.1f}" if isinstance(price_change_pct, (int, float)) else "0.0"
+    driver_text = "elevated sector volatility" if price_change_pct < 0 else "supportive market conditions"
+    
     sections.append(f"""
 INSTRUCTIONS: You are a professional equity analyst writing a clear, concise market intelligence briefing for {company_name} ({ticker}) — a {industry} company in the {sector} sector.
 
@@ -1243,16 +1252,16 @@ BEARISH_FACTORS: [2-4 bullet points, each starting with "-". Translate technical
 
 NEWS_IMPACT: [1-2 sentences referencing SPECIFIC headlines from above. If news is available, quote or paraphrase actual headlines and explain relevance. If no news: "No significant recent news detected for {company_name}. The analysis relies on technical, quantitative, and macro factors."]
 
-KEY_LEVELS: [Support around ${technicals.get("Bollinger_Lower", 0):.2f if technicals else 0:.2f} | Resistance around ${technicals.get("Bollinger_Upper", 0):.2f if technicals else 0:.2f}]
+KEY_LEVELS: [Support around ${bb_lower_str} | Resistance around ${bb_upper_str}]
 
-BOTTOM_LINE: [1-2 sentences. The single most important takeaway. Use the 30-day prediction: "{company_name} ({ticker}) is predicted to {"decline" if price_change_pct < 0 else "rise"} {abs(price_change_pct):.1f}% over the next month to ${predicted_price:.2f}, primarily driven by {"elevated sector volatility" if price_change_pct < 0 else "supportive market conditions"} — watch the ${technicals.get("Bollinger_Lower", 0):.2f if technicals else 0:.2f} support level."]
+BOTTOM_LINE: [1-2 sentences. The single most important takeaway. Use the 30-day prediction: "{company_name} ({ticker}) is predicted to {direction_text} {abs_pct_str}% over the next month to ${predicted_price_str}, primarily driven by {driver_text} — watch the ${bb_lower_str} support level."]
 
 STRICT RULES:
 - Maximum 2000 characters total
 - Use ONLY data provided above. NEVER invent numbers
 - Translate ALL technical ML jargon into plain English
 - NEVER mention SHAP %, feature importance %, or model coefficients
-- Use consistent numbers: primary prediction is 30-day (${predicted_price:.2f}, {price_change_pct:+.2f}%)
+- Use consistent numbers: primary prediction is 30-day (${predicted_price_str}, {price_change_pct_str}%)
 - Reference {company_name} or {ticker} by name, not "the stock"
 - Write for regular investors, not quants
 - No markdown formatting (no **, ##, bold, italics)

@@ -129,9 +129,9 @@ jobs:
               FAILED_BATCHES+=("$BATCH_NUM")
             fi
 
-            # Rate limit: brief pause between batches (API courtesy)
+            # Rate limit: pause between batches (API courtesy — paces Finnhub 60/min)
             if [ "$BATCH_NUM" -lt "${#BATCHES[@]}" ]; then
-              sleep 5
+              sleep 10
             fi
           done
 
