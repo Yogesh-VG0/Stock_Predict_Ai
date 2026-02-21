@@ -1404,16 +1404,20 @@ Removing React Router and using the App Router as the sole routing system yields
 | **Reliability** | Single routing model (App Router only) reduces edge cases, 404s from the hybrid setup, and hydration issues from mixing two routers. |
 | **Future use** | Enables server components, streaming, and Next.js caching where applicable, without conflicting with React Router. |
 
-### Pages
+### Pages (Consolidated Next.js App Router)
 
-| Route | App Router File | View Component | Purpose |
-|-------|----------------|----------------|---------|
-| `/` | `app/page.tsx` | `views/home.tsx` | Market dashboard with TradingView widgets |
-| `/stocks/[symbol]` | `app/stocks/[symbol]/page.tsx` | `views/stock-detail.tsx` | Stock chart, predictions, AI analysis, news |
-| `/predictions` | `app/predictions/page.tsx` | `views/predictions.tsx` | AI predictions overview for all stocks |
-| `/news` | `app/news/page.tsx` | `views/news.tsx` | Aggregated market news with filters |
-| `/watchlist` | `app/watchlist/page.tsx` | `views/watchlist.tsx` | User's watchlist with real-time prices |
-| `/fundamentals` | `app/fundamentals/page.tsx` | `views/fundamentals.tsx` | Financial fundamentals (Jika.io embeds) |
+| Route | App Router File | View Component / Purpose |
+|-------|----------------|-------------------------|
+| `/` | `app/page.tsx` | `views/home.tsx` |
+| `/dashboard` | `app/dashboard/page.tsx` | Empty/redirect placeholder |
+| `/disclaimer` | `app/disclaimer/page.tsx` | Standalone compliance page |
+| `/fundamentals` | `app/fundamentals/page.tsx` | `views/fundamentals.tsx` |
+| `/how-it-works` | `app/how-it-works/page.tsx` | Educational guide on ML methodology |
+| `/methodology` | `app/methodology/page.tsx` | Technical breakdown of the pipeline |
+| `/news` | `app/news/page.tsx` | `views/news.tsx` |
+| `/predictions` | `app/predictions/page.tsx` | `views/predictions.tsx` |
+| `/stocks/[symbol]` | `app/stocks/[symbol]/page.tsx` | `views/stock-detail.tsx` |
+| `/watchlist` | `app/watchlist/page.tsx` | `views/watchlist.tsx` |
 
 ### Key Components
 
@@ -1868,107 +1872,88 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 
 ---
 
-## 22. Complete File-by-File Breakdown
+## 22. Complete File-by-File Breakdown (Based on Project Audit)
 
-### Frontend Files
+### Frontend Files (Next.js App Router)
 
-| File | Purpose | Key Exports |
+| File | Purpose | Key Exports/Logic |
 |------|---------|-------------|
 | `app/globals.css` | Global styles (Tailwind + custom) | N/A |
-| `app/layout.tsx` | Root layout (WebSocketProvider, analytics) | `RootLayout`, `metadata` |
-| `app/page.tsx` | Root page — imports `views/home.tsx` | `Page` |
-| `app/stocks/[symbol]/page.tsx` | Dynamic stock detail route | `Page` |
-| `app/news/page.tsx` | News route | `Page` |
-| `app/watchlist/page.tsx` | Watchlist route | `Page` |
-| `app/predictions/page.tsx` | Predictions route | `Page` |
-| `app/fundamentals/page.tsx` | Fundamentals route | `Page` |
-| `pages/home.tsx` | Market dashboard | `HomePage` |
-| `pages/stock-detail.tsx` | Stock detail page | `StockDetail` |
-| `pages/predictions.tsx` | Predictions overview | `Predictions` |
-| `pages/news.tsx` | News aggregation | `NewsPage` |
-| `pages/fundamentals.tsx` | Financial fundamentals | `FundamentalsPage` |
-| `pages/watchlist.tsx` | User watchlist | `WatchlistPage` |
-| `components/layout/layout.tsx` | Main layout (sidebar + navbar) | `Layout` |
-| `components/layout/navbar.tsx` | Top navigation bar | `Navbar` |
-| `components/layout/sidebar.tsx` | Side navigation + top stocks | `Sidebar` |
-| `components/market/AIExplanationWidget.tsx` | Gemini explanation display | `AIExplanationWidget` |
-| `components/market/EnhancedQuickPredictionWidget.tsx` | LightGBM prediction display | `EnhancedQuickPredictionWidget` |
-| `components/market/market-sentiment-banner.tsx` | Fear & Greed banner | `MarketSentimentBanner` |
-| `components/market/NotificationWidget.tsx` | Notification bell | `NotificationWidget` |
-| `components/market/SearchWidget.tsx` | Stock search | `SearchWidget` |
-| `components/market/StockLogo.tsx` | Stock logo with fallback | `StockLogo` |
-| `components/market/TechnicalIndicators.tsx` | RSI/MACD/SMA gauges | `TechnicalIndicators` |
-| `components/market/TradingHoursBar.tsx` | Trading hours timeline | `TradingHoursBar` |
-| `components/tradingview/*.tsx` | TradingView widget wrappers | Various |
-| `components/theme-provider.tsx` | Theme provider (unused) | `ThemeProvider` |
-| `hooks/use-mobile.tsx` | Mobile detection | `useIsMobile` |
-| `hooks/use-prefetch.tsx` | Data prefetching/caching | `usePrefetch`, `getCachedData`, `setCachedData` |
-| `hooks/use-sidebar-context.tsx` | Sidebar context (unused) | `SidebarProvider`, `useSidebarContext` |
-| `hooks/use-toast.ts` | Toast notifications | `useToast`, `toast` |
-| `hooks/use-websocket-context.tsx` | Real-time price context | `WebSocketProvider`, `useWebSocket`, `useStockPrice` |
-| `lib/api.ts` | Centralized API client | All API functions, TypeScript interfaces |
-| `lib/utils.ts` | Utility (className merge) | `cn` |
+| `app/layout.tsx` | Root layout, WebSocketProvider, analytics | `RootLayout`, `metadata` |
+| `app/page.tsx` | Route `/` | `Page`, `metadata` |
+| `app/sitemap.ts` | Dynamic sitemap generator | `sitemap` |
+| `app/dashboard/page.tsx` | Route `/dashboard` | `Page` |
+| `app/disclaimer/page.tsx` | Route `/disclaimer` | `DisclaimerPage`, `metadata` |
+| `app/fundamentals/page.tsx` | Route `/fundamentals` | `Page` |
+| `app/how-it-works/page.tsx` | Route `/how-it-works` | `HowItWorksPage`, `metadata` |
+| `app/methodology/page.tsx` | Route `/methodology` | `MethodologyPage`, `metadata` |
+| `app/news/page.tsx` | Route `/news` | `Page` |
+| `app/predictions/page.tsx` | Route `/predictions` | `Page` |
+| `app/stocks/[symbol]/page.tsx` | Route `/stocks/[symbol]` | `Page` |
+| `app/watchlist/page.tsx` | Route `/watchlist` | `Page` |
+| `views/fundamentals.tsx` | View: Financial fundamentals (Jika.io) | `FundamentalsPage` |
+| `views/home.tsx` | View: Market dashboard | `HomePage` |
+| `views/landing.tsx` | View: Landing page info | `LandingPage` |
+| `views/news.tsx` | View: Aggregated market news | `NewsPage` |
+| `views/predictions.tsx` | View: Predictions overview | `Predictions` |
+| `views/stock-detail.tsx` | View: Stock details, chart, AI features | `StockDetail` |
+| `views/watchlist.tsx` | View: User's realtime watchlist | `WatchlistPage` |
+| `components/disclaimer/disclaimer-modal.tsx` | Compliance disclaimer modal | `DisclaimerModal` |
+| `components/layout/layout.tsx` | Main layout wrapper | `Layout` |
+| `components/layout/navbar.tsx` | Top navigation | `Navbar` |
+| `components/layout/sidebar.tsx` | Side navigation | `Sidebar` |
+| `components/market/AIExplanationWidget.tsx` | Gemini-generated intelligence | `AIExplanationWidget` |
+| `components/market/market-sentiment-banner.tsx` | Fear & Greed display | `MarketSentimentBanner` |
+| `components/market/NotificationWidget.tsx` | Realtime alerts | `NotificationWidget` |
+| `components/market/SearchWidget.tsx` | Stock lookup | `SearchWidget` |
+| `components/market/StockLogo.tsx` | Dynamic company logo | `StockLogo` |
+| `components/market/TechnicalIndicators.tsx` | RSI/MACD display | `TechnicalIndicators` |
+| `components/market/TradingHoursBar.tsx` | Visual market hours | `TradingHoursBar` |
+| `components/marketing/animated-block.tsx` | UI animation shell | `AnimatedBlock` |
+| `components/marketing/marketing-shell.tsx` | Marketing layout block | `MarketingShell` |
+| `components/tradingview/*.tsx` | TradingView chart/data widget wrappers | Various (AdvancedChart, Heatmap, Timeline) |
+| `hooks/use-mobile.tsx` | Responsive breakpoint hook | `useIsMobile` |
+| `hooks/use-prefetch.tsx` | Data pre-loader & client caching | `usePrefetch`, `getCachedData`, `setCachedData` |
+| `hooks/use-toast.ts` | Shadcn toast notification handler | `reducer`, toast tools |
+| `hooks/use-websocket-context.tsx` | Shared connection status & prices | `WebSocketProvider`, `useStockPrice` |
+| `lib/api.ts` | Centralized external fetch logic | `API_BASE_URL`, `getSymbolFromCompanyName` |
+| `lib/utils.ts` | Tailwind class merger | `cn` |
 
-### Node Backend Files
+### Node.js Backend Files
 
-| File | Purpose | Key Exports |
+| File | Purpose | Key Exports/Logic |
 |------|---------|-------------|
-| `backend/src/server.js` | Server entry point | N/A |
-| `backend/src/app.js` | Express configuration | Express app |
-| `backend/healthcheck.js` | Container health check | N/A |
-| `backend/src/config/mongodb.js` | MongoDB connection | `mongoConnection` |
-| `backend/src/controllers/marketController.js` | Market endpoints | `getMarketStatus`, `getFearGreedIndex`, `getMarketSentiment` |
-| `backend/src/controllers/newsController.js` | News endpoints | `getNews` |
-| `backend/src/controllers/stockController.js` | Stock/prediction/explanation endpoints | `getStockDetails`, `getPredictions`, `getStoredExplanation`, etc. |
-| `backend/src/controllers/watchlistController.js` | Watchlist endpoints | `getWatchlist`, `addToWatchlist`, `removeFromWatchlist`, etc. |
-| `backend/src/routes/*.js` | Route definitions | Express routers |
-| `backend/src/services/websocketService.js` | Finnhub WebSocket | `WebSocketService` class |
-| `backend/src/services/aggregateNewsService.js` | News aggregation | `getUnifiedNews` |
-| `backend/src/services/massiveService.js` | Technical indicators | `getAllIndicators` |
-| `backend/src/services/marketService.js` | Market status/FGI | `fetchMarketStatus`, `fetchFearGreedIndex` |
-| `backend/src/services/newsService.js` | Marketaux/NewsAPI | `getAggregateNews` |
-| `backend/src/services/notificationService.js` | Notification management | `checkMarketSessionNotifications`, `getNotifications` |
-| `backend/src/services/redisClient.js` | Redis client | Redis client or mock |
-| `backend/src/services/rssNewsService.js` | RSS feeds | `fetchRssNews` |
-| `backend/src/services/finnhubNewsService.js` | Finnhub news | `getFinnhubGeneralNews`, `getFinnhubCompanyNews` |
-| `backend/src/services/tickertickNewsService.js` | TickerTick news | `getTickerTickNews` |
+| `backend/src/server.js` | Server initialization & port binding | `startServer`, `validateEnvironment` |
+| `backend/src/app.js` | Express middleware & routing config | Express App Configuration |
+| `backend/healthcheck.js` | Basic container health check | HTTP 200 checks |
+| `backend/src/config/mongodb.js` | Mongoose connection setup | `normalizeTickerForDB` |
+| `backend/src/controllers/marketController.js` | Index & sentiment endpoints logic | `getMarketStatus`, `getFearGreedIndex` |
+| `backend/src/controllers/newsController.js` | News aggregation endpoint logic | `getNews` |
+| `backend/src/controllers/stockController.js` | Stock data & ML proxy logic | `searchStocks`, `getAIAnalysis`, `getPredictions` |
+| `backend/src/controllers/watchlistController.js` | Watchlist read/write logic | `getWatchlist`, `addToWatchlist`, `getRealtimeUpdates` |
+| `backend/src/routes/*.js` | Express Router mapping to Controllers | Routers mapping directly to related controllers |
+| `backend/src/schemas/Notification.js` | Mongoose Schema for notifications | Notification Schema |
+| `backend/scripts/test_api.js` | Development API smoke testing | Dev-only test suite |
+| `backend/scripts/verify_db.js` | CLI script to check DB integrity | `verifyData` |
+| `backend/package.json/lock` | Environment dependencies | Dependency constraints |
 
-### ML Backend Files
+### ML Backend & Pipeline Files
 
-| File | Purpose | Key Exports |
+| File | Purpose | Key Classes/Functions |
 |------|---------|-------------|
-| `ml_backend/api/main.py` | FastAPI application | FastAPI app with all endpoints |
-| `ml_backend/api/routes/batch_predictions.py` | Batch prediction router | Router with batch endpoints |
-| `ml_backend/api/cache.py` | Redis caching | `get_predictions_cached`, `set_predictions_cache` |
-| `ml_backend/api/errors.py` | Error handling | Custom exceptions, middleware |
-| `ml_backend/api/rate_limiter.py` | Rate limiting | `RateLimitMiddleware` |
-| `ml_backend/api/utils.py` | Utilities | `normalize_prediction_dict`, `validate_ticker` |
-| `ml_backend/config/constants.py` | Configuration | `TOP_100_TICKERS`, `MONGO_COLLECTIONS`, etc. |
-| `ml_backend/config/feature_config_v1.py` | Feature/model config | All hyperparameters and feature settings |
-| `ml_backend/data/ingestion.py` | Data ingestion (Yahoo Finance) | `DataIngestion` class |
-| `ml_backend/data/features_minimal.py` | Feature engineering | `MinimalFeatureEngineer` class |
-| `ml_backend/data/sentiment.py` | Sentiment scoring (FinBERT/RoBERTa/VADER) | `SentimentAnalyzer` class |
-| `ml_backend/data/sentiment_features.py` | Sentiment -> ML features | `make_sentiment_features` |
-| `ml_backend/data/insider_features.py` | Insider data -> ML features | `make_insider_features` |
-| `ml_backend/data/macro.py` | Macro data fetching | `fetch_macro_data` |
-| `ml_backend/data/fred_macro.py` | FRED API integration | `fetch_and_store_all_fred_indicators` |
-| `ml_backend/data/economic_calendar.py` | Economic events | `EconomicCalendar` class |
-| `ml_backend/data/sec_filings.py` | SEC filing analysis | `SECFilingsAnalyzer` class |
-| `ml_backend/data/seeking_alpha.py` | Seeking Alpha scraper | `SeekingAlphaAnalyzer` class |
-| `ml_backend/data/short_interest.py` | Short interest data | `ShortInterestAnalyzer` class |
-| `ml_backend/data/cache_fetch.py` | Price data caching | `FrameCache`, `fetch_price_df_mongo_first` |
-| `ml_backend/models/predictor.py` | LightGBM predictor (THE price predictor) | `StockPredictor` class |
-| `ml_backend/explain/shap_analysis.py` | SHAP decomposition (math, not AI) | `run_shap_analysis`, `compute_shap_for_prediction` |
-| `ml_backend/explain/budget.py` | Prompt character budget | `truncate_section`, `take_top_n` |
-| `ml_backend/scripts/generate_explanations.py` | Gemini AI text generation (the explainer) | `generate_explanations` |
-| `ml_backend/scripts/evaluate_models.py` | Model evaluation | `run_ab_evaluation`, `evaluate_stored_predictions` |
-| `ml_backend/scripts/drift_monitor.py` | Drift detection | `run_drift_monitor` |
-| `ml_backend/scripts/diagnose_sentiment.py` | Sentiment diagnostics | `diagnose_*` functions |
-| `ml_backend/scripts/generate_smoke_data.py` | Smoke test data | `main` |
-| `ml_backend/backtest.py` | Backtesting | `run_backtest` |
-| `ml_backend/sentiment_config.py` | Sentiment config | Priority tickers, source selection |
-| `ml_backend/sentiment_cron.py` | Sentiment cron job | `run_sentiment_pipeline` |
-| `ml_backend/utils/mongodb.py` | MongoDB client | `MongoDBClient` class |
+| `.github/workflows/daily-predictions.yml` | Complete automated daily orchestration | GitHub Action configurations |
+| `.github/scripts/run-daily-pipeline-local.ps1` | PowerShell pipeline test runner | Automated CI step emulation |
+| `.github/scripts/verify_predictions_fresh.py` | Validates ML sync health before finish | CI job termination guards |
+| `ml_backend/api/main.py` | FastAPI application, root routes & LLM context | `PredictionResponse`, `build_comprehensive_explanation_prompt` |
+| `ml_backend/api/errors.py` | FastAPI error interceptors & definitions | `APIError`, `RequestTrackingMiddleware` |
+| `ml_backend/api/routes/batch_predictions.py` | Router for multi-ticker ML fetches | `BatchPredictionRequest`, `validate_tickers` |
+| `ml_backend/data/economic_calendar.py` | Economic events scraper & feature generator | `EconomicCalendar` class |
+| `ml_backend/data/fred_macro.py` | FRED macro-metrics downloader & storage | API consumption & DB mappings |
+| `ml_backend/data/sec_filings.py` | SEC EDGAR & FMP 10-K/Q analysis | `SECFilingsAnalyzer` class, Form Parsers |
+| `ml_backend/data/sentiment.py` | Heavyweight multi-source text processing | `SentimentAnalyzer` class, `blend_sentiment_scores` |
+| `ml_backend/models/predictor.py` | LightGBM stock training & inference | `StockPredictor` class |
+| `ml_backend/utils/mongodb.py` | Advanced pymongo interactions & indexes | `MongoDBClient` class |
+| `ml_backend/utils/rate_limiter.py` | Asynchronous throttling (Finnhub/FRED) | `AsyncRateLimiter`, `DailyBudgetLimiter` |
 
 ---
 
