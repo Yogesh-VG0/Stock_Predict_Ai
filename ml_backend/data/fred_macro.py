@@ -5,6 +5,7 @@ import time
 import pandas as pd
 from datetime import datetime
 from ml_backend.utils.mongodb import MongoDBClient
+from ml_backend.utils.rate_limiter import fred_limiter
 from fredapi import Fred
 
 logger = logging.getLogger(__name__)

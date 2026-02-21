@@ -1017,6 +1017,9 @@ class SentimentAnalyzer:
             "timestamp": datetime.utcnow(),
         }
 
+        # Detect CI environment (GitHub Actions sets CI=true)
+        _is_ci = os.getenv("CI", "").lower() in ("true", "1")
+
         # Define sentiment sources and their corresponding keys
         # NOTE: Removed only duplicate sources (yahoo_news, seekingalpha) that are already in rss_news
         # NOTE: alpha_earnings_call and alphavantage explicitly disabled — methods gutted,
@@ -1029,12 +1032,21 @@ class SentimentAnalyzer:
             self.get_reddit_sentiment,
             self.get_fmp_sentiment,  # FMP data is valuable for analyst estimates/ratings
             self.get_finnhub_sentiment,
-            self.get_seekingalpha_comments_sentiment,  # Comments are separate from articles
         ]
         keys = [
             "finviz", "sec", "marketaux", "rss_news", "reddit",
-            "fmp", "finnhub", "seekingalpha_comments",
+            "fmp", "finnhub",
         ]
+
+        # SeekingAlpha comments require Playwright/browser — skip in CI
+        if not _is_ci:
+            sources.append(self.get_seekingalpha_comments_sentiment)
+            keys.append("seekingalpha_comments")
+        else:
+            logger.info(f"CI mode: skipping SeekingAlpha comments for {ticker} (no browser)")
+
+        # Per-source timeout — prevents one slow API from eating the whole ticker budget
+        _PER_SOURCE_TIMEOUT = 30  # seconds
         
         # Process each sentiment source
         for source_func, key in zip(sources, keys):
@@ -1044,7 +1056,11 @@ class SentimentAnalyzer:
                     logger.info(f"Skipping {key} sentiment - API in cooldown")
                     continue
                 
-                result = await source_func(ticker)
+                # Wrap with per-source timeout protection
+                result = await asyncio.wait_for(
+                    source_func(ticker),
+                    timeout=_PER_SOURCE_TIMEOUT
+                )
                 
                 # Mark API as successful if we get a result
                 if result:

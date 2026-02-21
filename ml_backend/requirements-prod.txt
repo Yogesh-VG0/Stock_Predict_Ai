@@ -49,3 +49,4 @@ groq>=0.4.0        # Groq API (better free tier: 1K-14K RPD vs Gemini's 20)
 # --- Misc ---
 python-dotenv>=1.0
 ratelimit>=2.2
+brotlicffi>=1.1           # Brotli decompression for Finviz (pure-Python, no C compiler needed)

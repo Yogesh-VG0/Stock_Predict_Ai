@@ -723,8 +723,14 @@ class EconomicCalendar:
             return self._events_cache['data']
         
         driver = None
+        if not self.selenium_available:
+            logger.info("Selenium not available — skipping web scraping for economic events")
+            return []
         try:
             driver = self._create_undetected_driver()
+            if driver is None:
+                logger.warning("Failed to create Chrome driver — skipping economic events scrape")
+                return []
             wait = WebDriverWait(driver, 10)
             
             # Set desktop user agent explicitly

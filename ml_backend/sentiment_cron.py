@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # Max concurrent tickers to avoid API rate-limits
 CONCURRENCY = 3
 # Per-ticker timeout (seconds) — prevents one hanging API from blocking the whole run
-TICKER_TIMEOUT = 90
+TICKER_TIMEOUT = 180
 
 
 async def _process_ticker(

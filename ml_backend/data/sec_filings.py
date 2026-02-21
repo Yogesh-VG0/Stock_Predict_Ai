@@ -451,6 +451,9 @@ class SECFilingsAnalyzer:
         if not self.kaleidoscope_api_key and not self.fmp_api_key:
             logger.warning("⚠️  No API keys available for SEC filings analysis!")
         
+        # Guard for FMP free tier which 403s on SEC filings
+        self.skip_sec_fmp = os.getenv("SKIP_SEC_FMP", "false").lower() == "true"
+        
         # Initialize FinBERT for sentiment analysis (optional dependency)
         self.finbert = None
         self.finbert_tokenizer = None
@@ -718,6 +721,9 @@ class SECFilingsAnalyzer:
         """
         try:
             if not self.kaleidoscope_api_key:
+                if self.skip_sec_fmp:
+                    logger.info("Kaleidoscope key missing and FMP SEC skip enabled - skipping SEC filings")
+                    return {"status": "skipped", "source": "kaleidoscope", "reason": "no_key"}
                 logger.warning("Kaleidoscope API key not found, falling back to FMP")
                 return self.fetch_fmp_filings(ticker, lookback_days)
             
@@ -849,6 +855,9 @@ class SECFilingsAnalyzer:
         Returns:
             Dictionary containing filings data
         """
+        if self.skip_sec_fmp:
+            return {"status": "skipped", "source": "fmp", "reason": "skip_env_set"}
+
         try:
             if not self.fmp_api_key:
                 return {
