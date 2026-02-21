@@ -12,16 +12,10 @@ from ratelimit import limits, sleep_and_retry
 from ..utils.mongodb import MongoDBClient
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-try:
-    from transformers import pipeline as transformers_pipeline
-except ImportError:
-    transformers_pipeline = None
+# transformers/torch removed — VADER is used for SEC sentiment analysis
+# (transformers adds ~2 GB and fails to install in GitHub Actions CI)
 import aiohttp
 import statistics
-try:
-    import torch
-except ImportError:
-    torch = None
 
 # Load environment variables from various possible locations
 import os.path
@@ -46,11 +40,7 @@ if not env_loaded:
 
 logger = logging.getLogger(__name__)
 
-def _has_transformers() -> bool:
-    return transformers_pipeline is not None
 
-def _has_torch() -> bool:
-    return torch is not None
 
 class BaseSECFormParser:
     """Base class for SEC form parsers."""
@@ -454,27 +444,10 @@ class SECFilingsAnalyzer:
         # Guard for FMP free tier which 403s on SEC filings
         self.skip_sec_fmp = os.getenv("SKIP_SEC_FMP", "false").lower() == "true"
         
-        # Initialize FinBERT for sentiment analysis (optional dependency)
+        # FinBERT removed — VADER fallback used for SEC sentiment analysis
         self.finbert = None
         self.finbert_tokenizer = None
         self.finbert_model = None
-
-        if not _has_transformers() or not _has_torch():
-            logger.info("Transformers/torch not installed; skipping FinBERT (SEC filings will use VADER fallback).")
-        else:
-            try:
-                self.finbert = transformers_pipeline(
-                    "sentiment-analysis",
-                    model="yiyanghkust/finbert-tone",
-                    framework="pt",
-                    device=-1
-                )
-                self.finbert_tokenizer = getattr(self.finbert, "tokenizer", None)
-                self.finbert_model = getattr(self.finbert, "model", None)
-                logger.info("Loaded FinBERT model for sentiment analysis")
-            except Exception as e:
-                logger.error(f"Error initializing FinBERT: {str(e)}")
-                self.finbert = None
         
         # Initialize form parsers
         self.form_parsers = {
@@ -573,39 +546,7 @@ class SECFilingsAnalyzer:
                     # Take first and last parts if no keywords found
                     text = (text[:1024] + ' ' + text[-1024:])[:2048]
             
-            # Method 1: Try FinBERT (if available)
-            try:
-                if (
-                    _has_torch()
-                    and getattr(self, "finbert_tokenizer", None) is not None
-                    and getattr(self, "finbert_model", None) is not None
-                ):
-                    inputs = self.finbert_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-                    with torch.no_grad():
-                        outputs = self.finbert_model(**inputs)
-                        predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-                        
-                    # Convert FinBERT output to sentiment score
-                    # predictions: [negative, neutral, positive]
-                    negative, neutral, positive = predictions[0].tolist()
-                    
-                    # Calculate compound score similar to VADER
-                    if positive > negative:
-                        score = positive * 0.8  # Scale down to be more conservative
-                    else:
-                        score = -negative * 0.8
-                    
-                    # Adjust for neutrality
-                    if neutral > 0.6:
-                        score *= 0.3  # Reduce impact if highly neutral
-                    
-                    logger.debug(f"FinBERT sentiment: {score:.3f} (pos:{positive:.3f}, neg:{negative:.3f}, neu:{neutral:.3f})")
-                    return float(score)
-                    
-            except Exception as e:
-                logger.debug(f"FinBERT analysis failed: {e}")
-            
-            # Method 2: VADER fallback
+            # VADER sentiment analysis (primary method — FinBERT removed)
             try:
                 analyzer = SentimentIntensityAnalyzer()
                 vader_scores = analyzer.polarity_scores(text)

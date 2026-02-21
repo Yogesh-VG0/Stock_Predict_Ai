@@ -75,7 +75,7 @@ def make_sentiment_features(
         # FMP analyst features (v1.5 — sourced from sentiment collection)
         "analyst_sentiment_7d": 0.0,
         "analyst_rating_7d": 0.0,
-        "price_target_gap_7d": 0.0,
+        # price_target_gap_7d removed — detected as leakage (contains "target")
     }
     empty = pd.DataFrame(
         {col: [val] * len(price_df) for col, val in _defaults.items()},
@@ -120,7 +120,7 @@ def make_sentiment_features(
         for col_src, col_dst in [
             ("fmp_analyst", "analyst_sentiment_7d"),
             ("fmp_rating", "analyst_rating_7d"),
-            ("fmp_price_target", "price_target_gap_7d"),
+            # price_target_gap_7d removed — detected as leakage
         ]:
             if col_src in sent_df.columns:
                 raw = sent_df[col_src].astype(float).fillna(0.0)

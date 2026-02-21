@@ -208,6 +208,9 @@ jobs:
       - name: Generate SHAP feature importance
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running SHAP analysis for all 100 tickers ====="

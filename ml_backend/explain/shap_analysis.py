@@ -416,7 +416,7 @@ def run_shap_analysis(
                 model,
                 X_pred,
                 model_cols,
-                feature_values=X_pred[0],
+                feature_values=X_pred.values[0],
                 top_k=15,
             )
 

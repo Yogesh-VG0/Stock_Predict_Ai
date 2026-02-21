@@ -42,7 +42,7 @@ class PipelineHealthSummary:
         self.predictions_stored: int = 0
         self.predictions_failed: int = 0
         self.predictions_skipped: int = 0
-        self.seeking_alpha_status: str = "SKIPPED (not in pipeline)"
+
         self.gemini_explanations: str = "not run (separate script)"
         self.evaluation_samples: int = 0
         self.mongo_connected: bool = False
@@ -64,7 +64,7 @@ class PipelineHealthSummary:
             print(f"  Predictions failed:       {self.predictions_failed}")
         if self.predictions_skipped:
             print(f"  Predictions skipped:      {self.predictions_skipped} (insufficient data)")
-        print(f"  SeekingAlpha scraped:     {self.seeking_alpha_status}")
+
         print(f"  Gemini explanations:      {self.gemini_explanations}")
         print(f"  Evaluation samples found: {self.evaluation_samples} (expected 0 early)")
         print("=" * 56 + "\n")
@@ -376,12 +376,7 @@ def main():
                 logger.error(f"Error generating/storing predictions for {ticker}: {e}")
         health.horizons_used = sorted(horizons_seen)
 
-    # Check for SeekingAlpha deps
-    try:
-        import playwright  # noqa: F401
-        health.seeking_alpha_status = "available (deps installed)"
-    except ImportError:
-        health.seeking_alpha_status = "SKIPPED (playwright not installed)"
+
 
     health.print_summary()
 

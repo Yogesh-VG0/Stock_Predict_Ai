@@ -327,7 +327,7 @@ class MinimalFeatureEngineer:
                     if any(k in c.lower() for k in _leakage_substrings)
                     or any(c.lower().startswith(p) for p in _leakage_prefixes)]
             if _bad:
-                logger.error("Potential leakage columns detected in features: %s — removing them", _bad)
+                logger.warning("Potential leakage columns detected in features: %s — removing them", _bad)
                 self.feature_columns = [c for c in self.feature_columns if c not in _bad]
 
             # Stricter warmup: require core features to exist (no fake zeros in warmup)

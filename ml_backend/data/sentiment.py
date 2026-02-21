@@ -5,10 +5,8 @@ Sentiment analysis module for processing social media and news sentiment.
 
 import feedparser
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
-try:
-    from transformers import pipeline as transformers_pipeline
-except ImportError:
-    transformers_pipeline = None
+# transformers removed — VADER is used for all local sentiment analysis
+# (transformers adds ~2 GB and fails to install in GitHub Actions CI)
 import pandas as pd
 from datetime import datetime, timedelta
 import time
@@ -28,10 +26,7 @@ from ..utils.mongodb import MongoDBClient
 from .sec_filings import SECFilingsAnalyzer
 import aiohttp
 import finnhub
-try:
-    from .seeking_alpha import SeekingAlphaAnalyzer
-except ImportError:
-    SeekingAlphaAnalyzer = None
+# SeekingAlpha scraping removed — requires Playwright browser, unusable in CI
 from starlette.concurrency import run_in_threadpool
 import argparse
 import asyncio
@@ -112,7 +107,6 @@ async def _finnhub_get_with_retry(url: str, params: dict, ticker: str, label: st
     return {}
 
 # Global locks for sequential processing to prevent bot detection
-SEEKING_ALPHA_LOCK = asyncio.Lock()
 ECONOMIC_CALENDAR_LOCK = asyncio.Lock()
 ECONOMIC_CALENDAR_CACHE = {}
 ECONOMIC_CALENDAR_CACHE_DURATION = timedelta(hours=24)
@@ -185,10 +179,10 @@ class SentimentAnalyzer:
         
         self.mongo_client = mongo_client
         
-        # Initialize all sentiment models with intelligent routing
-        logger.info("  Initializing Enhanced Multi-Model Sentiment Analyzer...")
+        # Initialize sentiment — VADER only (transformers removed for CI speed)
+        logger.info("  Initializing Sentiment Analyzer (VADER)...")
         
-        # Initialize VADER sentiment analyzer (fast fallback)
+        # Initialize VADER sentiment analyzer
         try:
             from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
             self.vader = SentimentIntensityAnalyzer()
@@ -197,51 +191,11 @@ class SentimentAnalyzer:
             logger.error("  VADER sentiment analyzer not available")
             self.vader = None
         
-        # Initialize FinBERT model (general financial text)
-        try:
-            from transformers import pipeline
-            self.finbert = pipeline("sentiment-analysis", model="ProsusAI/finbert", device=-1)
-            logger.info("  FinBERT model loaded for general financial sentiment")
-        except Exception as e:
-            logger.warning(f"  Failed to load FinBERT: {e}")
-            self.finbert = None
-        
-        # Initialize Financial News RoBERTa (specialized for financial news)
-        try:
-            from transformers import pipeline
-            self.financial_news_roberta = pipeline(
-                "sentiment-analysis", 
-                model="mrm8488/distilroberta-finetuned-financial-news-sentiment-analysis",
-                device=-1
-            )
-            logger.info("  Financial News RoBERTa loaded for news sentiment")
-        except Exception as e:
-            logger.warning(f"  Failed to load Financial News RoBERTa: {e}")
-            self.financial_news_roberta = None
-        
-        # Initialize Twitter-RoBERTa for Reddit/Social sentiment analysis
-        try:
-            from transformers import pipeline
-            self.twitter_roberta = pipeline("sentiment-analysis", 
-                                           model="cardiffnlp/twitter-roberta-base-sentiment-latest",
-                                           device=-1)
-            logger.info("  Twitter-RoBERTa model loaded for social media sentiment")
-        except Exception as e:
-            logger.warning(f"  Failed to load Twitter-RoBERTa: {e}")
-            self.twitter_roberta = None
-        
-        # Initialize High-Accuracy RoBERTa Large (for critical analysis)
-        try:
-            from transformers import pipeline
-            self.roberta_large = pipeline(
-                "sentiment-analysis", 
-                model="siebert/sentiment-roberta-large-english",
-                device=-1
-            )
-            logger.info("  RoBERTa Large loaded for high-accuracy sentiment")
-        except Exception as e:
-            logger.warning(f"  Failed to load RoBERTa Large: {e}")
-            self.roberta_large = None
+        # Transformer models removed — set to None for interface compatibility
+        self.finbert = None
+        self.financial_news_roberta = None
+        self.twitter_roberta = None
+        self.roberta_large = None
         
         # Initialize SEC analyzer
         try:
@@ -252,14 +206,8 @@ class SentimentAnalyzer:
             logger.warning(f"Failed to initialize SEC analyzer: {e}")
             self.sec_analyzer = None
         
-        # Initialize Seeking Alpha analyzer
-        try:
-            from .seeking_alpha import SeekingAlphaAnalyzer
-            self.seeking_alpha_analyzer = SeekingAlphaAnalyzer(mongo_client)
-            logger.info("Seeking Alpha analyzer initialized")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Seeking Alpha analyzer: {e}")
-            self.seeking_alpha_analyzer = None
+        # SeekingAlpha removed — requires Playwright browser, unusable in CI
+        self.seeking_alpha_analyzer = None
         
         # Initialize FMP API Manager
         self.fmp_manager = FMPAPIManager(mongo_client)
@@ -303,31 +251,19 @@ class SentimentAnalyzer:
             'sec': {'working': True, 'last_error': None, 'cooldown_until': None},
             'rss_news': {'working': True, 'last_error': None, 'cooldown_until': None},
             'reddit': {'working': True, 'last_error': None, 'cooldown_until': None},
-            'seekingalpha': {'working': True, 'last_error': None, 'cooldown_until': None},
-            'seekingalpha_comments': {'working': True, 'last_error': None, 'cooldown_until': None},
         }
         
-        # Model routing configuration
+        # Model routing — all sources use VADER (transformers removed)
         self.model_routing = {
-            # News sources -> Financial News Model
-            "rss_news": {"primary": "financial_news_roberta", "fallback": "finbert"},
-            "yahoo_news": {"primary": "financial_news_roberta", "fallback": "finbert"},
-            "marketaux": {"primary": "financial_news_roberta", "fallback": "finbert"},
-            
-            # Social media -> Twitter RoBERTa
-            "reddit": {"primary": "twitter_roberta", "fallback": "vader"},
-            "social_media": {"primary": "twitter_roberta", "fallback": "vader"},
-            
-            # High-stakes analysis -> Large model
-            "finviz": {"primary": "roberta_large", "fallback": "finbert"},
-            "seeking_alpha": {"primary": "roberta_large", "fallback": "finbert"},
-            
-            # Financial documents -> FinBERT
-            "sec_filings": {"primary": "finbert", "fallback": "roberta_large"},
-            "earnings_calls": {"primary": "finbert", "fallback": "roberta_large"},
-            
-            # Default
-            "general": {"primary": "finbert", "fallback": "vader"}
+            "rss_news": {"primary": "vader", "fallback": "vader"},
+            "yahoo_news": {"primary": "vader", "fallback": "vader"},
+            "marketaux": {"primary": "vader", "fallback": "vader"},
+            "reddit": {"primary": "vader", "fallback": "vader"},
+            "social_media": {"primary": "vader", "fallback": "vader"},
+            "finviz": {"primary": "vader", "fallback": "vader"},
+            "sec_filings": {"primary": "vader", "fallback": "vader"},
+            "earnings_calls": {"primary": "vader", "fallback": "vader"},
+            "general": {"primary": "vader", "fallback": "vader"},
         }
         
         # Model performance tracking
@@ -337,25 +273,11 @@ class SentimentAnalyzer:
         self.base_delay = 1.0
         self.max_delay = 60.0
         
-        logger.info("  Enhanced Sentiment Analyzer Summary:")
-        logger.info(f"    FinBERT (General Financial): {self.finbert is not None}")
-        logger.info(f"    Financial News RoBERTa: {self.financial_news_roberta is not None}")
-        logger.info(f"    Twitter-RoBERTa (Social): {self.twitter_roberta is not None}")
-        logger.info(f"    RoBERTa Large (High-Accuracy): {self.roberta_large is not None}")
-        logger.info(f"    VADER (Fast Fallback): {self.vader is not None}")
+        logger.info("  Sentiment Analyzer Summary:")
+        logger.info(f"    VADER: {self.vader is not None}")
         logger.info(f"    SEC Analyzer: {self.sec_analyzer is not None}")
-        logger.info(f"    Seeking Alpha: {self.seeking_alpha_analyzer is not None}")
-        
-        total_models = sum([
-            self.finbert is not None,
-            self.financial_news_roberta is not None, 
-            self.twitter_roberta is not None,
-            self.roberta_large is not None,
-            self.vader is not None
-        ])
-        logger.info(f"  Enhanced Multi-Model Sentiment Analyzer ready with {total_models}/5 models loaded")
-        logger.info("  Disabled sources: alphavantage_news (free tier: 25 req/day insufficient for 100 tickers)")
-        logger.info("  Disabled sources: alpha_earnings_call (method gutted — redundant with FMP)")
+        logger.info("  Disabled: transformers models (CI-incompatible), SeekingAlpha (needs Playwright)")
+        logger.info("  Disabled: alphavantage_news (free tier: 25 req/day insufficient for 100 tickers)")
         
     def _check_api_health(self, api_name: str) -> bool:
         """Check if an API is healthy and not in cooldown."""
@@ -1038,12 +960,7 @@ class SentimentAnalyzer:
             "fmp", "finnhub",
         ]
 
-        # SeekingAlpha comments require Playwright/browser — skip in CI
-        if not _is_ci:
-            sources.append(self.get_seekingalpha_comments_sentiment)
-            keys.append("seekingalpha_comments")
-        else:
-            logger.info(f"CI mode: skipping SeekingAlpha comments for {ticker} (no browser)")
+        # SeekingAlpha comments removed — requires Playwright browser (unusable in CI)
 
         # Per-source timeout — prevents one slow API from eating the whole ticker budget
         _PER_SOURCE_TIMEOUT = 30  # seconds
@@ -1215,7 +1132,6 @@ class SentimentAnalyzer:
             'finnhub_confidence': 0.10,
             'sec_confidence': 0.10,
             'fmp_confidence': 0.08,
-            'seekingalpha_comments_confidence': 0.05,
             'finviz_confidence': 0.05,
         }
         total, tw = 0.0, 0.0

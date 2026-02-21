@@ -33,7 +33,7 @@ def get_active_sources(current_hour):
     """Return sentiment sources to process based on time of day"""
     
     if 9 <= current_hour <= 16:  # Market hours - full analysis
-        return ['news', 'reddit', 'sec', 'seeking_alpha']
+        return ['news', 'reddit', 'sec']
     elif 6 <= current_hour <= 9 or 16 <= current_hour <= 20:  # Pre/post market
         return ['news', 'reddit']
     else:  # Overnight - minimal processing

@@ -102,7 +102,6 @@ FEATURE_PRUNING = {
         # FMP analyst features (v1.5) — fundamental signals from analyst consensus
         "analyst_sentiment_7d",                    # analyst estimates consensus (7d rolling)
         "analyst_rating_7d",                       # overall analyst rating score (7d rolling)
-        "price_target_gap_7d",                     # price target vs current price gap (7d rolling)
     ],
     "min_features": 15,                # Don't prune below this many features
 }
