@@ -485,7 +485,6 @@ class SentimentAnalyzer:
             'finnhub_insider_sentiment':       0.10,
             'sec_sentiment':                   0.10,
             'fmp_sentiment':                   0.08,
-            'seekingalpha_comments_sentiment': 0.05,
             'finviz_sentiment':                0.05,
         }
 
@@ -1660,54 +1659,8 @@ class SentimentAnalyzer:
             return {'sentiment': 0.0, 'confidence': 0.0}
 
     async def analyze_seekingalpha_comments_sentiment(self, ticker: str) -> Dict[str, Any]:
-        """Analyze sentiment from Seeking Alpha comments with sequential processing to prevent bot detection."""
-        try:
-            if not self.seeking_alpha_analyzer:
-                return {
-                    'sentiment': 0.0,
-                    'volume': 0,
-                    'confidence': 0.0,
-                    'error': 'SeekingAlpha analyzer not available'
-                }
-            
-            # Use global lock to ensure sequential processing across all tickers
-            async with SEEKING_ALPHA_LOCK:
-                logger.info(f"Sequential processing: Analyzing Seeking Alpha comments for {ticker}")
-                
-                # Add delay between requests to avoid bot detection
-                await asyncio.sleep(2)
-                
-                result = await self.seeking_alpha_analyzer.analyze_comments_sentiment(ticker)
-                
-                # Add additional delay after processing
-                await asyncio.sleep(3)
-            
-            if not result:
-                return {
-                    'sentiment': 0.0,
-                    'volume': 0,
-                    'confidence': 0.0,
-                    'error': 'No comments analyzed'
-                }
-                
-            return {
-                'sentiment': result.get('seeking_alpha_comments_sentiment', 0.0),
-                'volume': result.get('seeking_alpha_comments_volume', 0),
-                'confidence': result.get('seeking_alpha_comments_confidence', 0.0),
-                'engagement': result.get('seeking_alpha_comments_engagement', 0.0),
-                'analyzed': result.get('seeking_alpha_comments_analyzed', 0),
-                'sentiment_std': result.get('seeking_alpha_comments_sentiment_std', 0.0),
-                'raw_comments': result.get('seeking_alpha_comments', [])
-            }
-            
-        except Exception as e:
-            logger.error(f"Error analyzing Seeking Alpha comments sentiment for {ticker}: {str(e)}")
-            return {
-                'sentiment': 0.0,
-                'volume': 0,
-                'confidence': 0.0,
-                'error': str(e)
-            }
+        """REMOVED: SeekingAlpha comments require Playwright — unusable in CI."""
+        return {'sentiment': 0.0, 'volume': 0, 'confidence': 0.0, 'error': 'SeekingAlpha removed (needs Playwright)'}
         
 
     async def get_finviz_sentiment(self, ticker: str):
