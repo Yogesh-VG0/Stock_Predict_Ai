@@ -12,6 +12,7 @@ concurrency:
 
 env:
   MONGODB_URI: ${{ secrets.MONGODB_URI }}
+  SKIP_SEC_FMP: "true"
 
 jobs:
   update-predictions:
