@@ -79,53 +79,62 @@ export default function HowItWorksPage() {
               High-level flow from ingestion to UI. This mirrors the daily automated pipeline that runs in CI/CD.
             </p>
 
-            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4 sm:p-6 overflow-x-auto">
-              <svg
-                className="min-w-[780px] w-full h-[140px]"
-                viewBox="0 0 1000 180"
-                role="img"
-                aria-label="Architecture flow: Data Sources to Feature Engineering to LightGBM to SHAP to Gemini to API to Frontend"
-              >
-                <defs>
-                  <linearGradient id="box" x1="0" x2="1">
-                    <stop offset="0%" stopColor="rgba(24,24,27,0.95)" />
-                    <stop offset="100%" stopColor="rgba(0,0,0,0.95)" />
-                  </linearGradient>
-                  <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto">
-                    <path d="M0,0 L8,3 L0,6 Z" fill="rgba(244,244,245,0.65)" />
-                  </marker>
-                </defs>
+            {/* Animated Architecture Flow */}
+            <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4 sm:p-6 lg:p-8">
+              {/* Inject keyframes */}
+              <style dangerouslySetInnerHTML={{
+                __html: `
+                @keyframes flowPulse {
+                  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+                  50% { opacity: 1; transform: scale(1.2); }
+                }
+                @keyframes flowDot {
+                  0% { transform: translateY(-50%) translateX(0); opacity: 0; }
+                  10% { opacity: 1; }
+                  90% { opacity: 1; }
+                  100% { transform: translateY(-50%) translateX(24px); opacity: 0; }
+                }
+                .flow-dot { animation: flowDot 1.5s ease-in-out infinite; }
+                .glow-pulse { animation: flowPulse 3s ease-in-out infinite; }
+              `}} />
 
+              <div className="flex flex-col gap-0" role="img" aria-label="Architecture flow: Data Sources → Feature Engineering → LightGBM → SHAP → Gemini AI → API → Frontend">
                 {[
-                  { x: 20, label: "Data sources" },
-                  { x: 175, label: "Feature engineering" },
-                  { x: 375, label: "LightGBM" },
-                  { x: 505, label: "SHAP" },
-                  { x: 605, label: "Gemini" },
-                  { x: 730, label: "API" },
-                  { x: 850, label: "Frontend" },
-                ].map((b) => (
-                  <g key={b.x}>
-                    <rect x={b.x} y="55" rx="14" ry="14" width="140" height="70" fill="url(#box)" stroke="rgba(63,63,70,0.9)" />
-                    <text x={b.x + 70} y="92" textAnchor="middle" fill="rgba(244,244,245,0.92)" fontSize="16" fontFamily="ui-sans-serif, system-ui">
-                      {b.label}
-                    </text>
-                  </g>
-                ))}
+                  { icon: "📊", label: "Data Sources", desc: "Finnhub, FRED, FMP, SEC, Reddit, RSS, FinViz", color: "from-blue-500/20 to-blue-600/5", border: "border-blue-500/30", dot: "bg-blue-400", glow: "bg-blue-500/20" },
+                  { icon: "⚙️", label: "Feature Engineering", desc: "40+ signals: technicals, sentiment, macro, insider", color: "from-cyan-500/20 to-cyan-600/5", border: "border-cyan-500/30", dot: "bg-cyan-400", glow: "bg-cyan-500/20" },
+                  { icon: "🧠", label: "LightGBM Model", desc: "Walk-forward gradient-boosted trees, 3 horizons", color: "from-purple-500/20 to-purple-600/5", border: "border-purple-500/30", dot: "bg-purple-400", glow: "bg-purple-500/20" },
+                  { icon: "🔍", label: "SHAP Analysis", desc: "Feature importance decomposition per prediction", color: "from-amber-500/20 to-amber-600/5", border: "border-amber-500/30", dot: "bg-amber-400", glow: "bg-amber-500/20" },
+                  { icon: "✨", label: "Gemini AI", desc: "Plain-English narratives from SHAP + market context", color: "from-emerald-500/20 to-emerald-600/5", border: "border-emerald-500/30", dot: "bg-emerald-400", glow: "bg-emerald-500/20" },
+                  { icon: "🔌", label: "Node.js API", desc: "Express server with Redis caching & rate limiting", color: "from-orange-500/20 to-orange-600/5", border: "border-orange-500/30", dot: "bg-orange-400", glow: "bg-orange-500/20" },
+                  { icon: "🖥️", label: "Next.js Frontend", desc: "Interactive dashboard with TradingView widgets", color: "from-rose-500/20 to-rose-600/5", border: "border-rose-500/30", dot: "bg-rose-400", glow: "bg-rose-500/20" },
+                ].map((step, i, arr) => (
+                  <div key={step.label}>
+                    {/* Card */}
+                    <div className={`relative rounded-xl border ${step.border} bg-gradient-to-r ${step.color} p-4 sm:p-5 flex items-start gap-3 sm:gap-4 group hover:scale-[1.01] transition-transform duration-300`}>
+                      {/* Glow */}
+                      <div className={`absolute -inset-px rounded-xl ${step.glow} glow-pulse opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none`} style={{ animationDelay: `${i * 0.4}s` }} />
 
-                {[160, 340, 490, 590, 715, 835].map((x) => (
-                  <line
-                    key={x}
-                    x1={x}
-                    y1="90"
-                    x2={x + 15}
-                    y2="90"
-                    stroke="rgba(244,244,245,0.65)"
-                    strokeWidth="2"
-                    markerEnd="url(#arrow)"
-                  />
+                      <div className="relative flex-shrink-0 text-2xl sm:text-3xl mt-0.5 select-none">{step.icon}</div>
+                      <div className="relative min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] font-bold text-zinc-500 bg-zinc-800/80 px-1.5 py-0.5 rounded-full">STEP {i + 1}</span>
+                          <h3 className="text-sm sm:text-base font-semibold text-zinc-100 truncate">{step.label}</h3>
+                        </div>
+                        <p className="text-xs sm:text-sm text-zinc-400 leading-relaxed">{step.desc}</p>
+                      </div>
+                    </div>
+
+                    {/* Connecting line with flowing dot */}
+                    {i < arr.length - 1 && (
+                      <div className="flex justify-center py-1">
+                        <div className="relative w-px h-6 bg-gradient-to-b from-zinc-700 to-zinc-800">
+                          <div className={`absolute top-0 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full ${step.dot} flow-dot`} style={{ animationDelay: `${i * 0.3}s` }} />
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 ))}
-              </svg>
+              </div>
             </div>
           </section>
         </AnimatedBlock>

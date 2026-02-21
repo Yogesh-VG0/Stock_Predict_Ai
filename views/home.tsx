@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, memo } from "react"
+import { useState, useEffect, memo, lazy, Suspense } from "react"
 import { motion } from "framer-motion"
 import { Clock, BarChart3, Activity, Newspaper } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -8,22 +8,29 @@ import MarketSentimentBanner from "@/components/market/market-sentiment-banner"
 import { getMarketStatus, MarketStatus } from "@/lib/api"
 import { TradingHoursBar } from "@/components/market/TradingHoursBar"
 
-// Direct imports for immediate loading - no lazy loading for visible content
+// Direct imports for above-fold content (immediately visible)
 import TradingViewHotlistsWidget from "@/components/tradingview/TradingViewHotlistsWidget"
-import TradingViewEconomicCalendar from "@/components/tradingview/TradingViewEconomicCalendar"
-import TradingViewHeatmap from "@/components/tradingview/TradingViewHeatmap"
-import TradingViewTimeline from "@/components/tradingview/TradingViewTimeline"
-import FinlogixEarningsCalendar from "@/components/tradingview/FinlogixEarningsCalendar"
 import TradingViewSingleQuote from "@/components/tradingview/TradingViewSingleQuote"
 
+// Lazy-load below-fold widgets for faster initial page load
+const TradingViewEconomicCalendar = lazy(() => import("@/components/tradingview/TradingViewEconomicCalendar"))
+const TradingViewHeatmap = lazy(() => import("@/components/tradingview/TradingViewHeatmap"))
+const TradingViewTimeline = lazy(() => import("@/components/tradingview/TradingViewTimeline"))
+const FinlogixEarningsCalendar = lazy(() => import("@/components/tradingview/FinlogixEarningsCalendar"))
+
+// Skeleton placeholder for lazy widgets
+const WidgetSkeleton = ({ height = 350 }: { height?: number }) => (
+  <div className="rounded-lg bg-zinc-900/50 border border-zinc-800 animate-pulse" style={{ height }} />
+)
+
 // Memoized card wrapper to prevent re-renders
-const WidgetCard = memo(({ 
-  title, 
-  icon: Icon, 
-  iconColor, 
+const WidgetCard = memo(({
+  title,
+  icon: Icon,
+  iconColor,
   children,
-  minHeight 
-}: { 
+  minHeight
+}: {
   title: string
   icon: React.ElementType
   iconColor: string
@@ -53,9 +60,9 @@ export default function HomePage() {
     <div className="space-y-6">
       {/* Page header - stack on mobile, row on desktop */}
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between md:gap-6">
-        <motion.h1 
-          initial={{ opacity: 0, y: -10 }} 
-          animate={{ opacity: 1, y: 0 }} 
+        <motion.h1
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
           className="text-2xl font-bold"
         >
           Market Dashboard
@@ -75,7 +82,7 @@ export default function HomePage() {
               <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                 <span className="inline-block">
                   <svg width="20" height="20" fill="none" viewBox="0 0 24 24">
-                    <path fill="#3b82f6" d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                    <path fill="#3b82f6" d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
                   </svg>
                 </span>
                 Top Gainers & Losers
@@ -88,12 +95,16 @@ export default function HomePage() {
 
           {/* Market Heatmap */}
           <WidgetCard title="Market Heatmap" icon={BarChart3} iconColor="text-purple-500">
-            <TradingViewHeatmap />
+            <Suspense fallback={<WidgetSkeleton height={500} />}>
+              <TradingViewHeatmap />
+            </Suspense>
           </WidgetCard>
 
           {/* Economic Calendar */}
           <WidgetCard title="Economic Calendar" icon={Clock} iconColor="text-amber-500">
-            <TradingViewEconomicCalendar />
+            <Suspense fallback={<WidgetSkeleton height={400} />}>
+              <TradingViewEconomicCalendar />
+            </Suspense>
           </WidgetCard>
         </div>
 
@@ -126,12 +137,16 @@ export default function HomePage() {
 
           {/* Top Stories */}
           <WidgetCard title="Top Stories" icon={Newspaper} iconColor="text-orange-500">
-            <TradingViewTimeline />
+            <Suspense fallback={<WidgetSkeleton />}>
+              <TradingViewTimeline />
+            </Suspense>
           </WidgetCard>
 
           {/* Earnings Calendar */}
           <WidgetCard title="Earnings Calendar" icon={BarChart3} iconColor="text-green-500">
-            <FinlogixEarningsCalendar />
+            <Suspense fallback={<WidgetSkeleton height={300} />}>
+              <FinlogixEarningsCalendar />
+            </Suspense>
           </WidgetCard>
         </div>
       </div>
