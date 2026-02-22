@@ -49,6 +49,57 @@ interface ParsedExplanation {
   raw: string;
 }
 
+const FormatText = ({ text }: { text: string }) => {
+  if (!text) return null
+
+  // Remove markdown headers like ### but keep the text
+  let processed = text.replace(/^#{1,4}\s+/gm, '')
+
+  // Split by bold (**text**)
+  const parts = processed.split(/(\*\*.*?\*\*)/g)
+
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+          return (
+            <strong key={i} className="text-zinc-100 font-semibold">
+              {part.slice(2, -2)}
+            </strong>
+          )
+        }
+
+        // Handle line breaks and bullets within this normal-text part
+        const lines = part.split('\n')
+        return (
+          <span key={i}>
+            {lines.map((line, j) => {
+              const isBullet = /^[+•\-*]\s+/.test(line)
+              let processedLine = line
+              if (isBullet) {
+                processedLine = line.replace(/^[+•\-*]\s+/, '')
+                return (
+                  <span key={j} className="block pl-4 relative my-1">
+                    <span className="absolute left-1 top-[0.55em] w-[4px] h-[4px] rounded-full bg-zinc-400" />
+                    {processedLine}
+                  </span>
+                )
+              }
+
+              return (
+                <span key={j}>
+                  {processedLine}
+                  {j < lines.length - 1 && <br />}
+                </span>
+              )
+            })}
+          </span>
+        )
+      })}
+    </>
+  )
+}
+
 export default function AIExplanationWidget({ ticker, currentPrice, recentNews }: AIExplanationWidgetProps) {
   const [explanation, setExplanation] = useState<AIExplanation | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -159,16 +210,14 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
 
   const getConfidenceGradient = (c: number) =>
     c >= 0.7 ? 'from-purple-500/20 to-violet-500/5 border-purple-500/30' :
-    c >= 0.5 ? 'from-blue-500/20 to-indigo-500/5 border-blue-500/30' :
-    'from-zinc-500/20 to-zinc-500/5 border-zinc-500/30'
+      c >= 0.5 ? 'from-blue-500/20 to-indigo-500/5 border-blue-500/30' :
+        'from-zinc-500/20 to-zinc-500/5 border-zinc-500/30'
 
   const parseExplanation = (text: string): ParsedExplanation => {
     const clean = text
       .replace(/Of course[\s\S]*?investment decisions\./g, '')
       .replace(/^```[\s\S]*?```$/gm, '')
       .replace(/---+/g, '')
-      .replace(/\*\*/g, '')
-      .replace(/#{1,4}\s*/g, '')
       .replace(/\n\s*\n\s*\n/g, '\n\n')
       .trim()
 
@@ -181,16 +230,16 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
     let bottomLine = ''
     const keyDrivers: { text: string; type: 'bullish' | 'bearish' }[] = []
 
-    // Parse structured sections
+    // Parse structured sections. Regex allows optional "#" or "**" surrounding the keys.
     const sectionPatterns: [RegExp, string][] = [
-      [/OVERALL_OUTLOOK:\s*/i, 'outlook'],
-      [/CONFIDENCE:\s*/i, 'confidence'],
-      [/SUMMARY:\s*/i, 'summary'],
-      [/WHAT_THIS_MEANS:\s*/i, 'whatThisMeans'],
-      [/KEY_DRIVERS:\s*/i, 'keyDrivers'],
-      [/NEWS_IMPACT:\s*/i, 'newsImpact'],
-      [/KEY_LEVELS:\s*/i, 'keyLevels'],
-      [/BOTTOM_LINE:\s*/i, 'bottomLine'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*OVERALL_OUTLOOK\s*(?:\*\*)?:\s*/i, 'outlook'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*CONFIDENCE\s*(?:\*\*)?:\s*/i, 'confidence'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*SUMMARY\s*(?:\*\*)?:\s*/i, 'summary'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*WHAT_THIS_MEANS\s*(?:\*\*)?:\s*/i, 'whatThisMeans'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*KEY_DRIVERS\s*(?:\*\*)?:\s*/i, 'keyDrivers'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*NEWS_IMPACT\s*(?:\*\*)?:\s*/i, 'newsImpact'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*KEY_LEVELS\s*(?:\*\*)?:\s*/i, 'keyLevels'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*BOTTOM_LINE\s*(?:\*\*)?:\s*/i, 'bottomLine'],
     ]
 
     // Try structured parsing first
@@ -200,7 +249,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
       if (match && match[1]) {
         const content = match[1].trim()
         switch (key) {
-          case 'outlook': outlook = content.split('\n')[0].trim(); break
+          case 'outlook': outlook = content.split('\n')[0].replace(/\*\*/g, '').trim(); break
           case 'confidence': {
             const raw = content.split('\n')[0].trim().toLowerCase()
             const numMatch = raw.match(/(\d{1,3})/)
@@ -224,7 +273,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
             for (const line of content.split('\n')) {
               const trimmed = line.trim()
               if (!trimmed) continue
-              const cleanLine = trimmed.replace(/^[+•\-*]\s*/, '').trim()
+              const cleanLine = trimmed.replace(/^[+•\-*]\s*/, '').replace(/\*\*/g, '').trim()
               if (cleanLine.length < 5) continue
               if (trimmed.startsWith('+') || trimmed.startsWith('•')) {
                 keyDrivers.push({ text: cleanLine, type: 'bullish' })
@@ -423,8 +472,8 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
             {/* Prediction Direction */}
             <div className={cn("rounded-lg p-2.5 border bg-gradient-to-br transition-all",
               avgPredChange > 0 ? 'from-emerald-500/15 to-emerald-500/5 border-emerald-500/30' :
-              avgPredChange < 0 ? 'from-red-500/15 to-red-500/5 border-red-500/30' :
-              'from-zinc-500/15 to-zinc-500/5 border-zinc-700/50')}>
+                avgPredChange < 0 ? 'from-red-500/15 to-red-500/5 border-red-500/30' :
+                  'from-zinc-500/15 to-zinc-500/5 border-zinc-700/50')}>
               <div className="flex items-center gap-1.5 mb-1">
                 <Activity className="h-3.5 w-3.5 text-blue-400" />
                 <span className="text-[10px] text-zinc-400 uppercase tracking-wider">Prediction</span>
@@ -464,7 +513,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
                   {/* Summary */}
                   {parsed.summary && (
                     <div>
-                      <p className="text-sm text-zinc-200 leading-relaxed">{parsed.summary}</p>
+                      <p className="text-sm text-zinc-200 leading-relaxed"><FormatText text={parsed.summary} /></p>
                     </div>
                   )}
 
@@ -474,7 +523,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
                       <div className="text-[10px] text-blue-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
                         <Target className="h-3 w-3" /> What This Means
                       </div>
-                      <p className="text-xs text-zinc-300 leading-relaxed">{parsed.whatThisMeans}</p>
+                      <p className="text-xs text-zinc-300 leading-relaxed"><FormatText text={parsed.whatThisMeans} /></p>
                     </div>
                   )}
 
@@ -521,17 +570,16 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
                         <Newspaper className="h-3 w-3" /> News & Sentiment Impact
                       </div>
                       {parsed.newsImpact && (
-                        <p className="text-xs text-zinc-300 leading-relaxed">{parsed.newsImpact}</p>
+                        <p className="text-xs text-zinc-300 leading-relaxed"><FormatText text={parsed.newsImpact} /></p>
                       )}
                       {recentNews && recentNews.length > 0 && (
                         <div className={parsed.newsImpact ? "mt-2 pt-2 border-t border-amber-500/10" : ""}>
                           <div className="space-y-1.5">
                             {recentNews.slice(0, 4).map((item, i) => (
                               <div key={i} className="flex items-start gap-1.5 text-[11px]">
-                                <span className={`mt-0.5 shrink-0 ${
-                                  item.sentiment === 'positive' ? 'text-emerald-400' :
+                                <span className={`mt-0.5 shrink-0 ${item.sentiment === 'positive' ? 'text-emerald-400' :
                                   item.sentiment === 'negative' ? 'text-red-400' : 'text-zinc-500'
-                                }`}>
+                                  }`}>
                                   {item.sentiment === 'positive' ? '▲' : item.sentiment === 'negative' ? '▼' : '•'}
                                 </span>
                                 <span className="text-zinc-300 leading-relaxed line-clamp-1">{item.title}</span>
@@ -562,14 +610,14 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
                       <div className="text-[10px] text-purple-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
                         <Zap className="h-3 w-3" /> Bottom Line
                       </div>
-                      <p className="text-sm text-zinc-200 font-medium leading-relaxed">{parsed.bottomLine}</p>
+                      <p className="text-sm text-zinc-200 font-medium leading-relaxed"><FormatText text={parsed.bottomLine} /></p>
                     </div>
                   )}
 
                   {/* Fallback: if structured parsing failed, show raw */}
                   {!parsed.summary && !parsed.keyDrivers.length && !parsed.bottomLine && (
                     <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-line">
-                      {parsed.raw}
+                      <FormatText text={parsed.raw} />
                     </p>
                   )}
 

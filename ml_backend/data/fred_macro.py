@@ -89,6 +89,10 @@ def fetch_and_store_all_fred_indicators(start_date, end_date, mongo_client=None)
     Fetch and store all supported FRED indicators for the given date range.
     Returns a dict: {indicator: data_dict}
     """
+    if not os.getenv('FRED_API_KEY'):
+        logger.info("FRED_API_KEY not configured. Skipping quantitative macro series (features will safely forward-fill as 0.0).")
+        return {}
+
     results = {}
     for indicator in FRED_INDICATORS:
         try:

@@ -1333,6 +1333,16 @@ class SECFilingsAnalyzer:
             Dictionary containing sentiment analysis results
         """
         try:
+            if self.skip_sec_fmp:
+                logger.info(f"FMP SEC fallback disabled via SKIP_SEC_FMP for {ticker}")
+                return {
+                    "sec_filings_sentiment": 0.0,
+                    "sec_filings_volume": 0,
+                    "sec_filings_confidence": 0.0,
+                    "sec_filings_analyzed": 0,
+                    "sec_filings_error": "Skipped per environment config"
+                }
+
             if not self.fmp_api_key:
                 logger.warning("FMP API key not found, SEC filings analysis unavailable")
                 return {
