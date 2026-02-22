@@ -1,6 +1,6 @@
 User-agent: *
 Allow: /
-
 Disallow: /api/
+Disallow: /watchlist
 
 Sitemap: https://stockpredict.dev/sitemap.xml

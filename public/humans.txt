@@ -9,10 +9,10 @@ StockPredict AI - Full-stack ML platform for stock predictions
 Built with Next.js, React, TypeScript, Python, FastAPI, LightGBM, MongoDB
 
 /* SITE */
-Last update: 2025/02/18
+Last update: 2026/02/22
 Standards: HTML5, CSS3, JavaScript ES6+
 Components: React, Next.js, Tailwind CSS, Framer Motion
 Backend: Node.js, Express, Python, FastAPI
-ML: LightGBM, SHAP, Google Gemini, FinBERT
+ML: LightGBM, SHAP, Google Gemini
 Database: MongoDB, Redis
 Deployment: Vercel, Render

@@ -15,7 +15,7 @@ export const metadata: Metadata = {
     template: "%s | StockPredict AI",
   },
   description:
-    "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI. Real-time market data, sentiment analysis, and technical indicators.",
+    "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts with SHAP explainability, multi-source sentiment analysis, and Gemini AI narratives. 1-day, 5-day, and 20-day price direction signals.",
   keywords: [
     "stock prediction",
     "AI stock analysis",
@@ -42,7 +42,7 @@ export const metadata: Metadata = {
     siteName: "StockPredict AI",
     title: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
     description:
-      "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI. Real-time market data and sentiment analysis.",
+      "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts, SHAP explainability, and Gemini AI narratives for smarter investing.",
     images: [
       {
         url: "/og-image.png",
@@ -56,7 +56,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
     description:
-      "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI.",
+      "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts with SHAP explainability and Gemini AI narratives.",
     images: ["/og-image.png"],
     creator: "@YogeshVadivel",
   },
