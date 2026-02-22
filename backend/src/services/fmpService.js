@@ -17,10 +17,11 @@ const fmpCache = new NodeCache({ stdTTL: 43200 });
 const activeRequests = new Map();
 
 /**
- * Fetches the raw income statement TTM for a given symbol
+ * Fetches the raw income statement latest annual for a given symbol
  */
-const getIncomeStatementTTM = async (symbol) => {
-    const cacheKey = `fmp_raw_ttm_${symbol}`;
+const getIncomeStatementLatest = async (symbol) => {
+    const sym = symbol.toUpperCase();
+    const cacheKey = `fmp_raw_income_${sym}`;
 
     // 1. Fast in-memory check only. Raw data doesn't go to Redis to save space (30MB limit).
     // The final built Sankey is what goes to Redis.
@@ -33,19 +34,18 @@ const getIncomeStatementTTM = async (symbol) => {
     }
 
     try {
-        const url = `${STABLE_URL}/income-statement-ttm?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(FMP_API_KEY.trim())}`;
+        const url = `${STABLE_URL}/income-statement?symbol=${encodeURIComponent(sym)}&period=annual&limit=1&apikey=${encodeURIComponent(FMP_API_KEY.trim())}`;
         const response = await axios.get(url, { timeout: 10000 });
 
-        if (response.data && response.data.length > 0) {
-            const data = response.data[0];
-            fmpCache.set(cacheKey, data);
-            return data;
-        }
-        return null;
+        const row = Array.isArray(response.data) ? response.data[0] : null;
+        if (!row) return null;
+
+        fmpCache.set(cacheKey, row);
+        return row;
     } catch (error) {
         const status = error.response?.status;
         const body = error.response?.data;
-        console.error(`FMP error ${status} for ${symbol} (Income Statement):`, body || error.message);
+        console.error(`FMP error ${status} for ${sym} (Income Statement):`, body || error.message);
         return null;
     }
 };
@@ -54,8 +54,9 @@ const getIncomeStatementTTM = async (symbol) => {
  * Fetches the product segmentation revenue for a given symbol
  */
 const getProductSegmentation = async (symbol) => {
-    const cacheKey = `fmp_raw_prod_seg_${symbol}`;
-    const negativeCacheKey = `sankey:v1:${symbol}:segments:none`;
+    const sym = symbol.toUpperCase();
+    const cacheKey = `fmp_raw_prod_seg_${sym}`;
+    const negativeCacheKey = `sankey:v1:${sym}:segments:none`;
 
     // 1. Fast in-memory check
     const cached = fmpCache.get(cacheKey);
@@ -77,11 +78,13 @@ const getProductSegmentation = async (symbol) => {
     }
 
     try {
-        const url = `${STABLE_URL}/revenue-product-segmentation?symbol=${encodeURIComponent(symbol)}&structure=flat&period=annual&apikey=${encodeURIComponent(FMP_API_KEY.trim())}`;
+        const url = `${STABLE_URL}/revenue-product-segmentation?symbol=${encodeURIComponent(sym)}&structure=flat&period=annual&apikey=${encodeURIComponent(FMP_API_KEY.trim())}`;
         const response = await axios.get(url, { timeout: 10000 });
 
-        if (response.data && response.data.length > 0 && response.data[0].data) {
-            const data = response.data[0].data;
+        const obj = Array.isArray(response.data) ? response.data[0] : null;
+        const data = obj?.data;
+
+        if (data && Object.keys(data).length > 0) {
             fmpCache.set(cacheKey, data);
             return data;
         }
@@ -94,12 +97,24 @@ const getProductSegmentation = async (symbol) => {
             }
         } catch (err) { }
 
-        return null;
+        // Return empty object so Object.keys logic in Sankey works predictably
+        return {};
     } catch (error) {
         const status = error.response?.status;
         const body = error.response?.data;
-        console.warn(`FMP error ${status} for ${symbol} (Segmentation):`, body || error.message);
-        return null;
+        if (status === 402 || status === 403) {
+            console.warn(`⚠️ FMP Paywall/Limit (${status}) for ${sym} Segmentation. Falling back to simple charting.`);
+            // Specifically cache the negative block on 402/403 to prevent spamming their API key limit
+            fmpCache.set(cacheKey, {}, 604800);
+            try {
+                if (redisClient.isOpen) {
+                    await redisClient.set(negativeCacheKey, '1', { EX: 604800 });
+                }
+            } catch (err) { }
+            return {};
+        }
+        console.warn(`FMP error ${status} for ${sym} (Segmentation):`, body || error.message);
+        return {};
     }
 };
 
@@ -160,7 +175,7 @@ const getSankeyData = async (symbol) => {
 
         try {
             const [incomeData, segmentationData] = await Promise.all([
-                getIncomeStatementTTM(symbol),
+                getIncomeStatementLatest(symbol),
                 getProductSegmentation(symbol)
             ]);
 
@@ -233,27 +248,25 @@ const getSankeyData = async (symbol) => {
             // 3. Gross Profit -> Operating Expenses & Operating Income
             addNode('Operating Expenses');
 
-            // Explicitly map nested Operating Expenses if available (R&D, SG&A, etc.)
-            // Otherwise just map the total
-            const rd = incomeData.researchAndDevelopmentExpenses || 0;
-            const sga = incomeData.sellingGeneralAndAdministrativeExpenses || 0;
-            const otherOpex = incomeData.operatingExpenses - (rd + sga);
+            const opexTotal = Math.max(0, incomeData.operatingExpenses || 0);
+            addLink('Gross Profit', 'Operating Expenses', opexTotal, '#ef4444');
 
-            if (rd > 0 || sga > 0) {
-                if (rd > 0) {
-                    addNode('R&D');
-                    addLink('Gross Profit', 'R&D', rd, '#ef4444');
-                }
-                if (sga > 0) {
-                    addNode('SG&A');
-                    addLink('Gross Profit', 'SG&A', sga, '#ef4444');
-                }
-                if (otherOpex > 0) {
-                    addNode('Other OpEx');
-                    addLink('Gross Profit', 'Other OpEx', otherOpex, '#ef4444');
-                }
-            } else {
-                addLink('Gross Profit', 'Operating Expenses', incomeData.operatingExpenses, '#ef4444');
+            // Explicitly map nested Operating Expenses if available (R&D, SG&A, etc.)
+            const rd = Math.max(0, incomeData.researchAndDevelopmentExpenses || 0);
+            const sga = Math.max(0, incomeData.sellingGeneralAndAdministrativeExpenses || 0);
+            const otherOpex = Math.max(0, opexTotal - (rd + sga));
+
+            if (rd > 0) {
+                addNode('R&D');
+                addLink('Operating Expenses', 'R&D', rd, '#ef4444');
+            }
+            if (sga > 0) {
+                addNode('SG&A');
+                addLink('Operating Expenses', 'SG&A', sga, '#ef4444');
+            }
+            if (otherOpex > 0) {
+                addNode('Other OpEx');
+                addLink('Operating Expenses', 'Other OpEx', otherOpex, '#ef4444');
             }
 
             // Map the remaining Gross Profit to Operating Income
@@ -341,7 +354,7 @@ const getSankeyData = async (symbol) => {
 };
 
 module.exports = {
-    getIncomeStatementTTM,
+    getIncomeStatementLatest,
     getProductSegmentation,
     getSankeyData
 };
