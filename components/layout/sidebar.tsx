@@ -112,6 +112,7 @@ export default function Sidebar({ onClose }: SidebarProps) {
   const navItems = [
     { name: "Dashboard", path: "/dashboard", icon: Home },
     { name: "Stock Analysis", path: "/stocks/AAPL", icon: LineChart },
+    { name: "Financial Flow", path: "/sankey", icon: TrendingUp },
     { name: "News", path: "/news", icon: Newspaper },
     { name: "Watchlist", path: "/watchlist", icon: Star },
     { name: "Fundamentals", path: "/fundamentals", icon: LineChart },

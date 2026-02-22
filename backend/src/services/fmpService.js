@@ -121,9 +121,13 @@ const getSankeyData = async (symbol) => {
             if (redisClient.isOpen) {
                 const redisCached = await redisClient.get(sankeyCacheKey);
                 if (redisCached) {
-                    const parsed = JSON.parse(redisCached);
-                    fmpCache.set(sankeyCacheKey, parsed);
-                    return parsed;
+                    try {
+                        const parsed = JSON.parse(redisCached);
+                        fmpCache.set(sankeyCacheKey, parsed);
+                        return parsed;
+                    } catch (e) {
+                        // Ignore parse errors from stale data
+                    }
                 }
             }
         } catch (err) { }
@@ -323,7 +327,10 @@ const getSankeyData = async (symbol) => {
     // Store the promise in the active requests map to prevent stampedes
     activeRequests.set(symbol, generatePromise);
     try {
-        return await generatePromise;
+        const result = await generatePromise;
+        return result;
+    } catch (e) {
+        throw e;
     } finally {
         activeRequests.delete(symbol);
     }

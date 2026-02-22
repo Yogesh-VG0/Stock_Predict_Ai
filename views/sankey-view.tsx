@@ -2,30 +2,43 @@
 
 import { useState, useEffect } from "react"
 import { motion } from "framer-motion"
-import { ArrowLeft, RefreshCw, AlertCircle, BarChart3 } from "lucide-react"
+import { Search, RefreshCw, AlertCircle, BarChart3 } from "lucide-react"
 import Link from "next/link"
 import { getSankeyData, getStockDetails, StockDetails } from "@/lib/api"
 import SankeyChart from "@/components/market/sankey-chart"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { Skeleton } from "@/components/ui/skeleton"
 
-export default function SankeyView({ symbol }: { symbol: string }) {
+export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
+    const [currentSymbol, setCurrentSymbol] = useState(symbol)
+    const [searchQuery, setSearchQuery] = useState("")
     const [isLoading, setIsLoading] = useState(true)
     const [sankeyData, setSankeyData] = useState<any>(null)
     const [stockData, setStockData] = useState<StockDetails | null>(null)
     const [error, setError] = useState<string | null>(null)
 
+    const trackedStocks = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
+        "JPM", "V", "WMT", "PG", "HD", "MA"
+    ]
+
     useEffect(() => {
         loadData()
-    }, [symbol])
+    }, [currentSymbol])
+
+    const handleSearch = (e: React.FormEvent) => {
+        e.preventDefault()
+        if (searchQuery.trim()) {
+            setCurrentSymbol(searchQuery.trim().toUpperCase())
+        }
+    }
 
     const loadData = async () => {
         setIsLoading(true)
         setError(null)
         try {
             const [stockDetails, sankeyRes] = await Promise.all([
-                getStockDetails(symbol),
-                getSankeyData(symbol)
+                getStockDetails(currentSymbol),
+                getSankeyData(currentSymbol)
             ])
 
             setStockData(stockDetails)
@@ -53,18 +66,65 @@ export default function SankeyView({ symbol }: { symbol: string }) {
 
     return (
         <div className="space-y-6">
+            {/* Search Bar */}
+            <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-zinc-900 rounded-lg p-4 border border-zinc-800"
+            >
+                <form onSubmit={handleSearch} className="flex gap-2 mb-4">
+                    <div className="relative flex-1">
+                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+                        <input
+                            type="text"
+                            placeholder="Enter stock symbol (e.g. AAPL, MSFT)"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full bg-zinc-800 border border-zinc-700 rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                    </div>
+                    <button
+                        type="submit"
+                        disabled={!searchQuery}
+                        className="bg-emerald-500 hover:bg-emerald-600 text-black font-medium rounded-md px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                        Search
+                    </button>
+                </form>
+
+                <div className="flex flex-wrap gap-1.5 sm:gap-2">
+                    {trackedStocks.map((ticker) => (
+                        <button
+                            key={ticker}
+                            onClick={() => setCurrentSymbol(ticker)}
+                            className={`flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${currentSymbol === ticker ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}
+                        >
+                            {ticker}
+                        </button>
+                    ))}
+                </div>
+            </motion.div>
+
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                    <Link
-                        href={`/stocks/${symbol}`}
-                        className="p-2 bg-zinc-900 border border-zinc-800 rounded-md hover:bg-zinc-800 transition-colors"
-                    >
-                        <ArrowLeft className="h-5 w-5" />
-                    </Link>
+                    <div className="h-12 w-12 rounded-lg overflow-hidden bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">
+                        <img
+                            src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${currentSymbol}.png`}
+                            alt={currentSymbol}
+                            className="h-12 w-12 object-contain"
+                            onError={(e) => {
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = 'none';
+                                if (target.parentElement) {
+                                    target.parentElement.innerHTML = `<span class="text-xl font-bold">${currentSymbol.charAt(0)}</span>`;
+                                }
+                            }}
+                        />
+                    </div>
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2">
-                            {stockData ? stockData.name : symbol}
-                            <span className="text-zinc-500 text-lg">({symbol})</span>
+                            {stockData ? stockData.name : currentSymbol}
+                            <span className="text-zinc-500 text-lg">({currentSymbol})</span>
                         </h1>
                         <p className="text-zinc-400 text-sm">Income Statement Cash Flow Analysis</p>
                     </div>

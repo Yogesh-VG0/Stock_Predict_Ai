@@ -12,7 +12,7 @@ let isRedisAvailable = false;
 // Only attempt Redis connection if REDIS_URL is explicitly provided
 if (process.env.REDIS_URL) {
   const { createClient } = require('redis');
-  
+
   redisClient = createClient({
     url: process.env.REDIS_URL,
     socket: {
@@ -45,7 +45,7 @@ if (process.env.REDIS_URL) {
   (async () => {
     try {
       const connectPromise = redisClient.connect();
-      const timeoutPromise = new Promise((_, reject) => 
+      const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Connection timeout')), 5000)
       );
       await Promise.race([connectPromise, timeoutPromise]);
@@ -65,8 +65,22 @@ const mockRedisClient = {
   set: async () => null,
   del: async () => null,
   exists: async () => 0,
-  connect: async () => {},
-  disconnect: async () => {},
+  connect: async () => { },
+  disconnect: async () => { },
 };
 
-module.exports = redisClient || mockRedisClient; 
+// Safe wrapper that proxies to mock if real Redis isn't connected
+const safeClient = new Proxy({}, {
+  get: function (target, prop) {
+    if (redisClient && isRedisAvailable && redisClient.isOpen) {
+      return typeof redisClient[prop] === 'function'
+        ? redisClient[prop].bind(redisClient)
+        : redisClient[prop];
+    }
+    return typeof mockRedisClient[prop] === 'function'
+      ? mockRedisClient[prop].bind(mockRedisClient)
+      : mockRedisClient[prop];
+  }
+});
+
+module.exports = safeClient; 

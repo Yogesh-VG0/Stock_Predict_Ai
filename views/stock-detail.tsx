@@ -474,14 +474,6 @@ export default function StockDetail({ }: StockDetailProps) {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end">
-          <Link
-            href={`/stocks/${selectedStock}/financials`}
-            className="flex px-3 py-2 sm:px-4 sm:py-2 rounded-md items-center gap-1.5 sm:gap-2 font-medium transition-colors bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20"
-          >
-            <BarChart3 className="h-4 w-4" />
-            <span className="text-xs sm:text-sm font-semibold hidden sm:inline">Financial Flow</span>
-            <span className="text-xs font-semibold sm:hidden">Flow</span>
-          </Link>
           <button
             onClick={handleFollow}
             className={`px-4 py-2 rounded-md flex items-center gap-2 font-medium transition-colors border focus:outline-none focus:ring-2 focus:ring-emerald-500
