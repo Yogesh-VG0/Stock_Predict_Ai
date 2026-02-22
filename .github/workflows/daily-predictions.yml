@@ -39,6 +39,7 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          KALEIDOSCOPE_API_KEY: ${{ secrets.KALEIDOSCOPE_API_KEY }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           MARKETAUX_API_KEY: ${{ secrets.MARKETAUX_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -54,6 +55,7 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          KALEIDOSCOPE_API_KEY: ${{ secrets.KALEIDOSCOPE_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
@@ -77,6 +79,7 @@ jobs:
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          KALEIDOSCOPE_API_KEY: ${{ secrets.KALEIDOSCOPE_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
           ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
