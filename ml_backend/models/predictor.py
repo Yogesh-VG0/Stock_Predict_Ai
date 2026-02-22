@@ -414,7 +414,6 @@ class StockPredictor:
 
                 w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
                 fold_model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
-                import pandas as pd
                 X_train_df = pd.DataFrame(X_train, columns=active_cols)
                 X_val_df = pd.DataFrame(X_val, columns=active_cols)
                 fold_model.fit(
@@ -460,7 +459,6 @@ class StockPredictor:
             if holdout_start < n - 20:
                 X_holdout = X_all[holdout_start:]
                 y_holdout = y_all[holdout_start:]
-                import pandas as pd
                 X_holdout_df = pd.DataFrame(X_holdout, columns=active_cols)
                 holdout_pred = model.predict(X_holdout_df)
                 holdout_rmse = float(np.sqrt(np.mean((y_holdout - holdout_pred) ** 2)))
@@ -565,7 +563,6 @@ class StockPredictor:
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
                         w_sign = np.exp(np.linspace(-2.0, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
-                        import pandas as pd
                         sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
                         sign_X_val_df = pd.DataFrame(sign_X_val, columns=active_cols)
                         sign_clf.fit(
@@ -752,7 +749,6 @@ class StockPredictor:
             # Recency weighting + no scaling for tree models
             w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
             model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
-            import pandas as pd
             X_train_df = pd.DataFrame(X_train, columns=active_cols)
             X_val_df = pd.DataFrame(X_val, columns=active_cols)
             model.fit(

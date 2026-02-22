@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@emotion/is-prop-valid": "latest",
+    "@nivo/core": "^0.99.0",
+    "@nivo/sankey": "^0.99.0",
     "@radix-ui/react-dialog": "1.1.4",
     "@radix-ui/react-separator": "1.1.1",
     "@radix-ui/react-slot": "1.1.1",

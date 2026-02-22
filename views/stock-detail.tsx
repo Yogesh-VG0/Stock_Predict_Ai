@@ -20,6 +20,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react"
+import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 
@@ -473,6 +474,13 @@ export default function StockDetail({ }: StockDetailProps) {
         </div>
 
         <div className="flex items-center gap-3">
+          <Link
+            href={`/stocks/${selectedStock}/financials`}
+            className="hidden sm:flex px-4 py-2 rounded-md items-center gap-2 font-medium transition-colors bg-blue-500/10 border border-blue-500/20 text-blue-400 hover:bg-blue-500/20"
+          >
+            <BarChart3 className="h-4 w-4" />
+            <span className="text-sm font-semibold">Financial Flow</span>
+          </Link>
           <button
             onClick={handleFollow}
             className={`px-4 py-2 rounded-md flex items-center gap-2 font-medium transition-colors border focus:outline-none focus:ring-2 focus:ring-emerald-500
@@ -528,11 +536,11 @@ export default function StockDetail({ }: StockDetailProps) {
 
         {/* Middle Column - AI Predictions (only for tracked stocks) */}
         {isTrackedStock && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-        >
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4 }}
+          >
             <Card className="flex flex-col">
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2">
@@ -547,135 +555,135 @@ export default function StockDetail({ }: StockDetailProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1">
-              {!predictionData ? (
-                <div className="flex flex-col items-center justify-center py-8 text-center">
-                  <AlertCircle className="h-10 w-10 text-zinc-600 mb-3" />
-                  <p className="text-sm text-zinc-400 font-medium">No predictions available yet</p>
-                  <p className="text-xs text-zinc-500 mt-1">Predictions are generated daily by the ML pipeline.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-4">
-                  {/* 1 Day Prediction */}
-                  {(() => {
-                    const prediction = predictionData['1_day'] || predictionData.next_day
-                    if (!prediction) return null;
+                {!predictionData ? (
+                  <div className="flex flex-col items-center justify-center py-8 text-center">
+                    <AlertCircle className="h-10 w-10 text-zinc-600 mb-3" />
+                    <p className="text-sm text-zinc-400 font-medium">No predictions available yet</p>
+                    <p className="text-xs text-zinc-500 mt-1">Predictions are generated daily by the ML pipeline.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4">
+                    {/* 1 Day Prediction */}
+                    {(() => {
+                      const prediction = predictionData['1_day'] || predictionData.next_day
+                      if (!prediction) return null;
 
-                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || prediction.current_price || 0
-                    const predictedPrice = prediction.predicted_price
-                    const calculatedChange = currentPriceForCalc > 0
-                      ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
-                      : 0
+                      const currentPriceForCalc = currentStockPrice?.price || currentPrice || prediction.current_price || 0
+                      const predictedPrice = prediction.predicted_price
+                      const calculatedChange = currentPriceForCalc > 0
+                        ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
+                        : 0
 
-                    return (
-                      <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 rounded-lg p-4 border border-emerald-500/20">
-                        <div className="flex justify-between items-center mb-2">
-                          <div className="text-sm font-medium text-emerald-400">Next Day</div>
-                          <div className="text-xs text-zinc-400">1 Day</div>
-                        </div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="text-lg font-bold">
-                            ${predictedPrice.toFixed(2)}
+                      return (
+                        <div className="bg-gradient-to-br from-emerald-500/10 to-emerald-600/5 rounded-lg p-4 border border-emerald-500/20">
+                          <div className="flex justify-between items-center mb-2">
+                            <div className="text-sm font-medium text-emerald-400">Next Day</div>
+                            <div className="text-xs text-zinc-400">1 Day</div>
                           </div>
-                          <div
-                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-red-500/20 text-red-400"
-                              }`}
-                          >
-                            {calculatedChange >= 0 ? (
-                              <TrendingUp className="h-3 w-3" />
-                            ) : (
-                              <TrendingDown className="h-3 w-3" />
-                            )}
-                            <span>
-                              {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })()}
-
-                  {/* 7 Day Prediction */}
-                  {(() => {
-                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['7_day'].current_price || 0
-                    const predictedPrice = predictionData['7_day'].predicted_price
-                    const calculatedChange = currentPriceForCalc > 0
-                      ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
-                      : 0
-
-                    return (
-                      <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 rounded-lg p-4 border border-blue-500/20">
-                        <div className="flex justify-between items-center mb-2">
-                          <div className="text-sm font-medium text-blue-400">1 Week</div>
-                          <div className="text-xs text-zinc-400">7 Days</div>
-                        </div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="text-lg font-bold">
-                            ${predictedPrice.toFixed(2)}
-                          </div>
-                          <div
-                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-red-500/20 text-red-400"
-                              }`}
-                          >
-                            {calculatedChange >= 0 ? (
-                              <TrendingUp className="h-3 w-3" />
-                            ) : (
-                              <TrendingDown className="h-3 w-3" />
-                            )}
-                            <span>
-                              {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
-                            </span>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="text-lg font-bold">
+                              ${predictedPrice.toFixed(2)}
+                            </div>
+                            <div
+                              className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "bg-red-500/20 text-red-400"
+                                }`}
+                            >
+                              {calculatedChange >= 0 ? (
+                                <TrendingUp className="h-3 w-3" />
+                              ) : (
+                                <TrendingDown className="h-3 w-3" />
+                              )}
+                              <span>
+                                {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )
-                  })()}
+                      )
+                    })()}
 
-                  {/* 30 Day Prediction */}
-                  {(() => {
-                    const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['30_day'].current_price || 0
-                    const predictedPrice = predictionData['30_day'].predicted_price
-                    const calculatedChange = currentPriceForCalc > 0
-                      ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
-                      : 0
+                    {/* 7 Day Prediction */}
+                    {(() => {
+                      const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['7_day'].current_price || 0
+                      const predictedPrice = predictionData['7_day'].predicted_price
+                      const calculatedChange = currentPriceForCalc > 0
+                        ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
+                        : 0
 
-                    return (
-                      <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 rounded-lg p-4 border border-purple-500/20">
-                        <div className="flex justify-between items-center mb-2">
-                          <div className="text-sm font-medium text-purple-400">1 Month</div>
-                          <div className="text-xs text-zinc-400">30 Days</div>
-                        </div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="text-lg font-bold">
-                            ${predictedPrice.toFixed(2)}
+                      return (
+                        <div className="bg-gradient-to-br from-blue-500/10 to-blue-600/5 rounded-lg p-4 border border-blue-500/20">
+                          <div className="flex justify-between items-center mb-2">
+                            <div className="text-sm font-medium text-blue-400">1 Week</div>
+                            <div className="text-xs text-zinc-400">7 Days</div>
                           </div>
-                          <div
-                            className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-red-500/20 text-red-400"
-                              }`}
-                          >
-                            {calculatedChange >= 0 ? (
-                              <TrendingUp className="h-3 w-3" />
-                            ) : (
-                              <TrendingDown className="h-3 w-3" />
-                            )}
-                            <span>
-                              {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
-                            </span>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="text-lg font-bold">
+                              ${predictedPrice.toFixed(2)}
+                            </div>
+                            <div
+                              className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "bg-red-500/20 text-red-400"
+                                }`}
+                            >
+                              {calculatedChange >= 0 ? (
+                                <TrendingUp className="h-3 w-3" />
+                              ) : (
+                                <TrendingDown className="h-3 w-3" />
+                              )}
+                              <span>
+                                {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    )
-                  })()}
-                </div>
-              )}
+                      )
+                    })()}
+
+                    {/* 30 Day Prediction */}
+                    {(() => {
+                      const currentPriceForCalc = currentStockPrice?.price || currentPrice || predictionData['30_day'].current_price || 0
+                      const predictedPrice = predictionData['30_day'].predicted_price
+                      const calculatedChange = currentPriceForCalc > 0
+                        ? ((predictedPrice - currentPriceForCalc) / currentPriceForCalc) * 100
+                        : 0
+
+                      return (
+                        <div className="bg-gradient-to-br from-purple-500/10 to-purple-600/5 rounded-lg p-4 border border-purple-500/20">
+                          <div className="flex justify-between items-center mb-2">
+                            <div className="text-sm font-medium text-purple-400">1 Month</div>
+                            <div className="text-xs text-zinc-400">30 Days</div>
+                          </div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="text-lg font-bold">
+                              ${predictedPrice.toFixed(2)}
+                            </div>
+                            <div
+                              className={`flex items-center gap-1 text-sm font-medium px-2 py-0.5 rounded-md ${calculatedChange >= 0
+                                ? "bg-emerald-500/20 text-emerald-400"
+                                : "bg-red-500/20 text-red-400"
+                                }`}
+                            >
+                              {calculatedChange >= 0 ? (
+                                <TrendingUp className="h-3 w-3" />
+                              ) : (
+                                <TrendingDown className="h-3 w-3" />
+                              )}
+                              <span>
+                                {calculatedChange >= 0 ? "+" : ""}{calculatedChange.toFixed(2)}%
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                )}
               </CardContent>
             </Card>
-        </motion.div>
+          </motion.div>
         )}
 
         {/* Right Column - News */}
@@ -771,67 +779,67 @@ export default function StockDetail({ }: StockDetailProps) {
 
       {/* Advanced Technical & AI Analysis Header (only for tracked stocks) */}
       {isTrackedStock && (
-      <>
-      <div className="flex items-center justify-between pt-4">
-        <h2 className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
-          <BarChart3 className="h-5 w-5 text-emerald-500" />
-          Advanced Technical & AI Analysis
-        </h2>
-      </div>
+        <>
+          <div className="flex items-center justify-between pt-4">
+            <h2 className="text-lg font-semibold text-zinc-200 flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-emerald-500" />
+              Advanced Technical & AI Analysis
+            </h2>
+          </div>
 
-      {/* Technical Indicators & AI Analysis Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Technical Indicators - Left side */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
-          className="lg:col-span-1"
-        >
-          <Suspense fallback={
-            <Card className="p-6">
-              <div className="animate-pulse space-y-4">
-                <div className="h-6 bg-zinc-800 rounded w-1/2"></div>
-                <div className="h-20 bg-zinc-800 rounded"></div>
-                <div className="h-20 bg-zinc-800 rounded"></div>
-                <div className="h-20 bg-zinc-800 rounded"></div>
-              </div>
-            </Card>
-          }>
-            <TechnicalIndicators symbol={selectedStock} />
-          </Suspense>
-        </motion.div>
+          {/* Technical Indicators & AI Analysis Section */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Technical Indicators - Left side */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.6 }}
+              className="lg:col-span-1"
+            >
+              <Suspense fallback={
+                <Card className="p-6">
+                  <div className="animate-pulse space-y-4">
+                    <div className="h-6 bg-zinc-800 rounded w-1/2"></div>
+                    <div className="h-20 bg-zinc-800 rounded"></div>
+                    <div className="h-20 bg-zinc-800 rounded"></div>
+                    <div className="h-20 bg-zinc-800 rounded"></div>
+                  </div>
+                </Card>
+              }>
+                <TechnicalIndicators symbol={selectedStock} />
+              </Suspense>
+            </motion.div>
 
-        {/* AI Analysis - Right side (2 columns) */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-            className="lg:col-span-2"
-          >
-            <Suspense fallback={
-              <Card className="p-6">
-                <div className="animate-pulse space-y-4">
-                  <div className="h-6 bg-zinc-800 rounded w-1/3"></div>
-                  <div className="h-4 bg-zinc-800 rounded w-full"></div>
-                  <div className="h-4 bg-zinc-800 rounded w-2/3"></div>
-                </div>
-              </Card>
-            }>
-              <AIExplanationWidget
-                ticker={selectedStock}
-                currentPrice={currentPrice}
-                recentNews={stockNews.slice(0, 5).map((n: any) => ({
-                  title: n.title,
-                  source: n.source,
-                  sentiment: n.sentiment,
-                  published_at: n.published_at || n.date,
-                }))}
-              />
-            </Suspense>
-          </motion.div>
-      </div>
-      </>
+            {/* AI Analysis - Right side (2 columns) */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.7 }}
+              className="lg:col-span-2"
+            >
+              <Suspense fallback={
+                <Card className="p-6">
+                  <div className="animate-pulse space-y-4">
+                    <div className="h-6 bg-zinc-800 rounded w-1/3"></div>
+                    <div className="h-4 bg-zinc-800 rounded w-full"></div>
+                    <div className="h-4 bg-zinc-800 rounded w-2/3"></div>
+                  </div>
+                </Card>
+              }>
+                <AIExplanationWidget
+                  ticker={selectedStock}
+                  currentPrice={currentPrice}
+                  recentNews={stockNews.slice(0, 5).map((n: any) => ({
+                    title: n.title,
+                    source: n.source,
+                    sentiment: n.sentiment,
+                    published_at: n.published_at || n.date,
+                  }))}
+                />
+              </Suspense>
+            </motion.div>
+          </div>
+        </>
       )}
     </div>
   )

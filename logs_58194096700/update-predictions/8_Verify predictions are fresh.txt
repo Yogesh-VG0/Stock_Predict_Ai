@@ -1,0 +1,69 @@
+﻿2026-02-22T21:05:33.4772584Z ##[group]Run python - << 'PY'
+2026-02-22T21:05:33.4772974Z [36;1mpython - << 'PY'[0m
+2026-02-22T21:05:33.4773239Z [36;1mimport os[0m
+2026-02-22T21:05:33.4773550Z [36;1mfrom datetime import datetime, timedelta[0m
+2026-02-22T21:05:33.4773905Z [36;1mfrom pymongo import MongoClient[0m
+2026-02-22T21:05:33.4774187Z [36;1m[0m
+2026-02-22T21:05:33.4774409Z [36;1muri = os.getenv("MONGODB_URI")[0m
+2026-02-22T21:05:33.4774700Z [36;1mif not uri:[0m
+2026-02-22T21:05:33.4774978Z [36;1m  raise SystemExit("Missing MONGODB_URI")[0m
+2026-02-22T21:05:33.4775289Z [36;1m[0m
+2026-02-22T21:05:33.4775664Z [36;1mclient = MongoClient(uri, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000)[0m
+2026-02-22T21:05:33.4776162Z [36;1mclient.admin.command("ping")[0m
+2026-02-22T21:05:33.4776476Z [36;1mdb = client["stock_predictor"][0m
+2026-02-22T21:05:33.4776777Z [36;1mcol = db["stock_predictions"][0m
+2026-02-22T21:05:33.4777053Z [36;1m[0m
+2026-02-22T21:05:33.4777344Z [36;1m# Use naive UTC (matches MongoDB's naive datetime storage)[0m
+2026-02-22T21:05:33.4777752Z [36;1mnow = datetime.utcnow()[0m
+2026-02-22T21:05:33.4778058Z [36;1mcutoff = now - timedelta(hours=3)[0m
+2026-02-22T21:05:33.4778338Z [36;1m[0m
+2026-02-22T21:05:33.4778581Z [36;1mhorizons = ["next_day", "7_day", "30_day"][0m
+2026-02-22T21:05:33.4778886Z [36;1m[0m
+2026-02-22T21:05:33.4779200Z [36;1m# Check a representative sample (canary tickers from each batch)[0m
+2026-02-22T21:05:33.4779688Z [36;1mcanary = ["AAPL", "AMZN", "JPM", "XOM", "WMT", "CAT", "CMCSA", "PLTR"][0m
+2026-02-22T21:05:33.4780430Z [36;1mmissing = [][0m
+2026-02-22T21:05:33.4780673Z [36;1mstale = [][0m
+2026-02-22T21:05:33.4780898Z [36;1m[0m
+2026-02-22T21:05:33.4781105Z [36;1mfor t in canary:[0m
+2026-02-22T21:05:33.4781363Z [36;1m  for w in horizons:[0m
+2026-02-22T21:05:33.4781649Z [36;1m    q = {"ticker": t, "window": {"$eq": w}}[0m
+2026-02-22T21:05:33.4782013Z [36;1m    doc = col.find_one(q, sort=[("timestamp", -1)])[0m
+2026-02-22T21:05:33.4782359Z [36;1m    if not doc:[0m
+2026-02-22T21:05:33.4782635Z [36;1m      missing.append((t, w))[0m
+2026-02-22T21:05:33.4782922Z [36;1m      continue[0m
+2026-02-22T21:05:33.4783178Z [36;1m    ts = doc.get("timestamp")[0m
+2026-02-22T21:05:33.4783477Z [36;1m    if not ts or ts < cutoff:[0m
+2026-02-22T21:05:33.4783780Z [36;1m      stale.append((t, w, ts))[0m
+2026-02-22T21:05:33.4784075Z [36;1m[0m
+2026-02-22T21:05:33.4784331Z [36;1m# Also check total doc count to ensure scale[0m
+2026-02-22T21:05:33.4784747Z [36;1mtotal = col.count_documents({"timestamp": {"$gte": cutoff}})[0m
+2026-02-22T21:05:33.4785186Z [36;1mprint(f"Fresh docs in last 3h: {total}")[0m
+2026-02-22T21:05:33.4785618Z [36;1mprint(f"Canary check: {len(canary)} tickers x {len(horizons)} horizons")[0m
+2026-02-22T21:05:33.4786021Z [36;1mif missing:[0m
+2026-02-22T21:05:33.4786269Z [36;1m  print("Missing:", missing)[0m
+2026-02-22T21:05:33.4786546Z [36;1mif stale:[0m
+2026-02-22T21:05:33.4786788Z [36;1m  print("Stale:", stale)[0m
+2026-02-22T21:05:33.4787053Z [36;1m[0m
+2026-02-22T21:05:33.4787525Z [36;1massert not missing, f"Missing predictions: {missing}"[0m
+2026-02-22T21:05:33.4787931Z [36;1massert not stale, f"Stale predictions: {stale}"[0m
+2026-02-22T21:05:33.4788354Z [36;1massert total >= 200, f"Expected >= 200 fresh docs, got {total}"[0m
+2026-02-22T21:05:33.4788739Z [36;1mprint("Freshness verified")[0m
+2026-02-22T21:05:33.4789013Z [36;1mPY[0m
+2026-02-22T21:05:33.4820752Z shell: /usr/bin/bash -e {0}
+2026-02-22T21:05:33.4821038Z env:
+2026-02-22T21:05:33.4821659Z   MONGODB_URI: ***
+2026-02-22T21:05:33.4821911Z   SKIP_SEC_FMP: true
+2026-02-22T21:05:33.4822232Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-22T21:05:33.4822689Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-02-22T21:05:33.4823135Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-22T21:05:33.4823541Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-22T21:05:33.4823947Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-22T21:05:33.4824564Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-02-22T21:05:33.4824913Z ##[endgroup]
+2026-02-22T21:05:40.4394814Z Traceback (most recent call last):
+2026-02-22T21:05:40.4395603Z Fresh docs in last 3h: 0
+2026-02-22T21:05:40.4396263Z   File "<stdin>", line 46, in <module>
+2026-02-22T21:05:40.4402288Z AssertionError: Stale predictions: [('AAPL', 'next_day', datetime.datetime(2026, 2, 22, 6, 33, 2, 79000)), ('AAPL', '7_day', datetime.datetime(2026, 2, 22, 6, 33, 2, 79000)), ('AAPL', '30_day', datetime.datetime(2026, 2, 22, 6, 33, 2, 79000)), ('AMZN', 'next_day', datetime.datetime(2026, 2, 22, 6, 33, 50, 725000)), ('AMZN', '7_day', datetime.datetime(2026, 2, 22, 6, 33, 50, 725000)), ('AMZN', '30_day', datetime.datetime(2026, 2, 22, 6, 33, 50, 725000)), ('JPM', 'next_day', datetime.datetime(2026, 2, 22, 6, 34, 33, 388000)), ('JPM', '7_day', datetime.datetime(2026, 2, 22, 6, 34, 33, 388000)), ('JPM', '30_day', datetime.datetime(2026, 2, 22, 6, 34, 33, 388000)), ('XOM', 'next_day', datetime.datetime(2026, 2, 22, 6, 35, 51, 785000)), ('XOM', '7_day', datetime.datetime(2026, 2, 22, 6, 35, 51, 785000)), ('XOM', '30_day', datetime.datetime(2026, 2, 22, 6, 35, 51, 785000)), ('WMT', 'next_day', datetime.datetime(2026, 2, 22, 6, 37, 13, 68000)), ('WMT', '7_day', datetime.datetime(2026, 2, 22, 6, 37, 13, 68000)), ('WMT', '30_day', datetime.datetime(2026, 2, 22, 6, 37, 13, 68000)), ('CAT', 'next_day', datetime.datetime(2026, 2, 22, 6, 37, 22, 542000)), ('CAT', '7_day', datetime.datetime(2026, 2, 22, 6, 37, 22, 542000)), ('CAT', '30_day', datetime.datetime(2026, 2, 22, 6, 37, 22, 542000)), ('CMCSA', 'next_day', datetime.datetime(2026, 2, 22, 6, 38, 37, 551000)), ('CMCSA', '7_day', datetime.datetime(2026, 2, 22, 6, 38, 37, 551000)), ('CMCSA', '30_day', datetime.datetime(2026, 2, 22, 6, 38, 37, 551000)), ('PLTR', 'next_day', datetime.datetime(2026, 2, 22, 6, 39, 24, 231000)), ('PLTR', '7_day', datetime.datetime(2026, 2, 22, 6, 39, 24, 231000)), ('PLTR', '30_day', datetime.datetime(2026, 2, 22, 6, 39, 24, 231000))]
+2026-02-22T21:05:40.4408234Z Canary check: 8 tickers x 3 horizons
+2026-02-22T21:05:40.4412813Z Stale: [('AAPL', 'next_day', datetime.datetime(2026, 2, 22, 6, 33, 2, 79000)), ('AAPL', '7_day', datetime.datetime(2026, 2, 22, 6, 33, 2, 79000)), ('AAPL', '30_day', datetime.datetime(2026, 2, 22, 6, 33, 2, 79000)), ('AMZN', 'next_day', datetime.datetime(2026, 2, 22, 6, 33, 50, 725000)), ('AMZN', '7_day', datetime.datetime(2026, 2, 22, 6, 33, 50, 725000)), ('AMZN', '30_day', datetime.datetime(2026, 2, 22, 6, 33, 50, 725000)), ('JPM', 'next_day', datetime.datetime(2026, 2, 22, 6, 34, 33, 388000)), ('JPM', '7_day', datetime.datetime(2026, 2, 22, 6, 34, 33, 388000)), ('JPM', '30_day', datetime.datetime(2026, 2, 22, 6, 34, 33, 388000)), ('XOM', 'next_day', datetime.datetime(2026, 2, 22, 6, 35, 51, 785000)), ('XOM', '7_day', datetime.datetime(2026, 2, 22, 6, 35, 51, 785000)), ('XOM', '30_day', datetime.datetime(2026, 2, 22, 6, 35, 51, 785000)), ('WMT', 'next_day', datetime.datetime(2026, 2, 22, 6, 37, 13, 68000)), ('WMT', '7_day', datetime.datetime(2026, 2, 22, 6, 37, 13, 68000)), ('WMT', '30_day', datetime.datetime(2026, 2, 22, 6, 37, 13, 68000)), ('CAT', 'next_day', datetime.datetime(2026, 2, 22, 6, 37, 22, 542000)), ('CAT', '7_day', datetime.datetime(2026, 2, 22, 6, 37, 22, 542000)), ('CAT', '30_day', datetime.datetime(2026, 2, 22, 6, 37, 22, 542000)), ('CMCSA', 'next_day', datetime.datetime(2026, 2, 22, 6, 38, 37, 551000)), ('CMCSA', '7_day', datetime.datetime(2026, 2, 22, 6, 38, 37, 551000)), ('CMCSA', '30_day', datetime.datetime(2026, 2, 22, 6, 38, 37, 551000)), ('PLTR', 'next_day', datetime.datetime(2026, 2, 22, 6, 39, 24, 231000)), ('PLTR', '7_day', datetime.datetime(2026, 2, 22, 6, 39, 24, 231000)), ('PLTR', '30_day', datetime.datetime(2026, 2, 22, 6, 39, 24, 231000))]
+2026-02-22T21:05:40.9490780Z ##[error]Process completed with exit code 1.

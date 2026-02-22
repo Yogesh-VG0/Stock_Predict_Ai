@@ -2,6 +2,7 @@ const axios = require('axios');
 const mongoConnection = require('../config/mongodb');
 const { normalizeTickerForDB } = require('../config/mongodb');
 const massiveService = require('../services/massiveService');
+const fmpService = require('../services/fmpService');
 
 // Company overview data mapping for all 25 tickers
 const COMPANY_DATA = {
@@ -291,9 +292,9 @@ const getStockDetails = async (req, res) => {
 
     // Check if this is a tracked stock with hardcoded data
     const companyData = COMPANY_DATA[upperSymbol];
-    
+
     let stockDetails;
-    
+
     if (companyData) {
       // Tracked stock — use hardcoded data + AI analysis
       let aiAnalysis = null;
@@ -1042,6 +1043,24 @@ const searchStocks = async (req, res) => {
   }
 };
 
+// Get Sankey Income Statement flow
+const getSankeyData = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const ticker = symbol.toUpperCase();
+
+    const sankeyData = await fmpService.getSankeyData(ticker);
+
+    res.json(sankeyData);
+  } catch (error) {
+    console.error(`Error fetching Sankey data for ${req.params.symbol}:`, error.message);
+    res.status(500).json({
+      error: 'Failed to fetch Sankey data',
+      message: error.message
+    });
+  }
+};
+
 module.exports = {
   getStockDetails,
   getAIAnalysis,
@@ -1052,5 +1071,6 @@ module.exports = {
   getAvailableStocksWithExplanations,
   getPredictions,
   getTechnicalIndicators,
-  searchStocks
+  searchStocks,
+  getSankeyData
 }; 

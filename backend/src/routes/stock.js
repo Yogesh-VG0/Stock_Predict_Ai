@@ -10,7 +10,8 @@ const {
   getAvailableStocksWithExplanations,
   getPredictions,
   getTechnicalIndicators,
-  searchStocks
+  searchStocks,
+  getSankeyData
 } = require('../controllers/stockController');
 
 // Specific routes first to avoid shadowing by /:symbol
@@ -40,6 +41,9 @@ router.get('/batch/available', getAvailableStocksWithExplanations);
 
 // Search stocks by query — MUST be before /:symbol catch-all
 router.get('/search/:query', searchStocks);
+
+// Get Sankey financial flow data — MUST be before /:symbol catch-all
+router.get('/:symbol/sankey', getSankeyData);
 
 // Get stock details (company info + basic AI analysis)
 // This is LAST because it matches any single parameter

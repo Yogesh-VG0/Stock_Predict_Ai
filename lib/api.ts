@@ -238,7 +238,7 @@ export async function getStockPrice(symbol: string): Promise<{ price: number; ch
     }
 
     console.log(`🔍 getStockPrice: no real-time data for ${symbol}, fetching from predictions`);
-    
+
     // Try to get price from stored predictions
     try {
       const predResponse = await fetch(`${API_BASE_URL}/api/stock/${symbol.toUpperCase()}/predictions`, { cache: 'no-store' });
@@ -649,6 +649,24 @@ export async function getAvailableStocksWithExplanations(): Promise<string[]> {
   } catch (error) {
     console.error('Error fetching available stocks:', error);
     return [];
+  }
+}
+
+/**
+ * Fetch Sankey Income Statement Data from backend
+ * Calculates the segmented financials path for a given symbol
+ */
+export async function getSankeyData(symbol: string): Promise<any> {
+  const upperSymbol = symbol.toUpperCase();
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/stocks/${upperSymbol}/sankey`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch sankey data: ${response.status}`);
+    }
+    return await response.json();
+  } catch (error) {
+    console.error(`Error fetching proxy sankey data for ${symbol}:`, error);
+    return null; // Don't throw to prevent broken UI, handle correctly on page
   }
 }
 

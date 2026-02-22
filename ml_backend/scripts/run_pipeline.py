@@ -282,7 +282,9 @@ def main():
         health.training_tickers = len(training_data)
         logger.info("Training on %d tickers (pooled cross-section)...", len(training_data))
         try:
-            predictor.train_all_models(training_data)
+            success = predictor.train_all_models(training_data)
+            if not success:
+                raise RuntimeError("Training failed internally (see logs)")
             logger.info("Training completed.")
             health.training_status = "completed"
         except Exception as e:

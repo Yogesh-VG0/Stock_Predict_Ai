@@ -123,6 +123,12 @@ jobs:
                 SUCCESS=1
                 break
               fi
+              
+              if grep -q "No saved models found" "batch_${BATCH_NUM}_attempt_${attempt}.log" 2>/dev/null; then
+                echo "  *** CRITICAL: No saved models found. Failing job immediately. ***"
+                exit 1
+              fi
+
               echo "  Attempt $attempt failed. Last error:"
               tail -50 "batch_${BATCH_NUM}_attempt_${attempt}.log" || echo "  (log file not found)"
               sleep $((attempt * 20))
