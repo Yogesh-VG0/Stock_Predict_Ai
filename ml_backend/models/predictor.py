@@ -414,17 +414,20 @@ class StockPredictor:
 
                 w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
                 fold_model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
+                import pandas as pd
+                X_train_df = pd.DataFrame(X_train, columns=active_cols)
+                X_val_df = pd.DataFrame(X_val, columns=active_cols)
                 fold_model.fit(
-                    X_train,
+                    X_train_df,
                     y_train,
                     sample_weight=w,
-                    eval_set=[(X_val, y_val)],
+                    eval_set=[(X_val_df, y_val)],
                     callbacks=[
                         lgb.early_stopping(15, verbose=False),
                         lgb.log_evaluation(0),
                     ],
                 )
-                pred = fold_model.predict(X_val)
+                pred = fold_model.predict(X_val_df)
                 fold_rmses.append(float(np.sqrt(np.mean((y_val - pred) ** 2))))
                 fold_maes.append(float(np.mean(np.abs(y_val - pred))))
                 fold_hits.append(float(np.mean((y_val > 0) == (pred > 0))))
@@ -457,7 +460,9 @@ class StockPredictor:
             if holdout_start < n - 20:
                 X_holdout = X_all[holdout_start:]
                 y_holdout = y_all[holdout_start:]
-                holdout_pred = model.predict(X_holdout)
+                import pandas as pd
+                X_holdout_df = pd.DataFrame(X_holdout, columns=active_cols)
+                holdout_pred = model.predict(X_holdout_df)
                 holdout_rmse = float(np.sqrt(np.mean((y_holdout - holdout_pred) ** 2)))
                 holdout_mae = float(np.mean(np.abs(y_holdout - holdout_pred)))
                 holdout_hit = float(np.mean((y_holdout > 0) == (holdout_pred > 0)))
@@ -560,11 +565,14 @@ class StockPredictor:
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
                         w_sign = np.exp(np.linspace(-2.0, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
+                        import pandas as pd
+                        sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
+                        sign_X_val_df = pd.DataFrame(sign_X_val, columns=active_cols)
                         sign_clf.fit(
-                            sign_X_train,
+                            sign_X_train_df,
                             sign_y_train,
                             sample_weight=w_sign,
-                            eval_set=[(sign_X_val, sign_y_val)],
+                            eval_set=[(sign_X_val_df, sign_y_val)],
                             callbacks=[
                                 lgb.early_stopping(15, verbose=False),
                                 lgb.log_evaluation(0),
@@ -572,7 +580,7 @@ class StockPredictor:
                         )
                         self.pooled_sign_models[window_name] = sign_clf
                         # Evaluate on val set
-                        sign_proba = sign_clf.predict_proba(sign_X_val)[:, 1]
+                        sign_proba = sign_clf.predict_proba(sign_X_val_df)[:, 1]
                         sign_acc = float(np.mean((sign_proba > 0.5) == sign_y_val))
                         pooled_meta["sign_classifier_accuracy"] = sign_acc
                         logger.info(
@@ -744,11 +752,14 @@ class StockPredictor:
             # Recency weighting + no scaling for tree models
             w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
             model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
+            import pandas as pd
+            X_train_df = pd.DataFrame(X_train, columns=active_cols)
+            X_val_df = pd.DataFrame(X_val, columns=active_cols)
             model.fit(
-                X_train,
+                X_train_df,
                 y_train,
                 sample_weight=w,
-                eval_set=[(X_val, y_val)],
+                eval_set=[(X_val_df, y_val)],
                 callbacks=[
                     lgb.early_stopping(stopping_rounds=15, verbose=False),
                     lgb.log_evaluation(0),
@@ -774,8 +785,8 @@ class StockPredictor:
                     }
                     sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk)
                     sign_clf_tk.fit(
-                        X_train, sign_y_train, sample_weight=w,
-                        eval_set=[(X_val, sign_y_val)],
+                        X_train_df, sign_y_train, sample_weight=w,
+                        eval_set=[(X_val_df, sign_y_val)],
                         callbacks=[lgb.early_stopping(15, verbose=False), lgb.log_evaluation(0)],
                     )
                     self.sign_models[key] = sign_clf_tk
@@ -794,7 +805,7 @@ class StockPredictor:
                 top_features_gain = [{"name": n, "gain": float(g)} for n, g in pairs]
             except Exception:
                 pass
-            val_pred = model.predict(X_val)
+            val_pred = model.predict(X_val_df)
             val_rmse = float(np.sqrt(np.mean((y_val - val_pred) ** 2)))
 
             mean_ret = float(np.mean(y_train))
@@ -998,7 +1009,9 @@ class StockPredictor:
                 X_full, current_cols, model_cols,
                 ticker=ticker, window=window_name,
             )
-            pred_return = float(model.predict(X_pred)[0])
+            import pandas as pd
+            X_pred_df = pd.DataFrame(X_pred, columns=model_cols)
+            pred_return = float(model.predict(X_pred_df)[0])
             # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
             # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true
             # price forecast — it's current_price * exp(alpha), useful only as a
@@ -1014,7 +1027,7 @@ class StockPredictor:
                 sign_model = self.sign_models.get(key, sign_model)
             if sign_model is not None:
                 try:
-                    prob_positive = float(sign_model.predict_proba(X_pred)[0, 1])
+                    prob_positive = float(sign_model.predict_proba(X_pred_df)[0, 1])
                 except Exception:
                     prob_positive = (
                         0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5

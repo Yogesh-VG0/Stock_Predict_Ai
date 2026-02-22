@@ -139,246 +139,247 @@ class MinimalFeatureEngineer:
         Returns (features_array, metadata_dict).
         """
         try:
-            df = df.copy()
-            df = _ensure_date_column(df)
-            df = _ensure_ohlcv(df, ticker or "UNKNOWN")
-
-            required = ["Open", "High", "Low", "Close", "Volume"]
-            if any(c not in df.columns for c in required):
-                logger.error(f"Missing OHLCV columns: {[c for c in required if c not in df.columns]}")
-                return None, {}
-
-            # Flatten MultiIndex columns (pandas 3.0 / yfinance compatibility)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-
-            df = df.sort_values("date").reset_index(drop=True)
-            lookback = FEATURE_CONFIG_V1["lookback_days"]
-            min_rows = FEATURE_CONFIG_V1["min_rows"]
-
-            if len(df) < min_rows:
-                logger.warning(f"Insufficient data: {len(df)} rows, need {min_rows}")
-                return None, {}
-
-            mc = mongo_client or self.mongo_client
-
-            # Ensure OHLCV are Series (pandas 3.0 / yfinance MultiIndex compatibility)
-            close = _to_series(df["Close"])
-            vol = _to_series(df["Volume"])
-
-            # 1. Returns (CRITICAL - use shift to avoid leakage)
-            df["log_return_1d"] = np.log(close / close.shift(1))
-            df["log_return_5d"] = np.log(close / close.shift(5))
-            df["log_return_21d"] = np.log(close / close.shift(21))
-
-            # 2. Volatility (past only)
-            df["volatility_20d"] = df["log_return_1d"].rolling(20, min_periods=5).std()
-            df["intraday_range"] = (_to_series(df["High"]) - _to_series(df["Low"])) / close.where(close != 0, np.nan)
-            df["overnight_gap"] = (_to_series(df["Open"]) / close.shift(1) - 1).replace([np.inf, -np.inf], 0)
-
-            # 3. Volume features
-            df["volume_ma20"] = vol.rolling(20, min_periods=5).mean()
-            vol_ma = df["volume_ma20"]
-            df["volume_ratio"] = (vol / vol_ma.where(vol_ma != 0, np.nan)).replace([np.inf, -np.inf], np.nan)
-            df["dollar_volume"] = close * vol
-            # Volume z-score over 60-day window (replaces slow rolling percentile rank)
-            vol_m60 = vol.rolling(60, min_periods=20).mean()
-            vol_s60 = vol.rolling(60, min_periods=20).std()
-            df["volume_z60"] = ((vol - vol_m60) / vol_s60.replace(0, np.nan)).fillna(0).clip(-5, 5)
-
-            # 4. Trend indicators (shifted - use past close only)
-            df["sma_20"] = close.rolling(20, min_periods=20).mean()
-            df["sma_50"] = close.rolling(50, min_periods=20).mean()
-            sma20 = _to_series(df["sma_20"])
-            sma50 = _to_series(df["sma_50"])
-            df["price_vs_sma20"] = (close / sma20 - 1).replace([np.inf, -np.inf], 0)
-            df["price_vs_sma50"] = (close / sma50 - 1).replace([np.inf, -np.inf], 0)
-            df["trend_20d"] = (close > sma20).astype(int)
-            df["momentum_5d"] = close.pct_change(5).replace([np.inf, -np.inf], 0)
-
-            # 4b. Additional high-value features (leakage-free)
-            # Momentum acceleration: change in momentum (second derivative)
-            df["momentum_accel"] = _to_series(df["momentum_5d"]).diff().fillna(0)
-            # Volume momentum: 5-day change in volume (demand shifts)
-            df["volume_momentum_5d"] = vol.pct_change(5).replace([np.inf, -np.inf], 0).fillna(0)
-            # Volume/volatility ratio: high volume + low vol = conviction (informed flow)
-            vol_20d = _to_series(df["volatility_20d"])
-            df["volume_vol_ratio"] = (
-                _to_series(df["volume_ratio"]) / (vol_20d + 1e-6)
-            ).replace([np.inf, -np.inf], 0).fillna(0)
-            # Bollinger Band position: where price sits within ±2σ band (-1 to +1)
-            # Use price-space std so numerator/denominator are both in dollars
-            # min_periods=20 for stable BB(20) — matches standard Bollinger Band definition
-            std_20_price = close.rolling(20, min_periods=20).std()
-            # Guard std==0 (illiquid/flat periods) → NaN → fillna(0)
-            bb_raw = (close - sma20) / (2 * std_20_price.replace(0, np.nan))
-            df["bb_position"] = bb_raw.replace([np.inf, -np.inf], 0).clip(-3, 3).fillna(0)
-            # Price/volume divergence: price up + volume down (or vice-versa) = weak move
-            ret_sign = np.sign(_to_series(df["log_return_1d"]))
-            vol_sign = np.sign(vol.pct_change(5).fillna(0))
-            df["price_vol_divergence"] = (ret_sign * vol_sign * -1).fillna(0)  # -1 when divergent
-
-            # 5. RSI (14-period, standard)
-            delta = close.diff()
-            gain = delta.where(delta > 0, 0).rolling(14, min_periods=5).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14, min_periods=5).mean()
-            rs = gain / loss.where(loss != 0, np.nan)
-            df["rsi"] = (100 - (100 / (1 + rs))).fillna(50)
-
-            # 5a. RSI divergence: compare 14-day slope of price vs RSI
-            # Bullish divergence (price down, RSI up) = +1
-            # Bearish divergence (price up, RSI down) = -1
-            # Neutral = 0
-            def _linear_slope(x):
-                """OLS slope of x against [0..n-1], normalised by mean."""
-                n = len(x)
-                if n < 2:
-                    return 0.0
-                y = np.asarray(x, dtype=float)
-                x_idx = np.arange(n, dtype=float)
-                denom = np.sum((x_idx - x_idx.mean()) ** 2)
-                if denom == 0:
-                    return 0.0
-                return np.sum((x_idx - x_idx.mean()) * (y - y.mean())) / denom
-
-            price_slope = close.rolling(14, min_periods=5).apply(_linear_slope, raw=True)
-            rsi_slope = _to_series(df["rsi"]).rolling(14, min_periods=5).apply(_linear_slope, raw=True)
-            # Divergence: sign(rsi_slope) != sign(price_slope)
-            p_sign = np.sign(price_slope).fillna(0)
-            r_sign = np.sign(rsi_slope).fillna(0)
-            divergence = np.where(
-                (p_sign > 0) & (r_sign < 0), -1,   # bearish divergence
-                np.where(
-                    (p_sign < 0) & (r_sign > 0), 1, # bullish divergence
-                    0,
-                ),
-            )
-            # shift(1) for PIT safety: use yesterday's divergence signal
-            df["rsi_divergence"] = pd.Series(divergence, index=df.index).shift(1).fillna(0).astype(float)
-
-            # 5b. Sector and ticker IDs for pooled model (deterministic; stable across runs)
-            sector = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
-            df["sector_id"] = SECTOR_ID.get(sector, 1)
-            df["ticker_id"] = get_ticker_id(ticker)
-
-            # 6. Relative strength vs SPY (if available)
-            df = self._add_relative_strength(df, ticker, mc)
-
-            # 7. Minimal macro (lagged - never same-day release)
-            df = self._add_macro_features(df, mc)
-
-            # 7b. Cross-asset features: VIX proxy + sector ETF returns (lagged)
-            # PIT SHIFT POLICY: each adapter (macro, VIX, sector, sentiment)
-            # shifts its own external data by 1 day internally.
-            # Do NOT add a global shift — that would double-shift external features.
-            df = self._add_cross_asset_features(df, ticker, mc)
-
-            # 8. Regime flags (quantile uses prior window only - no self-referential threshold)
-            q = df["volatility_20d"].shift(1).rolling(60, min_periods=20).quantile(0.7)
-            df["vol_regime"] = (df["volatility_20d"] > q).astype(int).fillna(0)
-
-            # 9. Earnings proximity (days to/since - safe, no outcomes)
-            df = self._add_earnings_proximity(df, ticker, mc)
-
-            # 10. Sentiment features (lagged rolling scores from MongoDB)
-            # Controlled by USE_SENTIMENT_FEATURES toggle in feature_config_v1.
-            # When disabled, columns are still created (all zeros) to keep feature
-            # dimensions stable across A/B runs.
-            if USE_SENTIMENT_FEATURES:
-                df = self._add_sentiment_features(df, ticker, mc)
-            else:
-                for _sc in ("sent_mean_1d", "sent_mean_7d", "sent_mean_30d",
-                            "sent_momentum", "sent_std_7d", "news_count_1d",
-                            "news_count_7d", "news_spike_1d"):
-                    df[_sc] = 0.0
-
-            # 11. Insider-transaction features (rolling aggregates from MongoDB)
-            # Uses insider_features.py adapter — same shift(1) PIT pattern.
-            if USE_INSIDER_FEATURES:
-                df = self._add_insider_features(df, ticker, mc)
-            else:
-                for _ic in ("insider_net_shares_30d", "insider_net_shares_90d",
-                            "insider_buy_count_30d", "insider_sell_count_30d",
-                            "insider_buy_ratio_30d", "insider_buy_value_30d",
-                            "insider_sell_value_30d", "insider_net_value_30d",
-                            "insider_activity_z_90d", "insider_net_value_z_90d",
-                            "insider_cluster_buying"):
-                    df[_ic] = 0.0
-
-            # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
-            # SPY_close used for market-neutral target only, not as feature
-            # Exclude raw OHLCV, intermediate helpers, and anything that embeds absolute price level
-            # Also block stray merge artifacts, Mongo metadata, and CV markers
-            exclude = {
-                "date", "date_norm", "macro_date", "date_merge", "timestamp", "_id",
-                "Open", "High", "Low", "Close", "Volume", "Adj Close",
-                "sma_20", "sma_50", "volume_ma20", "dollar_volume",
-                "SPY_close", "VIX_close", "sector_etf_close",
-                "split", "fold", "ticker",
-            }
-            self.feature_columns = [c for c in df.columns if c not in exclude and df[c].dtype in [np.float64, np.int64, float, int]]
-
-            # Safety: assert no column names that smell like targets/labels/future data
-            # Use startswith/exact-token checks to avoid false positives on legitimate
-            # feature names like volatility_20d, intraday_range, spy_vol_20d
-            _leakage_substrings = ["target", "label", "future", "forward"]
-            _leakage_prefixes = ["y_"]  # catches y_train, y_test, y_pred etc.
-            _bad = [c for c in self.feature_columns
-                    if any(k in c.lower() for k in _leakage_substrings)
-                    or any(c.lower().startswith(p) for p in _leakage_prefixes)]
-            if _bad:
-                logger.warning("Potential leakage columns detected in features: %s — removing them", _bad)
-                self.feature_columns = [c for c in self.feature_columns if c not in _bad]
-
-            # Stricter warmup: require core features to exist (no fake zeros in warmup)
-            core = ["log_return_1d", "volatility_20d", "volume_ratio", "price_vs_sma20", "rsi"]
-            core = [c for c in core if c in df.columns]
-            if len(core) < 5:
-                missing = set(["log_return_1d", "volatility_20d", "volume_ratio", "price_vs_sma20", "rsi"]) - set(df.columns)
-                logger.error("Missing core columns: %s (df has: %s)", missing, list(df.columns[:15]))
-                return None, {}
-            df_clean = df.dropna(subset=core).copy()
-            cols_to_fill = [c for c in self.feature_columns if c in df_clean.columns]
-            df_clean[cols_to_fill] = df_clean[cols_to_fill].fillna(0)
-
-            # Ensure we have feature columns
-            available = [c for c in self.feature_columns if c in df_clean.columns]
-            if len(available) < 5:
-                logger.error(f"Too few features: {available}")
-                return None, {}
-
-            feature_df = df_clean[available].copy()
-            for col in feature_df.columns:
-                feature_df[col] = pd.to_numeric(feature_df[col], errors="coerce").fillna(0)
-
-            # Replace inf
-            feature_df = feature_df.replace([np.inf, -np.inf], 0)
-
-            self.feature_columns = available
-            features = feature_df.values.astype(np.float32)
-            # df_aligned must match feature rows exactly (same index)
-            df_aligned = df_clean.loc[feature_df.index].copy()
-
-            # If as_of_date specified, filter to that row only
-            if as_of_date is not None and "date" in df_aligned.columns:
-                mask = df_aligned["date"] <= pd.Timestamp(as_of_date)
-                idx = np.where(mask)[0]
-                if len(idx) > 0:
-                    last_idx = int(idx[-1])
-                    features = features[last_idx : last_idx + 1]
-                    df_aligned = df_aligned.iloc[last_idx : last_idx + 1]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df = df.copy()
+                df = _ensure_date_column(df)
+                df = _ensure_ohlcv(df, ticker or "UNKNOWN")
+    
+                required = ["Open", "High", "Low", "Close", "Volume"]
+                if any(c not in df.columns for c in required):
+                    logger.error(f"Missing OHLCV columns: {[c for c in required if c not in df.columns]}")
+                    return None, {}
+    
+                # Flatten MultiIndex columns (pandas 3.0 / yfinance compatibility)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+    
+                df = df.sort_values("date").reset_index(drop=True)
+                lookback = FEATURE_CONFIG_V1["lookback_days"]
+                min_rows = FEATURE_CONFIG_V1["min_rows"]
+    
+                if len(df) < min_rows:
+                    logger.warning(f"Insufficient data: {len(df)} rows, need {min_rows}")
+                    return None, {}
+    
+                mc = mongo_client or self.mongo_client
+    
+                # Ensure OHLCV are Series (pandas 3.0 / yfinance MultiIndex compatibility)
+                close = _to_series(df["Close"])
+                vol = _to_series(df["Volume"])
+    
+                # 1. Returns (CRITICAL - use shift to avoid leakage)
+                df["log_return_1d"] = np.log(close / close.shift(1))
+                df["log_return_5d"] = np.log(close / close.shift(5))
+                df["log_return_21d"] = np.log(close / close.shift(21))
+    
+                # 2. Volatility (past only)
+                df["volatility_20d"] = df["log_return_1d"].rolling(20, min_periods=5).std()
+                df["intraday_range"] = (_to_series(df["High"]) - _to_series(df["Low"])) / close.where(close != 0, np.nan)
+                df["overnight_gap"] = (_to_series(df["Open"]) / close.shift(1) - 1).replace([np.inf, -np.inf], 0)
+    
+                # 3. Volume features
+                df["volume_ma20"] = vol.rolling(20, min_periods=5).mean()
+                vol_ma = df["volume_ma20"]
+                df["volume_ratio"] = (vol / vol_ma.where(vol_ma != 0, np.nan)).replace([np.inf, -np.inf], np.nan)
+                df["dollar_volume"] = close * vol
+                # Volume z-score over 60-day window (replaces slow rolling percentile rank)
+                vol_m60 = vol.rolling(60, min_periods=20).mean()
+                vol_s60 = vol.rolling(60, min_periods=20).std()
+                df["volume_z60"] = ((vol - vol_m60) / vol_s60.replace(0, np.nan)).fillna(0).clip(-5, 5)
+    
+                # 4. Trend indicators (shifted - use past close only)
+                df["sma_20"] = close.rolling(20, min_periods=20).mean()
+                df["sma_50"] = close.rolling(50, min_periods=20).mean()
+                sma20 = _to_series(df["sma_20"])
+                sma50 = _to_series(df["sma_50"])
+                df["price_vs_sma20"] = (close / sma20 - 1).replace([np.inf, -np.inf], 0)
+                df["price_vs_sma50"] = (close / sma50 - 1).replace([np.inf, -np.inf], 0)
+                df["trend_20d"] = (close > sma20).astype(int)
+                df["momentum_5d"] = close.pct_change(5).replace([np.inf, -np.inf], 0)
+    
+                # 4b. Additional high-value features (leakage-free)
+                # Momentum acceleration: change in momentum (second derivative)
+                df["momentum_accel"] = _to_series(df["momentum_5d"]).diff().fillna(0)
+                # Volume momentum: 5-day change in volume (demand shifts)
+                df["volume_momentum_5d"] = vol.pct_change(5).replace([np.inf, -np.inf], 0).fillna(0)
+                # Volume/volatility ratio: high volume + low vol = conviction (informed flow)
+                vol_20d = _to_series(df["volatility_20d"])
+                df["volume_vol_ratio"] = (
+                    _to_series(df["volume_ratio"]) / (vol_20d + 1e-6)
+                ).replace([np.inf, -np.inf], 0).fillna(0)
+                # Bollinger Band position: where price sits within ±2σ band (-1 to +1)
+                # Use price-space std so numerator/denominator are both in dollars
+                # min_periods=20 for stable BB(20) — matches standard Bollinger Band definition
+                std_20_price = close.rolling(20, min_periods=20).std()
+                # Guard std==0 (illiquid/flat periods) → NaN → fillna(0)
+                bb_raw = (close - sma20) / (2 * std_20_price.replace(0, np.nan))
+                df["bb_position"] = bb_raw.replace([np.inf, -np.inf], 0).clip(-3, 3).fillna(0)
+                # Price/volume divergence: price up + volume down (or vice-versa) = weak move
+                ret_sign = np.sign(_to_series(df["log_return_1d"]))
+                vol_sign = np.sign(vol.pct_change(5).fillna(0))
+                df["price_vol_divergence"] = (ret_sign * vol_sign * -1).fillna(0)  # -1 when divergent
+    
+                # 5. RSI (14-period, standard)
+                delta = close.diff()
+                gain = delta.where(delta > 0, 0).rolling(14, min_periods=5).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14, min_periods=5).mean()
+                rs = gain / loss.where(loss != 0, np.nan)
+                df["rsi"] = (100 - (100 / (1 + rs))).fillna(50)
+    
+                # 5a. RSI divergence: compare 14-day slope of price vs RSI
+                # Bullish divergence (price down, RSI up) = +1
+                # Bearish divergence (price up, RSI down) = -1
+                # Neutral = 0
+                def _linear_slope(x):
+                    """OLS slope of x against [0..n-1], normalised by mean."""
+                    n = len(x)
+                    if n < 2:
+                        return 0.0
+                    y = np.asarray(x, dtype=float)
+                    x_idx = np.arange(n, dtype=float)
+                    denom = np.sum((x_idx - x_idx.mean()) ** 2)
+                    if denom == 0:
+                        return 0.0
+                    return np.sum((x_idx - x_idx.mean()) * (y - y.mean())) / denom
+    
+                price_slope = close.rolling(14, min_periods=5).apply(_linear_slope, raw=True)
+                rsi_slope = _to_series(df["rsi"]).rolling(14, min_periods=5).apply(_linear_slope, raw=True)
+                # Divergence: sign(rsi_slope) != sign(price_slope)
+                p_sign = np.sign(price_slope).fillna(0)
+                r_sign = np.sign(rsi_slope).fillna(0)
+                divergence = np.where(
+                    (p_sign > 0) & (r_sign < 0), -1,   # bearish divergence
+                    np.where(
+                        (p_sign < 0) & (r_sign > 0), 1, # bullish divergence
+                        0,
+                    ),
+                )
+                # shift(1) for PIT safety: use yesterday's divergence signal
+                df["rsi_divergence"] = pd.Series(divergence, index=df.index).shift(1).fillna(0).astype(float)
+    
+                # 5b. Sector and ticker IDs for pooled model (deterministic; stable across runs)
+                sector = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
+                df["sector_id"] = SECTOR_ID.get(sector, 1)
+                df["ticker_id"] = get_ticker_id(ticker)
+    
+                # 6. Relative strength vs SPY (if available)
+                df = self._add_relative_strength(df, ticker, mc)
+    
+                # 7. Minimal macro (lagged - never same-day release)
+                df = self._add_macro_features(df, mc)
+    
+                # 7b. Cross-asset features: VIX proxy + sector ETF returns (lagged)
+                # PIT SHIFT POLICY: each adapter (macro, VIX, sector, sentiment)
+                # shifts its own external data by 1 day internally.
+                # Do NOT add a global shift — that would double-shift external features.
+                df = self._add_cross_asset_features(df, ticker, mc)
+    
+                # 8. Regime flags (quantile uses prior window only - no self-referential threshold)
+                q = df["volatility_20d"].shift(1).rolling(60, min_periods=20).quantile(0.7)
+                df["vol_regime"] = (df["volatility_20d"] > q).astype(int).fillna(0)
+    
+                # 9. Earnings proximity (days to/since - safe, no outcomes)
+                df = self._add_earnings_proximity(df, ticker, mc)
+    
+                # 10. Sentiment features (lagged rolling scores from MongoDB)
+                # Controlled by USE_SENTIMENT_FEATURES toggle in feature_config_v1.
+                # When disabled, columns are still created (all zeros) to keep feature
+                # dimensions stable across A/B runs.
+                if USE_SENTIMENT_FEATURES:
+                    df = self._add_sentiment_features(df, ticker, mc)
                 else:
-                    features = features[-1:]
-                    df_aligned = df_aligned.iloc[-1:]
-
-            metadata = {
-                "feature_columns": self.feature_columns,
-                "n_features": len(self.feature_columns),
-                "n_rows": len(features),
-                "date_range": (str(df["date"].min()), str(df["date"].max())),
-                "df_aligned": df_aligned,  # Exact same rows as features
-            }
-            return features, metadata
+                    for _sc in ("sent_mean_1d", "sent_mean_7d", "sent_mean_30d",
+                                "sent_momentum", "sent_std_7d", "news_count_1d",
+                                "news_count_7d", "news_spike_1d"):
+                        df[_sc] = 0.0
+    
+                # 11. Insider-transaction features (rolling aggregates from MongoDB)
+                # Uses insider_features.py adapter — same shift(1) PIT pattern.
+                if USE_INSIDER_FEATURES:
+                    df = self._add_insider_features(df, ticker, mc)
+                else:
+                    for _ic in ("insider_net_shares_30d", "insider_net_shares_90d",
+                                "insider_buy_count_30d", "insider_sell_count_30d",
+                                "insider_buy_ratio_30d", "insider_buy_value_30d",
+                                "insider_sell_value_30d", "insider_net_value_30d",
+                                "insider_activity_z_90d", "insider_net_value_z_90d",
+                                "insider_cluster_buying"):
+                        df[_ic] = 0.0
+    
+                # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
+                # SPY_close used for market-neutral target only, not as feature
+                # Exclude raw OHLCV, intermediate helpers, and anything that embeds absolute price level
+                # Also block stray merge artifacts, Mongo metadata, and CV markers
+                exclude = {
+                    "date", "date_norm", "macro_date", "date_merge", "timestamp", "_id",
+                    "Open", "High", "Low", "Close", "Volume", "Adj Close",
+                    "sma_20", "sma_50", "volume_ma20", "dollar_volume",
+                    "SPY_close", "VIX_close", "sector_etf_close",
+                    "split", "fold", "ticker",
+                }
+                self.feature_columns = [c for c in df.columns if c not in exclude and df[c].dtype in [np.float64, np.int64, float, int]]
+    
+                # Safety: assert no column names that smell like targets/labels/future data
+                # Use startswith/exact-token checks to avoid false positives on legitimate
+                # feature names like volatility_20d, intraday_range, spy_vol_20d
+                _leakage_substrings = ["target", "label", "future", "forward"]
+                _leakage_prefixes = ["y_"]  # catches y_train, y_test, y_pred etc.
+                _bad = [c for c in self.feature_columns
+                        if any(k in c.lower() for k in _leakage_substrings)
+                        or any(c.lower().startswith(p) for p in _leakage_prefixes)]
+                if _bad:
+                    logger.warning("Potential leakage columns detected in features: %s — removing them", _bad)
+                    self.feature_columns = [c for c in self.feature_columns if c not in _bad]
+    
+                # Stricter warmup: require core features to exist (no fake zeros in warmup)
+                core = ["log_return_1d", "volatility_20d", "volume_ratio", "price_vs_sma20", "rsi"]
+                core = [c for c in core if c in df.columns]
+                if len(core) < 5:
+                    missing = set(["log_return_1d", "volatility_20d", "volume_ratio", "price_vs_sma20", "rsi"]) - set(df.columns)
+                    logger.error("Missing core columns: %s (df has: %s)", missing, list(df.columns[:15]))
+                    return None, {}
+                df_clean = df.dropna(subset=core).copy()
+                cols_to_fill = [c for c in self.feature_columns if c in df_clean.columns]
+                df_clean[cols_to_fill] = df_clean[cols_to_fill].fillna(0)
+    
+                # Ensure we have feature columns
+                available = [c for c in self.feature_columns if c in df_clean.columns]
+                if len(available) < 5:
+                    logger.error(f"Too few features: {available}")
+                    return None, {}
+    
+                feature_df = df_clean[available].copy()
+                for col in feature_df.columns:
+                    feature_df[col] = pd.to_numeric(feature_df[col], errors="coerce").fillna(0)
+    
+                # Replace inf
+                feature_df = feature_df.replace([np.inf, -np.inf], 0)
+    
+                self.feature_columns = available
+                features = feature_df.values.astype(np.float32)
+                # df_aligned must match feature rows exactly (same index)
+                df_aligned = df_clean.loc[feature_df.index].copy()
+    
+                # If as_of_date specified, filter to that row only
+                if as_of_date is not None and "date" in df_aligned.columns:
+                    mask = df_aligned["date"] <= pd.Timestamp(as_of_date)
+                    idx = np.where(mask)[0]
+                    if len(idx) > 0:
+                        last_idx = int(idx[-1])
+                        features = features[last_idx : last_idx + 1]
+                        df_aligned = df_aligned.iloc[last_idx : last_idx + 1]
+                    else:
+                        features = features[-1:]
+                        df_aligned = df_aligned.iloc[-1:]
+    
+                metadata = {
+                    "feature_columns": self.feature_columns,
+                    "n_features": len(self.feature_columns),
+                    "n_rows": len(features),
+                    "date_range": (str(df["date"].min()), str(df["date"].max())),
+                    "df_aligned": df_aligned,  # Exact same rows as features
+                }
+                return features, metadata
 
         except Exception as e:
             logger.error(f"Error in prepare_features: {e}")

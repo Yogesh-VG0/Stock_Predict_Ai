@@ -2832,33 +2832,14 @@ class FMPAPIManager:
             return {}
         
         # Reduced to 4 high-value endpoints to stay within FMP free-tier
-        # budget (250 total calls).  Dividends/earnings calendar data adds
+        # budget (250 total calls). Dividends/earnings calendar data adds
         # minimal sentiment signal vs cost.
-        import asyncio
-        results = await asyncio.gather(
-            self.get_analyst_estimates(ticker),
-            self.get_ratings_snapshot(ticker),
-            self.get_price_target_summary(ticker),
-            self.get_price_target_consensus(ticker),
-            return_exceptions=True
-        )
+        #
+        # Note: Analyst estimates and ratings endpoints require FMP premium access.
+        # Returning empty to prevent log spam for free tier users.
+        return {}
         
-        # Combine all results
-        consolidated_data = {}
-        api_call_names = [
-            'analyst_estimates', 'ratings_snapshot', 'price_target_summary', 'price_target_consensus'
-        ]
-        
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(f"  FMP STABLE {api_call_names[i]} failed: {result}")
-                consolidated_data[api_call_names[i]] = []
-            else:
-                consolidated_data.update(result)
-                logger.info(f"  FMP STABLE {api_call_names[i]} success")
-        
-        logger.info(f"  FMP STABLE consolidated data for {ticker}: {list(consolidated_data.keys())}")
-        return consolidated_data
+        return {}
 
 # Add FMP manager to SentimentAnalyzer
 # ... existing code ...

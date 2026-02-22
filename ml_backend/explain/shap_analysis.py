@@ -71,7 +71,11 @@ def compute_shap_for_prediction(
     top_negative_contrib, n_features.
     """
     booster = model.booster_ if hasattr(model, "booster_") else model
-    contrib = booster.predict(X_pred, pred_contrib=True)
+    
+    # Cast X_pred to pd.DataFrame to pass valid feature names to LightGBM
+    import pandas as pd
+    X_pred_df = pd.DataFrame(X_pred, columns=feature_names)
+    contrib = booster.predict(X_pred_df, pred_contrib=True)
 
     if contrib.ndim == 1:
         contrib = contrib.reshape(1, -1)
@@ -93,7 +97,7 @@ def compute_shap_for_prediction(
 
     # --- Sanity: bias + sum(shap) == model.predict(X_pred) ---
     shap_sum = float(base_value + shap_vals.sum())
-    model_pred = float(model.predict(X_pred)[0])
+    model_pred = float(model.predict(pd.DataFrame(X_pred, columns=feature_names))[0])
     sanity_ok = abs(shap_sum - model_pred) < 1e-4
     if not sanity_ok:
         logger.warning(

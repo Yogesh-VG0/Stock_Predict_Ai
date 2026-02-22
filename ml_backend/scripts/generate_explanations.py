@@ -314,14 +314,14 @@ else:
     API_PROVIDER = None
     DEFAULT_MODEL = None
 
-MAX_RETRIES = 3
-INITIAL_BACKOFF = 30
+MAX_RETRIES = 5
+INITIAL_BACKOFF = 60
 MAX_BACKOFF = 300  # Max 5 minutes between retries
 BASE_BACKOFF = 2   # Exponential base
 
 # Global rate limiter: track last API call time per model to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
-_MIN_CALL_INTERVAL = 1.0  # Minimum seconds between API calls per model
+_MIN_CALL_INTERVAL = 2.5  # Minimum seconds between API calls per model
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}

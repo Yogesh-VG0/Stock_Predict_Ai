@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # Max concurrent tickers to avoid API rate-limits
 CONCURRENCY = 3
 # Per-ticker timeout (seconds) — prevents one hanging API from blocking the whole run
-TICKER_TIMEOUT = 180
+TICKER_TIMEOUT = 300
 
 
 async def _process_ticker(
@@ -48,27 +48,30 @@ async def _process_ticker(
 ) -> bool:
     """Process sentiment for a single ticker (bounded by semaphore + timeout)."""
     async with sem:
-        try:
-            result = await asyncio.wait_for(
-                analyzer.get_combined_sentiment(ticker),
-                timeout=TICKER_TIMEOUT,
-            )
-            if result and result.get("ticker") == ticker:
-                blended = result.get("blended_sentiment", result.get("composite_sentiment", None))
-                logger.info(f"  {ticker}: blended_sentiment={blended}, date={result.get('date')}")
-                return True
-            else:
-                logger.warning(f"  {ticker}: get_combined_sentiment returned empty/invalid")
-                return False
-        except asyncio.TimeoutError:
-            logger.error(f"  {ticker}: TIMED OUT after {TICKER_TIMEOUT}s")
-            return False
-        except Exception as e:
-            logger.error(f"  {ticker}: FAILED — {e}")
-            return False
-        finally:
-            # Pace API calls: brief pause between tickers to avoid bursting rate limits
-            await asyncio.sleep(1.0)
+        for attempt in range(1, 4):
+            try:
+                result = await asyncio.wait_for(
+                    analyzer.get_combined_sentiment(ticker),
+                    timeout=TICKER_TIMEOUT,
+                )
+                if result and result.get("ticker") == ticker:
+                    blended = result.get("blended_sentiment", result.get("composite_sentiment", None))
+                    logger.info(f"  {ticker}: blended_sentiment={blended}, date={result.get('date')} (Attempt {attempt})")
+                    return True
+                else:
+                    logger.warning(f"  {ticker}: get_combined_sentiment returned empty/invalid (Attempt {attempt})")
+                    if attempt == 3:
+                        return False
+            except asyncio.TimeoutError:
+                logger.warning(f"  {ticker}: TIMED OUT after {TICKER_TIMEOUT}s (Attempt {attempt})")
+            except Exception as e:
+                logger.warning(f"  {ticker}: FAILED — {e} (Attempt {attempt})")
+            
+            if attempt < 3:
+                await asyncio.sleep(5 * attempt)
+        
+        logger.error(f"  {ticker}: Failed all 3 attempts.")
+        return False
 
 
 async def _run_pipeline(tickers: list[str]) -> tuple[int, int]:
