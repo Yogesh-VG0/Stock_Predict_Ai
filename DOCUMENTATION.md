@@ -1759,19 +1759,7 @@ POST /api/v1/explain/batch            → Batch generate explanations
 
 ---
 
-## 18. Redis Caching
-
-Redis is **optional**. If `REDIS_URL` is not set, a mock client returns `null` for all operations.
-
-| Key Pattern | TTL | Purpose | Written By | Read By |
-|------------|-----|---------|-----------|--------|
-| `predictions:v1:{ticker}` | 60s | Cache prediction responses | ML backend | ML backend |
-| `us_holidays_{year}` | 1 year | Cache US market holidays | `marketService.js` | `marketService.js` |
-| `ratelimit:{ip}` | 3600s | Rate limit counters | ML backend middleware | ML backend middleware |
-
----
-
-## 19. WebSocket / Real-Time Data
+## 18. WebSocket / Real-Time Data
 
 ### Finnhub WebSocket (Server-Side)
 

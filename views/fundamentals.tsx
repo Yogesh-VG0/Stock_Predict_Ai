@@ -3,7 +3,8 @@
 import { useState } from "react"
 import { motion } from "framer-motion"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { BarChart3, FileText, Newspaper, Layers } from "lucide-react"
+import { BarChart3, FileText, Newspaper, Layers, Search } from "lucide-react"
+import StockLogo from "@/components/market/StockLogo"
 
 const AVAILABLE_SYMBOLS = [
   "AAPL",
@@ -51,7 +52,7 @@ export default function FundamentalsPage() {
         </div>
 
         {/* Symbol selector */}
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-4 bg-zinc-900/40 border border-zinc-800/50 rounded-xl p-4 sm:p-5 shadow-2xl backdrop-blur-sm -mx-2 sm:mx-0">
           <form
             className="flex w-full items-center gap-2"
             onSubmit={(e) => {
@@ -62,48 +63,54 @@ export default function FundamentalsPage() {
               setCustomSymbol("")
             }}
           >
-            <div className="flex flex-col gap-1 flex-1 sm:flex-initial">
+            <div className="flex flex-col gap-2 flex-1 sm:flex-initial w-full sm:w-[400px]">
               <label
                 htmlFor="fundamentals-symbol-input"
-                className="text-xs sm:text-sm text-zinc-400"
+                className="text-xs sm:text-sm font-medium text-zinc-300"
               >
-                Symbol for widgets
+                Analyze Target Symbol
               </label>
-              <div className="flex items-center gap-2">
+              <div className="relative group">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                  <Search className="h-4 w-4 text-zinc-500 group-focus-within:text-emerald-500 transition-colors" />
+                </div>
                 <input
                   id="fundamentals-symbol-input"
                   type="text"
                   value={customSymbol}
                   onChange={(e) => setCustomSymbol(e.target.value)}
-                  placeholder={symbol || "AAPL"}
-                  className="w-full sm:w-32 bg-zinc-900 border border-zinc-700 text-xs sm:text-sm rounded-md px-3 py-2 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  placeholder={`Currently analyzing: ${symbol || "AAPL"}`}
+                  className="w-full bg-zinc-950/50 border border-zinc-800 text-sm rounded-lg pl-10 pr-20 py-2.5 text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500 transition-all shadow-inner"
                 />
                 <button
                   type="submit"
-                  className="inline-flex items-center rounded-md bg-emerald-500 px-3 py-2 text-xs font-medium text-black shadow hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-900"
+                  className="absolute inset-y-1 right-1 inline-flex items-center rounded-md bg-emerald-500 px-4 text-xs font-bold text-black shadow-sm hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-900 transition-all"
                 >
-                  Apply
+                  Analyze
                 </button>
               </div>
             </div>
           </form>
 
-          {/* Quick-pick popular symbols */}
-          <div className="flex flex-wrap gap-1">
-            {AVAILABLE_SYMBOLS.slice(0, 10).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setSymbol(s)}
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
-                  symbol === s
-                    ? "border-emerald-500 bg-emerald-500/10 text-emerald-300"
-                    : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
-                }`}
-              >
-                {s}
-              </button>
-            ))}
+          {/* Quick-pick popular symbols with Logos */}
+          <div className="space-y-2">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider ml-1">Popular Targets</span>
+            <div className="flex overflow-x-auto pb-2 -mx-1 px-1 scrollbar-hide sm:flex-wrap gap-2 items-center">
+              {AVAILABLE_SYMBOLS.slice(0, 10).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSymbol(s)}
+                  className={`flex-shrink-0 flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-all shadow-sm ${symbol === s
+                    ? "border-emerald-500/50 bg-emerald-500/10 text-white ring-1 ring-emerald-500/20"
+                    : "border-zinc-800/80 bg-zinc-950/50 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+                    }`}
+                >
+                  <StockLogo symbol={s} size={16} />
+                  <span className="text-xs font-semibold">{s}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
