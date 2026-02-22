@@ -659,7 +659,7 @@ export async function getAvailableStocksWithExplanations(): Promise<string[]> {
 export async function getSankeyData(symbol: string): Promise<any> {
   const upperSymbol = symbol.toUpperCase();
   try {
-    const response = await fetch(`${API_BASE_URL}/api/stocks/${upperSymbol}/sankey`);
+    const response = await fetch(`${API_BASE_URL}/api/stock/${upperSymbol}/sankey`);
     if (!response.ok) {
       throw new Error(`Failed to fetch sankey data: ${response.status}`);
     }
