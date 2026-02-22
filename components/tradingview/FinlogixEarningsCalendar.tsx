@@ -13,7 +13,7 @@ function FinlogixEarningsCalendar() {
 
   useEffect(() => {
     if (!isClient) return
-    
+
     const container = containerRef.current
     if (!container || initializedRef.current) return
 
@@ -37,8 +37,9 @@ function FinlogixEarningsCalendar() {
           widgetId: "caffc210-a0bd-4502-943f-5078aa5ea13c",
           type: "EarningCalendar",
           language: "en",
-          importanceOptions: ["low", "medium", "high"],
+          importanceOptions: ["medium", "high"],
           dateRangeOptions: ["recentAndNext", "today", "tomorrow", "thisWeek", "nextWeek", "thisMonth"],
+          countryOptions: ["UnitedStates"],
           isAdaptive: true
         })
       } catch (error) {
@@ -49,7 +50,7 @@ function FinlogixEarningsCalendar() {
 
     // Check if script already loaded
     const existingScript = document.querySelector('script[src="https://widget.finlogix.com/Widget.js"]')
-    
+
     if (window.Widget) {
       initializeWidget()
     } else if (!existingScript) {
@@ -77,7 +78,7 @@ function FinlogixEarningsCalendar() {
   if (!isClient) {
     return (
       <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden" style={{ height: 550 }}>
-        <div 
+        <div
           className="w-full h-full flex items-center justify-center"
         >
           <div className="text-zinc-500 text-sm">Loading earnings calendar...</div>
@@ -89,9 +90,9 @@ function FinlogixEarningsCalendar() {
   return (
     <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden" style={{ height: 550 }}>
       {/* Use the exact class name the widget expects */}
-      <div 
+      <div
         ref={containerRef}
-        className="finlogix-container w-full h-full" 
+        className="finlogix-container w-full h-full"
       />
     </div>
   )
@@ -108,6 +109,7 @@ declare global {
         language: string
         importanceOptions: string[]
         dateRangeOptions: string[]
+        countryOptions?: string[]
         isAdaptive: boolean
       }) => void
     }

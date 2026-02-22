@@ -344,7 +344,7 @@ export default function LandingPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 1, delay: 0.6 }}
-              className="flex flex-wrap items-center justify-center gap-4 sm:gap-3 mt-14 px-4"
+              className="flex flex-wrap items-center justify-center gap-x-4 gap-y-8 sm:gap-x-3 sm:gap-y-3 mt-14 px-4"
             >
               {STOCK_LOGOS.map((symbol, i) => (
                 <motion.div
