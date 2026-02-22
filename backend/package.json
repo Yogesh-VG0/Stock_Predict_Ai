@@ -21,6 +21,7 @@
         "express": "^4.21.2",
         "luxon": "^3.6.1",
         "mongoose": "^7.0.0",
+        "node-cache": "^5.1.2",
         "node-fetch": "^3.3.2",
         "redis": "^5.0.1",
         "rss-parser": "^3.13.0",
