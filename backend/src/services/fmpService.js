@@ -33,7 +33,7 @@ const getIncomeStatementTTM = async (symbol) => {
     }
 
     try {
-        const url = `${BASE_URL}/income-statement/${symbol}?period=annual&limit=1&apikey=${FMP_API_KEY}`;
+        const url = `${STABLE_URL}/income-statement-ttm?symbol=${encodeURIComponent(symbol)}&apikey=${encodeURIComponent(FMP_API_KEY.trim())}`;
         const response = await axios.get(url, { timeout: 10000 });
 
         if (response.data && response.data.length > 0) {
@@ -43,7 +43,9 @@ const getIncomeStatementTTM = async (symbol) => {
         }
         return null;
     } catch (error) {
-        console.error(`Error fetching FMP Income Statement for ${symbol}:`, error.message);
+        const status = error.response?.status;
+        const body = error.response?.data;
+        console.error(`FMP error ${status} for ${symbol} (Income Statement):`, body || error.message);
         return null;
     }
 };
@@ -75,7 +77,7 @@ const getProductSegmentation = async (symbol) => {
     }
 
     try {
-        const url = `${BASE_URL}/revenue-product-segmentation?symbol=${symbol}&structure=flat&period=annual&apikey=${FMP_API_KEY}`;
+        const url = `${STABLE_URL}/revenue-product-segmentation?symbol=${encodeURIComponent(symbol)}&structure=flat&period=annual&apikey=${encodeURIComponent(FMP_API_KEY.trim())}`;
         const response = await axios.get(url, { timeout: 10000 });
 
         if (response.data && response.data.length > 0 && response.data[0].data) {
@@ -94,7 +96,9 @@ const getProductSegmentation = async (symbol) => {
 
         return null;
     } catch (error) {
-        console.warn(`Segmentation not available or failed for ${symbol}:`, error.message);
+        const status = error.response?.status;
+        const body = error.response?.data;
+        console.warn(`FMP error ${status} for ${symbol} (Segmentation):`, body || error.message);
         return null;
     }
 };
