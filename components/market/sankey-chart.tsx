@@ -221,7 +221,7 @@ export default function SankeyChart({
     const linkOpacity = isMobile ? 0.45 : 0.35;
 
     return (
-        <div className="relative w-full h-full overflow-hidden">
+        <div className="relative w-full overflow-hidden" style={{ height }}>
             {/* Zoom controls */}
             <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-xl border border-zinc-800 bg-black/60 p-2 backdrop-blur hover:bg-black/80 transition-colors cursor-default">
                 <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-zinc-800">
