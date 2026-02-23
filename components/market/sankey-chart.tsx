@@ -31,21 +31,22 @@ function formatMoney(v: number) {
 
 // “Infographic solid” palette (closer to your 2nd image)
 const PALETTE = {
-    revenue: "#2F6BFF", // solid blue
+    revenue: "#3B82F6", // solid blue
     profit: "#22C55E",  // solid green
     expense: "#EF4444", // solid red
     tax: "#F59E0B",     // solid amber
-    neutral: "#94A3B8", // slate/gray
-    panel: "rgba(10, 12, 20, 0.78)",
-    border: "rgba(255,255,255,0.10)",
-    text: "#E6EAF2",
-    subtext: "#A7B0C0",
+    neutral: "#9CA3AF", // slate/gray
+    panel: "rgba(255, 255, 255, 0.95)",
+    border: "rgba(0, 0, 0, 0.1)",
+    text: "#1F2937",
+    subtext: "#6B7280",
+    linkOpacity: 0.9,
 };
 
 const SEGMENT_PALETTE = [
-    "#2F6BFF", // blue
+    "#3B82F6", // blue
     "#F59E0B", // amber
-    "#94A3B8", // gray
+    "#9CA3AF", // gray
     "#8B5CF6", // purple
     "#F97316", // orange
     "#06B6D4", // cyan
@@ -90,8 +91,10 @@ export default function SankeyChart({
     symbol?: string;
 }) {
     const [isMobile, setIsMobile] = useState(false);
+    const [isMounted, setIsMounted] = useState(false);
 
     useEffect(() => {
+        setIsMounted(true);
         const onResize = () => setIsMobile(window.innerWidth < 640);
         onResize();
         window.addEventListener("resize", onResize);
@@ -134,20 +137,19 @@ export default function SankeyChart({
 
     // Bigger right margin prevents “end labels cut off”
     const margin = isMobile
-        ? { top: 18, right: 24, bottom: 18, left: 18 }
-        : { top: 22, right: 220, bottom: 22, left: 160 };
+        ? { top: 20, right: 30, bottom: 20, left: 20 }
+        : { top: 30, right: 240, bottom: 30, left: 180 };
 
-    const nodeThickness = isMobile ? 12 : 18;
-    const nodeSpacing = isMobile ? 12 : 20;
+    const nodeThickness = isMobile ? 14 : 20;
+    const nodeSpacing = isMobile ? 16 : 24;
 
     // Custom layer: draw “infographic cards”
     const CardsLayer = (layerProps: any) => {
         const { nodes, width, height: innerH } = layerProps;
 
-        // chart inner area is 0..width / 0..innerH
-        const PAD = 10;
-        const cardW = isMobile ? 176 : 210;
-        const cardH = isMobile ? 42 : 48;
+        const PAD = 12;
+        const cardW = isMobile ? 180 : 220;
+        const cardH = isMobile ? 44 : 52;
 
         return (
             <g>
@@ -158,22 +160,20 @@ export default function SankeyChart({
                     const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || kind === "segment";
                     if (!shouldShowCard) return null;
 
-                    const labelMax = isMobile ? 12 : 18;
+                    const labelMax = isMobile ? 14 : 22;
                     const label = truncate(String(node.id), labelMax);
                     const value = node.displayValue ?? node.value ?? 0;
 
                     // Card placement:
-                    // - segments on the left -> card to the left if possible, otherwise right
-                    // - mid/right nodes -> card to the right if possible, otherwise left
-                    const preferLeft = node.x < 140;
-                    let x = preferLeft ? node.x - (cardW + 12) : node.x + node.width + 12;
+                    const isLeftMost = node.x < 150;
+                    let x = isLeftMost ? node.x - (cardW + 15) : node.x + node.width + 15;
                     let y = node.y + node.height / 2 - cardH / 2;
 
-                    // Clamp to inner chart bounds
-                    if (x < PAD) x = node.x + node.width + 12;
-                    if (x + cardW > width - PAD) x = node.x - (cardW + 12);
-                    x = Math.max(PAD, Math.min(x, width - cardW - PAD));
+                    // Clamp to inner chart area
+                    if (x < PAD) x = node.x + node.width + 15;
+                    if (x + cardW > width - PAD) x = node.x - (cardW + 15);
 
+                    x = Math.max(PAD, Math.min(x, width - cardW - PAD));
                     y = Math.max(PAD, Math.min(y, innerH - cardH - PAD));
 
                     const showLogo = String(node.id) === "Total Revenue" && symbol;
@@ -196,7 +196,7 @@ export default function SankeyChart({
                                 ry={6}
                                 fill="none"
                                 stroke={color}
-                                strokeOpacity={0.18}
+                                strokeOpacity={0.2}
                                 strokeWidth={4}
                             />
 
@@ -205,34 +205,35 @@ export default function SankeyChart({
                                 <rect
                                     width={cardW}
                                     height={cardH}
-                                    rx={12}
-                                    ry={12}
+                                    rx={10}
+                                    ry={10}
                                     fill={PALETTE.panel}
                                     stroke={PALETTE.border}
                                     strokeWidth={1}
+                                    style={{ filter: "drop-shadow(0px 4px 6px rgba(0,0,0,0.05))" }}
                                 />
-                                <rect x={10} y={cardH / 2 - 12} width={4} height={24} rx={2} fill={color} opacity={0.98} />
+                                <rect x={12} y={cardH / 2 - 14} width={4} height={28} rx={2} fill={color} />
 
                                 {showLogo ? (
                                     <image
                                         href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-                                        x={22}
-                                        y={cardH / 2 - 13}
-                                        width={26}
-                                        height={26}
+                                        x={24}
+                                        y={cardH / 2 - 14}
+                                        width={28}
+                                        height={28}
                                         opacity={0.95}
                                         preserveAspectRatio="xMidYMid meet"
                                     />
                                 ) : (
-                                    <text x={24} y={cardH / 2 + 6} fontSize={14} fill={PALETTE.text}>
+                                    <text x={26} y={cardH / 2 + 7} fontSize={16} fill={PALETTE.text}>
                                         {icon}
                                     </text>
                                 )}
 
-                                <text x={52} y={cardH / 2 - 2} fontSize={12} fill={PALETTE.text} fontWeight={800}>
+                                <text x={60} y={cardH / 2 - 2} fontSize={13} fill={PALETTE.text} fontWeight={700}>
                                     {label}
                                 </text>
-                                <text x={52} y={cardH / 2 + 14} fontSize={12} fill={PALETTE.subtext} fontWeight={650}>
+                                <text x={60} y={cardH / 2 + 16} fontSize={13} fill={PALETTE.subtext} fontWeight={500}>
                                     {formatMoney(Number(value))}
                                 </text>
                             </g>
@@ -243,53 +244,42 @@ export default function SankeyChart({
         );
     };
 
-    return (
-        <div className="relative w-full" style={{ height }}>
-            {/* Background like infographic */}
-            <div
-                className="absolute inset-0 rounded-2xl border border-zinc-800/60 pointer-events-none"
-                style={{
-                    background:
-                        "radial-gradient(1200px 420px at 20% 10%, rgba(47,107,255,0.10), transparent 55%)," +
-                        "radial-gradient(900px 380px at 70% 20%, rgba(34,197,94,0.08), transparent 55%)," +
-                        "radial-gradient(900px 380px at 70% 80%, rgba(239,68,68,0.07), transparent 55%)," +
-                        "linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.35))",
-                }}
-            />
+    if (!isMounted) return <div style={{ height }} />;
 
+    return (
+        <div className="relative w-full rounded-2xl overflow-hidden border border-zinc-200 shadow-sm" style={{ height, background: "#F8FAFC" }}>
             <TransformWrapper
-                minScale={0.55}
-                maxScale={2.75}
-                initialScale={isMobile ? 0.72 : 1}
-                centerOnInit
-                limitToBounds={false}
-                wheel={{ step: 0.12 }}
-                pinch={{ step: 6 }}
+                minScale={0.4}
+                maxScale={3}
+                initialScale={isMobile ? 0.65 : 1}
+                centerOnInit={true}
+                limitToBounds={true}
+                wheel={{ step: 0.1 }}
+                pinch={{ step: 5 }}
                 doubleClick={{ disabled: true }}
             >
                 {({ zoomIn, zoomOut, resetTransform }) => (
                     <>
                         {/* Controls */}
-                        <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-xl border border-zinc-800 bg-black/60 p-2 backdrop-blur hover:bg-black/80 transition-colors">
-                            <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-zinc-800">
-                                <Move className="h-4 w-4 text-zinc-300" />
-                                <span className="text-xs text-zinc-400 font-medium tracking-wide uppercase">Drag</span>
+                        <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-zinc-200 bg-white/90 p-2 backdrop-blur shadow-sm transition-all hover:shadow-md">
+                            <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-zinc-200">
+                                <Move className="h-4 w-4 text-zinc-400" />
+                                <span className="text-[10px] text-zinc-500 font-bold tracking-tight uppercase">Pan Chart</span>
                             </div>
-                            <button onClick={() => zoomOut()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom out">
-                                <ZoomOut className="h-4 w-4 text-zinc-200" />
+                            <button onClick={() => zoomOut()} className="p-1.5 rounded-lg hover:bg-zinc-100 transition" aria-label="Zoom out">
+                                <ZoomOut className="h-4 w-4 text-zinc-600" />
                             </button>
-                            <button onClick={() => zoomIn()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom in">
-                                <ZoomIn className="h-4 w-4 text-zinc-200" />
+                            <button onClick={() => zoomIn()} className="p-1.5 rounded-lg hover:bg-zinc-100 transition" aria-label="Zoom in">
+                                <ZoomIn className="h-4 w-4 text-zinc-600" />
                             </button>
-                            <button onClick={() => resetTransform()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Reset">
-                                <RotateCcw className="h-4 w-4 text-zinc-200" />
+                            <button onClick={() => resetTransform()} className="p-1.5 rounded-lg hover:bg-zinc-100 transition" aria-label="Reset">
+                                <RotateCcw className="h-4 w-4 text-zinc-600" />
                             </button>
                         </div>
 
-                        {/* IMPORTANT: overflow visible so right-side cards are NOT clipped */}
                         <TransformComponent
-                            wrapperStyle={{ width: "100%", height, overflow: "visible" }}
-                            contentStyle={{ width: "100%", height, overflow: "visible" }}
+                            wrapperStyle={{ width: "100%", height }}
+                            contentStyle={{ width: "100%", height }}
                         >
                             <div style={{ width: "100%", height }}>
                                 <ResponsiveSankey
@@ -300,22 +290,23 @@ export default function SankeyChart({
                                     nodeThickness={nodeThickness}
                                     nodeSpacing={nodeSpacing}
                                     nodeBorderWidth={0}
-                                    nodeBorderColor={{ from: "color", modifiers: [["darker", 0.2]] }}
-                                    // Solid, more “infographic” look:
-                                    enableLinkGradient={false}
-                                    linkBlendMode="normal"
-                                    linkOpacity={isMobile ? 0.70 : 0.60}
-                                    linkHoverOpacity={0.92}
+                                    nodeOpacity={1}
+                                    linkOpacity={PALETTE.linkOpacity}
+                                    linkHoverOpacity={1}
                                     linkContract={isMobile ? 1 : 2}
-                                    // No default tooltips/labels (we render cards)
+                                    enableLinkGradient={true}
+                                    linkBlendMode="multiply"
+                                    // No default tooltips/labels (we render cards via layers)
                                     nodeTooltip={() => null}
                                     linkTooltip={() => null}
+                                    // @ts-ignore
+                                    nodeLabel={() => ""}
                                     theme={{
                                         background: "transparent",
-                                        text: { fill: PALETTE.text },
+                                        text: { fill: PALETTE.text, fontSize: 12 },
                                         tooltip: { container: { display: "none" } },
                                     }}
-                                    // Custom layer draws the cards AFTER nodes/links
+                                    // @ts-ignore
                                     layers={["links", "nodes", CardsLayer]}
                                 />
                             </div>
