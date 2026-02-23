@@ -7,6 +7,20 @@ import Link from "next/link"
 import { getSankeyData, getStockDetails, StockDetails } from "@/lib/api"
 import SankeyChart from "@/components/market/sankey-chart"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { cn } from "@/lib/utils"
+
+// FMP Free API symbol allowlist (only these return data)
+const FMP_FREE_SYMBOLS = new Set([
+    "AAPL", "TSLA", "AMZN", "MSFT", "NVDA", "GOOGL", "META", "NFLX", "JPM", "V", "BAC", "PYPL", "DIS", "T", "PFE",
+    "COST", "INTC", "KO", "TGT", "NKE", "SPY", "BA", "BABA", "XOM", "WMT", "GE", "CSCO", "VZ", "JNJ", "CVX", "PLTR",
+    "SQ", "SHOP", "SBUX", "SOFI", "HOOD", "RBLX", "SNAP", "AMD", "UBER", "FDX", "ABBV", "ETSY", "MRNA", "LMT", "GM",
+    "F", "LCID", "CCL", "DAL", "UAL", "AAL", "TSM", "SONY", "ET", "MRO", "COIN", "RIVN", "RIOT", "CPRX", "VWO", "SPYG",
+    "NOK", "ROKU", "VIAC", "ATVI", "BIDU", "DOCU", "ZM", "PINS", "TLRY", "WBA", "MGM", "NIO", "C", "GS", "WFC", "ADBE",
+    "PEP", "UNH", "CARR", "HCA", "TWTR", "BILI", "SIRI", "FUBO", "RKT",
+])
+
+const PRESET_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "JPM", "V", "WMT", "PG", "HD", "MA"]
+const trackedStocks = PRESET_TICKERS.filter((t) => FMP_FREE_SYMBOLS.has(t))
 
 export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
     const [currentSymbol, setCurrentSymbol] = useState(symbol)
@@ -15,11 +29,6 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
     const [sankeyData, setSankeyData] = useState<any>(null)
     const [stockData, setStockData] = useState<StockDetails | null>(null)
     const [error, setError] = useState<string | null>(null)
-
-    const trackedStocks = [
-        "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX",
-        "JPM", "V", "WMT", "PG", "HD", "MA"
-    ]
 
     useEffect(() => {
         loadData()
@@ -93,15 +102,27 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                 </form>
 
                 <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                    {trackedStocks.map((ticker) => (
-                        <button
-                            key={ticker}
-                            onClick={() => setCurrentSymbol(ticker)}
-                            className={`flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap ${currentSymbol === ticker ? "bg-emerald-500 text-black" : "bg-zinc-800 text-white hover:bg-zinc-700"}`}
-                        >
-                            {ticker}
-                        </button>
-                    ))}
+                    {PRESET_TICKERS.map((ticker) => {
+                        const available = FMP_FREE_SYMBOLS.has(ticker)
+                        return (
+                            <button
+                                key={ticker}
+                                type="button"
+                                disabled={!available}
+                                onClick={() => available && setCurrentSymbol(ticker)}
+                                className={cn(
+                                    "flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap",
+                                    available
+                                        ? currentSymbol === ticker
+                                            ? "bg-emerald-500 text-black"
+                                            : "bg-zinc-800 text-white hover:bg-zinc-700"
+                                        : "bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800"
+                                )}
+                            >
+                                {ticker}
+                            </button>
+                        )
+                    })}
                 </div>
             </motion.div>
 
@@ -177,7 +198,10 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
                                     <div className="text-xs text-zinc-400 mb-1">Gross Profit</div>
                                     <div className="text-xl font-bold text-emerald-400">
-                                        {formatCurrency(sankeyData.financials.revenue * Number(sankeyData.financials.grossProfitMargin || 0))}
+                                        {formatCurrency(
+                                            sankeyData.financials.grossProfit ??
+                                            sankeyData.financials.revenue * Number(sankeyData.financials.grossProfitMargin || 0)
+                                        )}
                                     </div>
                                     <div className="text-xs text-zinc-500 mt-1">
                                         {(Number(sankeyData.financials.grossProfitMargin || 0) * 100).toFixed(1)}% Margin

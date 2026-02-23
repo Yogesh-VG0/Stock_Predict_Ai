@@ -92,6 +92,70 @@ function truncate(s: string, max: number) {
     return s.slice(0, max - 1) + "…";
 }
 
+function svgDataUri(svg: string) {
+    const encoded = encodeURIComponent(svg)
+        .replace(/'/g, "%27")
+        .replace(/"/g, "%22");
+    return `data:image/svg+xml,${encoded}`;
+}
+
+const ICONS: Record<string, string> = {
+    "Cost of Revenue": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#F3F4F6"><path d="M6 2h9l3 3v17H6z"/><path fill="#08090D" d="M8 8h8v2H8zm0 4h8v2H8zm0 4h6v2H8z"/></svg>`),
+    "R&D": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>`),
+    "SG&A": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>`),
+    "Other OpEx": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>`),
+    "Taxes": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#F3F4F6"><path d="M7 2h10v4H7z"/><path d="M5 6h14v16H5z"/><path fill="#08090D" d="M8 10h8v2H8zm0 4h8v2H8z"/></svg>`),
+    "Operating Expenses": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>`),
+    "Gross Profit": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>`),
+    "Operating Income": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>`),
+    "Income Before Tax": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>`),
+    "Net Income": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>`),
+    "Total Revenue": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>`),
+    "Other/Interest Expense": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4m0 4h.01"/></svg>`),
+    "Other/Interest Income": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4m0 4h.01"/></svg>`),
+};
+
+function SankeyTooltip({ title, value, color }: { title: string; value: string; color: string }) {
+    return (
+        <div
+            style={{
+                background: "rgba(17, 20, 28, 0.95)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                padding: "10px 12px",
+                borderRadius: 12,
+                color: "#F3F4F6",
+                fontSize: 12,
+            }}
+        >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block" }} />
+                <strong style={{ fontSize: 13 }}>{title}</strong>
+            </div>
+            <div style={{ color: "#9CA3AF" }}>{value}</div>
+        </div>
+    );
+}
+
+function layoutCards(nodes: any[], width: number, innerH: number, cardH: number, pad: number) {
+    const left = nodes.filter((n) => n.x < width * 0.5).sort((a, b) => a.y - b.y);
+    const right = nodes.filter((n) => n.x >= width * 0.5).sort((a, b) => a.y - b.y);
+
+    const place = (arr: any[]) => {
+        let cursor = pad;
+        const out = new Map<string, number>();
+        for (const n of arr) {
+            let top = n.y + n.height / 2 - cardH / 2;
+            top = Math.max(top, cursor);
+            top = Math.min(top, innerH - cardH - pad);
+            out.set(n.id, top);
+            cursor = top + cardH + 8;
+        }
+        return out;
+    };
+
+    return { L: place(left), R: place(right) };
+}
+
 export default function SankeyChart({
     data,
     height = 680,
@@ -159,20 +223,28 @@ export default function SankeyChart({
     }, [data]);
 
     const totalRev = useMemo(() => {
-        const revNode = enriched.nodes.find((n) => n.id === "Total Revenue");
-        return revNode?.value || enriched.links.filter(l => l.target === "Total Revenue").reduce((sum, l) => sum + l.value, 0) || 1;
+        const revNode: any = enriched.nodes.find((n) => n.id === "Total Revenue");
+        return Number(revNode?.displayValue ?? revNode?.value ?? 1);
     }, [enriched]);
+
+    const topSegments = useMemo(() => {
+        const segs = enriched.nodes.filter((n: any) => n.kind === "segment");
+        segs.sort((a: any, b: any) => (Number(b.displayValue ?? b.value ?? 0) - Number(a.displayValue ?? a.value ?? 0)));
+        return new Set(segs.slice(0, isMobile ? 4 : 8).map((n: any) => String(n.id)));
+    }, [enriched, isMobile]);
 
     const margin = isMobile
         ? { top: 20, right: 60, bottom: 20, left: 60 }
-        : { top: 30, right: 280, bottom: 30, left: 180 };
+        : { top: 30, right: 320, bottom: 30, left: 180 };
 
     const CardsLayer = (layerProps: any) => {
         const { nodes, width, height: innerH } = layerProps;
 
         const PAD = 12;
-        const cardW = isMobile ? 180 : 200;
-        const cardH = isMobile ? 40 : 52;
+        const cardW = isMobile ? 190 : 220;
+        const cardH = isMobile ? 44 : 56;
+
+        const { L: leftY, R: rightY } = layoutCards(nodes, width, innerH, cardH, PAD);
 
         return (
             <g>
@@ -180,16 +252,14 @@ export default function SankeyChart({
                     const kind: NodeKind = node.kind || "neutral";
                     const color = node.color || PALETTE.neutral;
 
-                    // Mobile Filter: hide minor segments (<12% of rev)
                     const isSegment = kind === "segment";
-                    const isSignificant = (node.value / totalRev) >= (isMobile ? 0.12 : 0.08);
+                    const nodeVal = Number(node.displayValue ?? node.value ?? 0);
+                    const isSignificant = (nodeVal / totalRev) >= (isMobile ? 0.12 : 0.08);
 
-                    // Tighten segments on mobile: only show significant ones on the left
-                    const isLeftSide = node.x < width * 0.33;
                     const shouldShowCard =
                         !isMobile ||
                         keyNodes.has(String(node.id)) ||
-                        (isSegment && isSignificant && isLeftSide);
+                        (isSegment && isSignificant && topSegments.has(String(node.id)));
 
                     if (!shouldShowCard) return null;
 
@@ -197,24 +267,19 @@ export default function SankeyChart({
                     const label = truncate(String(node.id), labelMax);
                     const value = node.displayValue ?? node.value ?? 0;
 
-                    const isLeftMost = node.x < width * 0.4;
+                    const isLeftMost = node.x < width * 0.5;
                     let x = isLeftMost ? node.x - (cardW + 15) : node.x + node.width + 15;
-                    let y = node.y + node.height / 2 - cardH / 2;
+                    const layoutY = isLeftMost ? leftY.get(node.id) : rightY.get(node.id);
+                    const y = layoutY ?? node.y + node.height / 2 - cardH / 2;
 
-                    // Clamping to inner bounds
                     if (x < PAD) x = node.x + node.width + 15;
                     if (x + cardW > width - PAD) x = node.x - (cardW + 15);
-
                     x = Math.max(PAD, Math.min(x, width - cardW - PAD));
-                    y = Math.max(PAD, Math.min(y, innerH - cardH - PAD));
 
                     const showLogo = String(node.id) === "Total Revenue" && symbol;
-                    const icon =
-                        kind === "profit" ? "✅" :
-                            kind === "expense" ? "🧾" :
-                                kind === "tax" ? "🧮" :
-                                    kind === "revenue" ? "💰" :
-                                        kind === "segment" ? "◼" : "•";
+                    const iconHref = showLogo
+                        ? `https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`
+                        : ICONS[String(node.id)];
 
                     return (
                         <g key={node.id}>
@@ -243,9 +308,9 @@ export default function SankeyChart({
                                 />
                                 <rect x={12} y={cardH / 2 - 14} width={4} height={28} rx={2} fill={color} />
 
-                                {showLogo ? (
+                                {iconHref ? (
                                     <image
-                                        href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                                        href={iconHref}
                                         x={24}
                                         y={cardH / 2 - 14}
                                         width={28}
@@ -254,9 +319,7 @@ export default function SankeyChart({
                                         preserveAspectRatio="xMidYMid meet"
                                     />
                                 ) : (
-                                    <text x={26} y={cardH / 2 + 7} fontSize={16} fill={PALETTE.text}>
-                                        {icon}
-                                    </text>
+                                    <circle cx={38} cy={cardH / 2} r={6} fill={color} opacity={0.9} />
                                 )}
 
                                 <text x={60} y={cardH / 2 - 2} fontSize={13} fill={PALETTE.text} fontWeight={700}>
@@ -275,19 +338,23 @@ export default function SankeyChart({
 
     if (!isMounted) return <div style={{ height }} />;
 
-    const mobileCanvasWidth = 980;
-    const canvasWidth = isMobile ? mobileCanvasWidth : "100%";
+    const canvasWidth = isMobile ? 1100 : "100%";
+    const linkColorFn = (link: any) => link.color;
 
     return (
-        <div className="relative w-full rounded-2xl overflow-hidden border border-white/5 shadow-2xl" style={{ height, background: PALETTE.background }}>
+        <div className="relative w-full rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
+            <div className="absolute inset-0 rounded-2xl" style={{ background: PALETTE.background }} />
+            <div className="relative w-full h-full rounded-2xl">
             <TransformWrapper
                 minScale={0.55}
                 maxScale={3}
-                initialScale={isMobile ? 1.15 : 1}
-                initialPositionX={isMobile ? -180 : 0}
-                initialPositionY={isMobile ? -20 : 0}
+                initialScale={isMobile ? 1.05 : 1}
+                initialPositionX={isMobile ? -140 : 0}
+                initialPositionY={isMobile ? -10 : 0}
                 centerOnInit={!isMobile}
-                limitToBounds={true}
+                limitToBounds={false}
+                panning={{ excluded: [] }}
+                alignmentAnimation={{ disabled: true }}
                 wheel={{ step: 0.1 }}
                 pinch={{ step: 5 }}
                 doubleClick={{ disabled: true }}
@@ -316,36 +383,51 @@ export default function SankeyChart({
                         >
                             <div style={{ width: canvasWidth, height }}>
                                 <ResponsiveSankey
-                                    data={enriched as any}
-                                    margin={margin}
-                                    align="justify"
-                                    sort="auto"
-                                    nodeThickness={isMobile ? 16 : 20}
-                                    nodeSpacing={isMobile ? 22 : 24}
-                                    nodeBorderWidth={0}
-                                    nodeOpacity={1}
-                                    linkOpacity={PALETTE.linkOpacity}
-                                    linkHoverOpacity={1}
-                                    linkContract={isMobile ? 1 : 2}
-                                    enableLinkGradient={false}
-                                    linkBlendMode="normal"
-                                    nodeTooltip={() => null}
-                                    linkTooltip={() => null}
-                                    // @ts-ignore
-                                    nodeLabel={() => ""}
-                                    theme={{
-                                        background: "transparent",
-                                        text: { fill: PALETTE.text, fontSize: 12 },
-                                        tooltip: { container: { display: "none" } },
-                                    }}
-                                    // @ts-ignore
-                                    layers={["links", "nodes", CardsLayer]}
+                                    {...({
+                                        data: enriched,
+                                        margin,
+                                        align: "justify" as const,
+                                        sort: "auto" as const,
+                                        colors: (node: any) => node.color,
+                                        linkColor: linkColorFn,
+                                        nodeThickness: isMobile ? 16 : 24,
+                                        nodeSpacing: isMobile ? 22 : 24,
+                                        nodeBorderWidth: 0,
+                                        nodeOpacity: 1,
+                                        linkOpacity: isMobile ? 0.9 : 0.95,
+                                        linkHoverOpacity: 1,
+                                        linkContract: isMobile ? 1 : 3,
+                                        enableLinkGradient: false,
+                                        linkBlendMode: "normal" as const,
+                                        nodeTooltip: (n: any) => (
+                                            <SankeyTooltip
+                                                title={String(n.id)}
+                                                value={formatMoney(Number(n.value ?? n.displayValue ?? 0))}
+                                                color={n.color || PALETTE.neutral}
+                                            />
+                                        ),
+                                        linkTooltip: (l: any) => (
+                                            <SankeyTooltip
+                                                title={`${l.source?.id ?? l.source} → ${l.target?.id ?? l.target}`}
+                                                value={formatMoney(Number(l.value ?? 0))}
+                                                color={l.color || PALETTE.neutral}
+                                            />
+                                        ),
+                                        nodeLabel: () => "",
+                                        theme: {
+                                            background: "transparent",
+                                            text: { fill: PALETTE.text, fontSize: 12 },
+                                            tooltip: { container: { zIndex: 9999 } },
+                                        },
+                                        layers: ["links", "nodes", CardsLayer],
+                                    } as any)}
                                 />
                             </div>
                         </TransformComponent>
                     </>
                 )}
             </TransformWrapper>
+            </div>
         </div>
     );
 }
