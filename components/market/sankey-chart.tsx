@@ -262,7 +262,7 @@ export default function SankeyChart({
                                 <RotateCcw className="h-4 w-4 text-zinc-200" />
                             </button>
 
-                            <div className="w-full h-full absolute top-0 left-0 -z-10 bg-transparent flex items-center justify-center">
+                            <div className="w-full h-full bg-transparent flex items-center justify-center">
                                 <TransformComponent wrapperStyle={{ width: "100%", height }} contentStyle={{ width: "100%", height }}>
                                     <div style={{ width: "100%", height }}>
                                         {/* @ts-ignore - Nivo generic component mappings often fail strict TS bounds */}
