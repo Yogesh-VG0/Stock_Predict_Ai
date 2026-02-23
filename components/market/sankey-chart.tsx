@@ -216,9 +216,10 @@ export default function SankeyChart({
     }, [enriched, isMobile]);
 
     const cardW = isMobile ? 190 : 220;
+    // On desktop, right margin must fit 2 columns: cardW*2 + 28px gap + 12px outer pad
     const margin = isMobile
         ? { top: 54, right: 18, bottom: 24, left: 18 }
-        : { top: 54, right: cardW + 90, bottom: 36, left: cardW + 90 };
+        : { top: 54, right: cardW * 2 + 56, bottom: 36, left: cardW + 90 };
 
     const totalRevenueValue = useMemo(() => {
         const vFromLinks = enriched.links
@@ -248,7 +249,13 @@ export default function SankeyChart({
 
         const minX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
 
+        // Two right rails: outer (rail 1) and inner (rail 2)
+        const LEFT_RAIL_X = 12;
+        const RIGHT_RAIL_1 = width - cardW - 12;        // outer right column
+        const RIGHT_RAIL_2 = width - (cardW * 2) - 28;  // inner right column
+
         const candidates: CardCandidate[] = [];
+        let rightIndex = 0;
 
         for (const node of nodes) {
             const id = String(node.id);
@@ -285,15 +292,25 @@ export default function SankeyChart({
             const centerY = ny + nh / 2;
             const desiredY = clamp(centerY - cardH / 2, PAD, innerH - cardH - PAD);
 
-            const LEFT_RAIL_X = 12;
-            const RIGHT_RAIL_X = width - cardW - 12;
-            const x = side === "L" ? LEFT_RAIL_X : RIGHT_RAIL_X;
+            // On desktop, alternate right-side cards between two columns to reduce crowding
+            let x: number;
+            if (side === "L") {
+                x = LEFT_RAIL_X;
+            } else if (isMobile) {
+                x = RIGHT_RAIL_1;
+            } else {
+                x = (rightIndex % 2 === 0) ? RIGHT_RAIL_1 : RIGHT_RAIL_2;
+                rightIndex++;
+            }
 
             candidates.push({ id, node, side, x, desiredY, y: desiredY });
         }
 
-        const resolveSide = (side: "L" | "R") => {
-            const arr = candidates.filter((c) => c.side === side).sort((a, b) => a.desiredY - b.desiredY);
+        // Resolve stacking per rail (unique x position) to avoid overlaps within each column
+        const resolveRail = (railX: number) => {
+            const arr = candidates
+                .filter((c) => c.x === railX)
+                .sort((a, b) => a.desiredY - b.desiredY);
 
             let cursor = PAD;
             for (const c of arr) {
@@ -317,8 +334,9 @@ export default function SankeyChart({
             }
         };
 
-        resolveSide("L");
-        resolveSide("R");
+        resolveRail(LEFT_RAIL_X);
+        resolveRail(RIGHT_RAIL_1);
+        if (!isMobile) resolveRail(RIGHT_RAIL_2);
 
         return (
             <g>
@@ -448,19 +466,19 @@ export default function SankeyChart({
 
             <div className="relative w-full h-full rounded-2xl">
             <TransformWrapper
-                minScale={0.55}
-                maxScale={3}
-                initialScale={isMobile ? 1.05 : 1}
-                initialPositionX={isMobile ? -140 : 0}
-                initialPositionY={0}
-                centerOnInit={!isMobile}
-                limitToBounds={true}
-                panning={{ excluded: [] }}
-                alignmentAnimation={{ disabled: true }}
-                wheel={{ step: 0.1 }}
-                pinch={{ step: 5 }}
-                doubleClick={{ disabled: true }}
-            >
+                    minScale={0.55}
+                    maxScale={3}
+                    initialScale={isMobile ? 1.05 : 1}
+                    {...(isMobile ? { initialPositionX: -140 } : {})}
+                    initialPositionY={0}
+                    centerOnInit={!isMobile}
+                    limitToBounds={true}
+                    panning={{ excluded: [] }}
+                    alignmentAnimation={{ disabled: true }}
+                    wheel={{ step: 0.1 }}
+                    pinch={{ step: 5 }}
+                    doubleClick={{ disabled: true }}
+                >
                 {({ zoomIn, zoomOut, resetTransform }) => (
                     <>
                         <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 p-2 backdrop-blur shadow-lg">
@@ -490,10 +508,10 @@ export default function SankeyChart({
                             contentStyle={{
                                 width: canvasWidth,
                                 height,
-                                overflow: "visible",
+                                overflow: "hidden",
                             }}
                         >
-                            <div style={{ width: canvasWidth, height, overflow: "visible" }}>
+                            <div style={{ width: canvasWidth, height, overflow: "hidden" }}>
                                 <ResponsiveSankey
                                     {...({
                                         data: enriched,
