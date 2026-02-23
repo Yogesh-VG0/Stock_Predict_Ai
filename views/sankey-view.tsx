@@ -182,7 +182,7 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                         Visualizing how revenue breaks down into expenses and profits. Hover over nodes and links for exact values.
                     </CardDescription>
                 </CardHeader>
-                <CardContent className="px-3 pb-3 sm:px-6 sm:pb-6">
+                <CardContent className="px-1.5 pb-3 sm:px-6 sm:pb-6">
                     {isLoading ? (
                         <div className="h-[400px] sm:h-[600px] flex items-center justify-center">
                             <div className="flex flex-col items-center gap-4 text-emerald-500">
@@ -254,8 +254,8 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                                 );
                             })()}
 
-                            {/* The Sankey Chart */}
-                            <div className="p-2 sm:p-4 bg-black/40 rounded-xl border border-zinc-800/50">
+                            {/* The Sankey Chart — on mobile, remove horizontal padding so scroll area uses full width */}
+                            <div className="p-0 sm:p-4 bg-black/40 rounded-xl border border-zinc-800/50 overflow-hidden">
                                 <SankeyChart
                                     data={sankeyData.sankey}
                                     symbol={currentSymbol}
