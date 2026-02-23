@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { ResponsiveSankey } from "@nivo/sankey";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { ZoomIn, ZoomOut, RotateCcw, Move } from "lucide-react";
@@ -19,6 +20,19 @@ type SankeyLink = {
     target: string;
     value: number;
     color?: string;
+};
+
+type ComputedNode = {
+    id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    color: string;
+    value: number;
+    displayValue?: number;
+    kind?: NodeKind;
+    depth?: number;
 };
 
 function formatMoney(v: number) {
@@ -98,9 +112,23 @@ const ICONS: Record<string, string> = {
     "Other/Interest Income": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4m0 4h.01"/></svg>`),
 };
 
-function SankeyTooltip({ title, value, color }: { title: string; value: string; color: string }) {
+// Tooltip component - will be portal'd to document.body
+function SankeyTooltip({ 
+    title, 
+    value, 
+    color,
+    position 
+}: { 
+    title: string; 
+    value: string; 
+    color: string;
+    position: { x: number; y: number };
+}) {
     return (
         <div style={{
+            position: "fixed",
+            left: position.x + 15,
+            top: position.y + 15,
             background: "rgba(17, 20, 28, 0.97)",
             border: "1px solid rgba(255,255,255,0.12)",
             padding: "10px 14px",
@@ -111,6 +139,9 @@ function SankeyTooltip({ title, value, color }: { title: string; value: string; 
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
+            zIndex: 999999,
+            boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+            pointerEvents: "none",
         }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block", flexShrink: 0 }} />
@@ -119,6 +150,167 @@ function SankeyTooltip({ title, value, color }: { title: string; value: string; 
             <div style={{ color: "#9CA3AF", fontSize: 13 }}>{value}</div>
         </div>
     );
+}
+
+// Node card for HTML overlay
+function OverlayCard({
+    node,
+    cardX,
+    cardY,
+    cardW,
+    cardH,
+    onMouseEnter,
+    onMouseLeave,
+}: {
+    node: ComputedNode;
+    cardX: number;
+    cardY: number;
+    cardW: number;
+    cardH: number;
+    onMouseEnter: (e: React.MouseEvent, node: ComputedNode) => void;
+    onMouseLeave: () => void;
+}) {
+    const label = truncate(String(node.id), 18);
+    const value = node.displayValue ?? node.value ?? 0;
+    const iconHref = ICONS[String(node.id)];
+
+    return (
+        <div
+            style={{
+                position: "absolute",
+                left: cardX,
+                top: cardY,
+                width: cardW,
+                height: cardH,
+                background: PALETTE.panel,
+                border: `1px solid ${PALETTE.border}`,
+                borderRadius: 7,
+                display: "flex",
+                alignItems: "center",
+                padding: "0 10px",
+                gap: 8,
+                cursor: "pointer",
+                pointerEvents: "auto",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+                transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                zIndex: 50,
+            }}
+            onMouseEnter={(e) => onMouseEnter(e, node)}
+            onMouseLeave={onMouseLeave}
+            onMouseDown={(e) => e.stopPropagation()}
+        >
+            {/* Color bar */}
+            <div style={{
+                width: 3,
+                height: 20,
+                borderRadius: 1.5,
+                background: node.color,
+                flexShrink: 0,
+            }} />
+            
+            {/* Icon or circle */}
+            {iconHref ? (
+                <img
+                    src={iconHref}
+                    alt=""
+                    style={{ width: 20, height: 20, objectFit: "contain", opacity: 0.85, flexShrink: 0 }}
+                />
+            ) : (
+                <div style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: node.color,
+                    opacity: 0.8,
+                    flexShrink: 0,
+                }} />
+            )}
+            
+            {/* Text content */}
+            <div style={{ minWidth: 0, flex: 1, overflow: "hidden" }}>
+                <div style={{
+                    color: PALETTE.text,
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    lineHeight: 1.2,
+                }}>
+                    {label}
+                </div>
+                <div style={{
+                    color: PALETTE.subtext,
+                    fontSize: 10.5,
+                    fontWeight: 500,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    lineHeight: 1.2,
+                    marginTop: 2,
+                }}>
+                    {formatMoney(Number(value))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// SVG Connector line component
+function ConnectorLine({
+    nodeCX,
+    nodeCY,
+    anchorX,
+    anchorY,
+    color,
+}: {
+    nodeCX: number;
+    nodeCY: number;
+    anchorX: number;
+    anchorY: number;
+    color: string;
+}) {
+    const dx = anchorX - nodeCX;
+    const ctrl = Math.max(Math.abs(dx) * 0.3, 15);
+
+    return (
+        <path
+            d={`M ${nodeCX} ${nodeCY} C ${nodeCX + ctrl} ${nodeCY}, ${anchorX - ctrl} ${anchorY}, ${anchorX} ${anchorY}`}
+            fill="none"
+            stroke={color}
+            strokeOpacity={0.25}
+            strokeWidth={1}
+        />
+    );
+}
+
+// Custom layer to capture node positions
+function NodeCaptureLayer({
+    nodes,
+    onNodesCaptured,
+}: {
+    nodes: any[];
+    onNodesCaptured: (nodes: ComputedNode[]) => void;
+}) {
+    useEffect(() => {
+        if (nodes && nodes.length > 0) {
+            const computedNodes: ComputedNode[] = nodes.map((n: any) => ({
+                id: String(n.id),
+                x: Number(n.x) || 0,
+                y: Number(n.y) || 0,
+                width: Number(n.width) || 0,
+                height: Number(n.height) || 0,
+                color: n.color || PALETTE.neutral,
+                value: Number(n.value) || 0,
+                displayValue: n.displayValue,
+                kind: n.kind,
+            }));
+            onNodesCaptured(computedNodes);
+        }
+    }, [nodes, onNodesCaptured]);
+
+    // This layer doesn't render anything - it just captures node positions
+    return null;
 }
 
 export default function SankeyChart({
@@ -132,6 +324,14 @@ export default function SankeyChart({
 }) {
     const [isMobile, setIsMobile] = useState(false);
     const [isMounted, setIsMounted] = useState(false);
+    const [computedNodes, setComputedNodes] = useState<ComputedNode[]>([]);
+    const [tooltip, setTooltip] = useState<{
+        visible: boolean;
+        title: string;
+        value: string;
+        color: string;
+        position: { x: number; y: number };
+    } | null>(null);
 
     useEffect(() => {
         setIsMounted(true);
@@ -139,6 +339,24 @@ export default function SankeyChart({
         onResize();
         window.addEventListener("resize", onResize);
         return () => window.removeEventListener("resize", onResize);
+    }, []);
+
+    const handleNodesCaptured = useCallback((nodes: ComputedNode[]) => {
+        setComputedNodes(nodes);
+    }, []);
+
+    const handleMouseEnter = useCallback((e: React.MouseEvent, node: ComputedNode) => {
+        setTooltip({
+            visible: true,
+            title: String(node.id),
+            value: formatMoney(Number(node.displayValue ?? node.value ?? 0)),
+            color: node.color || PALETTE.neutral,
+            position: { x: e.clientX, y: e.clientY },
+        });
+    }, []);
+
+    const handleMouseLeave = useCallback(() => {
+        setTooltip(null);
     }, []);
 
     const keyNodes = useMemo(
@@ -206,7 +424,6 @@ export default function SankeyChart({
     }, [propHeight, rightNodeCount, cardH, GAP, isMobile]);
 
     // Margins: on desktop, reserve space for left + right card columns
-    // On mobile, minimal margins - cards overlay the plot area
     const margin = useMemo(() => {
         if (isMobile) return { top: 10, right: 10, bottom: 10, left: 10 };
         return { top: 40, right: cardW + 40, bottom: 30, left: cardW + 40 };
@@ -223,15 +440,16 @@ export default function SankeyChart({
 
     const canvasWidth = isMobile ? 900 : 1400;
 
-    const CardsLayer = (layerProps: any) => {
-        const { nodes, width: innerW, height: innerH } = layerProps;
+    // Calculate card positions based on computed nodes
+    const cardPositions = useMemo(() => {
+        if (!computedNodes.length) return [];
 
         const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
 
         type RailKey = "L" | "R";
         type CardCandidate = {
             id: string;
-            node: any;
+            node: ComputedNode;
             side: "L" | "R";
             rail: RailKey;
             x: number;
@@ -239,7 +457,7 @@ export default function SankeyChart({
             y: number;
         };
 
-        const minNodeX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
+        const minNodeX = computedNodes.reduce((m, n) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
 
         // SVG visible bounds from layer coordinate perspective
         const svgLeft = -margin.left;
@@ -249,19 +467,17 @@ export default function SankeyChart({
         const safeLeft = svgLeft + PAD;
         const safeRight = svgRight - cardW - PAD;
         const safeTop = -margin.top + PAD;
-        const safeBottom = innerH + margin.bottom - cardH - PAD;
+        const safeBottom = height + margin.bottom - cardH - PAD;
 
         // Rail X positions
-        // Left rail: in the left margin area
-        const LEFT_X = isMobile ? PAD : (safeLeft);
-        // Right rail: in the right margin area, single column
+        const LEFT_X = isMobile ? PAD : safeLeft;
         const RIGHT_X = isMobile
-            ? (innerW - cardW + PAD)  // mobile: right edge of inner area
-            : (innerW + 20);          // desktop: just past the plot area into right margin
+            ? (canvasWidth - margin.left - cardW + PAD)
+            : (canvasWidth - margin.left + 20);
 
         const candidates: CardCandidate[] = [];
 
-        for (const node of nodes) {
+        for (const node of computedNodes) {
             const id = String(node.id);
             if (id === "Total Revenue") continue;
 
@@ -276,17 +492,13 @@ export default function SankeyChart({
             const isSegment = kind === "segment";
             const isSignificant = (nodeVal / totalRev) >= (isMobile ? 0.15 : 0.08);
 
-            // On mobile, show fewer cards to avoid crowding
             const shouldShowCard = isMobile
                 ? (keyNodes.has(id) || (isSegment && isSignificant && topSegments.has(id)))
                 : true;
 
             if (!shouldShowCard) continue;
 
-            const rawDepth =
-                (Number.isFinite(Number(node.depth)) ? Number(node.depth) : undefined) ??
-                (Number.isFinite(Number(node.layer)) ? Number(node.layer) : undefined);
-
+            const rawDepth = Number(node.depth) || 0;
             const isFirstColumn = rawDepth === 0 || Math.abs(nx - minNodeX) < 2;
             const side: "L" | "R" = isSegment || isFirstColumn ? "L" : "R";
 
@@ -312,7 +524,6 @@ export default function SankeyChart({
             const arr = unique.filter((c) => c.rail === rail).sort((a, b) => a.desiredY - b.desiredY);
             if (!arr.length) return;
 
-            // Forward pass
             let cursor = safeTop;
             for (const c of arr) {
                 c.y = Math.max(c.desiredY, cursor);
@@ -320,7 +531,6 @@ export default function SankeyChart({
                 cursor = c.y + cardH + GAP;
             }
 
-            // Backward pass if overflow
             const last = arr[arr.length - 1];
             if (last.y > safeBottom) {
                 let bc = safeBottom;
@@ -331,7 +541,6 @@ export default function SankeyChart({
                 }
             }
 
-            // Center if slack
             if (arr.length > 0) {
                 const stackTop = arr[0].y;
                 const stackBottom = arr[arr.length - 1].y + cardH;
@@ -339,7 +548,7 @@ export default function SankeyChart({
                 const available = safeBottom - safeTop + cardH;
                 const slack = available - used;
                 if (slack > 20) {
-                    const shift = slack * 0.4; // Don't fully center, bias toward top
+                    const shift = slack * 0.4;
                     for (const c of arr) {
                         c.y = clamp(c.y + shift, safeTop, safeBottom);
                     }
@@ -350,73 +559,36 @@ export default function SankeyChart({
         resolveRail("L");
         resolveRail("R");
 
-        return (
-            <g>
-                {unique.map(({ id, node, side, x, y, rail }, idx) => {
-                    const color = node.color || PALETTE.neutral;
-                    const nx = Number(node.x);
-                    const ny = Number(node.y);
-                    const nw = Number(node.width);
-                    const nh = Number(node.height);
+        return unique;
+    }, [computedNodes, margin, cardW, cardH, GAP, PAD, height, canvasWidth, isMobile, totalRev, keyNodes, topSegments]);
 
-                    const nodeCX = nx + nw / 2;
-                    const nodeCY = ny + nh / 2;
-                    const anchorX = side === "L" ? x + cardW : x;
-                    const anchorY = y + cardH / 2;
+    // Build connector paths for SVG layer
+    const connectorPaths = useMemo(() => {
+        return cardPositions.map(({ id, node, side, x, y }) => {
+            const nx = Number(node.x);
+            const ny = Number(node.y);
+            const nw = Number(node.width);
+            const nh = Number(node.height);
 
-                    const dx = anchorX - nodeCX;
-                    const ctrl = clamp(Math.abs(dx) * 0.3, 15, 60) * (dx < 0 ? -1 : 1);
+            const nodeCX = nx + nw / 2;
+            const nodeCY = ny + nh / 2;
+            const anchorX = side === "L" ? x + cardW : x;
+            const anchorY = y + cardH / 2;
 
-                    const label = truncate(id, isMobile ? 14 : 18);
-                    const value = node.displayValue ?? node.value ?? 0;
-                    const iconHref = ICONS[id];
+            const dx = anchorX - nodeCX;
+            const ctrl = Math.max(Math.abs(dx) * 0.3, 15) * (dx < 0 ? -1 : 1);
 
-                    return (
-                        <g key={`${id}-${rail}-${idx}`}>
-                            {/* Node highlight */}
-                            <rect
-                                x={nx - 1} y={ny - 1}
-                                width={nw + 2} height={nh + 2}
-                                rx={4} ry={4}
-                                fill="none" stroke={color} strokeOpacity={0.15} strokeWidth={2}
-                            />
-                            {/* Connector */}
-                            <path
-                                d={`M ${nodeCX} ${nodeCY} C ${nodeCX + ctrl} ${nodeCY}, ${anchorX - ctrl} ${anchorY}, ${anchorX} ${anchorY}`}
-                                fill="none" stroke={color} strokeOpacity={0.25} strokeWidth={1}
-                            />
-                            {/* Card */}
-                            <g transform={`translate(${x}, ${y})`}>
-                                <rect
-                                    width={cardW} height={cardH}
-                                    rx={7} ry={7}
-                                    fill={PALETTE.panel} stroke={PALETTE.border} strokeWidth={0.75}
-                                />
-                                <rect x={8} y={cardH / 2 - 10} width={3} height={20} rx={1.5} fill={color} />
-                                {iconHref ? (
-                                    <image
-                                        href={iconHref}
-                                        x={16} y={cardH / 2 - 10}
-                                        width={20} height={20}
-                                        opacity={0.85}
-                                        preserveAspectRatio="xMidYMid meet"
-                                    />
-                                ) : (
-                                    <circle cx={26} cy={cardH / 2} r={4} fill={color} opacity={0.8} />
-                                )}
-                                <text x={42} y={cardH / 2 - 3} fontSize={isMobile ? 10 : 11.5} fill={PALETTE.text} fontWeight={700}>
-                                    {label}
-                                </text>
-                                <text x={42} y={cardH / 2 + 11} fontSize={isMobile ? 9 : 10.5} fill={PALETTE.subtext} fontWeight={500}>
-                                    {formatMoney(Number(value))}
-                                </text>
-                            </g>
-                        </g>
-                    );
-                })}
-            </g>
-        );
-    };
+            return {
+                id,
+                path: `M ${nodeCX} ${nodeCY} C ${nodeCX + ctrl} ${nodeCY}, ${anchorX - ctrl} ${anchorY}, ${anchorX} ${anchorY}`,
+                color: node.color,
+                nodeX: nx,
+                nodeY: ny,
+                nodeWidth: nw,
+                nodeHeight: nh,
+            };
+        });
+    }, [cardPositions, cardW, cardH]);
 
     if (!isMounted) return <div style={{ height }} />;
 
@@ -494,7 +666,8 @@ export default function SankeyChart({
                                 wrapperStyle={{ width: "100%", height, overflow: "hidden", touchAction: "none", userSelect: "none" }}
                                 contentStyle={{ width: canvasWidth, height, overflow: "hidden" }}
                             >
-                                <div style={{ width: canvasWidth, height, overflow: "hidden" }}>
+                                <div style={{ width: canvasWidth, height, overflow: "hidden", position: "relative" }}>
+                                    {/* SVG Sankey - only links and nodes */}
                                     <ResponsiveSankey
                                         {...({
                                             data: enriched,
@@ -512,35 +685,110 @@ export default function SankeyChart({
                                             linkContract: isMobile ? 1 : 2,
                                             enableLinkGradient: false,
                                             linkBlendMode: "normal" as const,
-                                            nodeTooltip: ({ node }: any) => (
-                                                <SankeyTooltip
-                                                    title={String(node?.id ?? "Unknown")}
-                                                    value={formatMoney(Number(node.value ?? node.displayValue ?? 0))}
-                                                    color={node.color || PALETTE.neutral}
-                                                />
-                                            ),
-                                            linkTooltip: ({ link }: any) => (
-                                                <SankeyTooltip
-                                                    title={`${link?.source?.id ?? "?"} → ${link?.target?.id ?? "?"}`}
-                                                    value={formatMoney(Number(link.value ?? 0))}
-                                                    color={link.color || PALETTE.neutral}
-                                                />
-                                            ),
+                                            nodeTooltip: () => null,
+                                            linkTooltip: () => null,
                                             nodeLabel: () => "",
                                             theme: {
                                                 background: "transparent",
                                                 text: { fill: PALETTE.text, fontSize: 11 },
                                                 tooltip: { container: { zIndex: 9999 } },
                                             },
-                                            layers: ["links", "nodes", CardsLayer],
+                                            layers: [
+                                                "links", 
+                                                "nodes",
+                                                // Custom layer to capture node positions
+                                                (layerProps: any) => (
+                                                    <NodeCaptureLayer
+                                                        key="node-capture"
+                                                        nodes={layerProps.nodes}
+                                                        onNodesCaptured={handleNodesCaptured}
+                                                    />
+                                                ),
+                                            ],
                                         } as any)}
                                     />
+
+                                    {/* SVG Connectors - drawn in SVG for crisp lines */}
+                                    <svg
+                                        style={{
+                                            position: "absolute",
+                                            top: 0,
+                                            left: 0,
+                                            width: "100%",
+                                            height: "100%",
+                                            pointerEvents: "none",
+                                            overflow: "visible",
+                                        }}
+                                    >
+                                        {connectorPaths.map((conn) => (
+                                            <g key={conn.id}>
+                                                {/* Node highlight */}
+                                                <rect
+                                                    x={conn.nodeX - 1}
+                                                    y={conn.nodeY - 1}
+                                                    width={conn.nodeWidth + 2}
+                                                    height={conn.nodeHeight + 2}
+                                                    rx={4}
+                                                    ry={4}
+                                                    fill="none"
+                                                    stroke={conn.color}
+                                                    strokeOpacity={0.15}
+                                                    strokeWidth={2}
+                                                />
+                                                {/* Connector */}
+                                                <path
+                                                    d={conn.path}
+                                                    fill="none"
+                                                    stroke={conn.color}
+                                                    strokeOpacity={0.25}
+                                                    strokeWidth={1}
+                                                />
+                                            </g>
+                                        ))}
+                                    </svg>
+
+                                    {/* HTML Overlay Cards - moves with pan/zoom */}
+                                    <div
+                                        style={{
+                                            position: "absolute",
+                                            top: 0,
+                                            left: 0,
+                                            width: "100%",
+                                            height: "100%",
+                                            pointerEvents: "none",
+                                            overflow: "visible",
+                                        }}
+                                    >
+                                        {cardPositions.map(({ id, node, side, x, y }) => (
+                                            <OverlayCard
+                                                key={id}
+                                                node={node}
+                                                cardX={x}
+                                                cardY={y}
+                                                cardW={cardW}
+                                                cardH={cardH}
+                                                onMouseEnter={handleMouseEnter}
+                                                onMouseLeave={handleMouseLeave}
+                                            />
+                                        ))}
+                                    </div>
                                 </div>
                             </TransformComponent>
                         </>
                     )}
                 </TransformWrapper>
             </div>
+
+            {/* Portal'd tooltip - never clips */}
+            {tooltip?.visible && typeof document !== "undefined" && createPortal(
+                <SankeyTooltip
+                    title={tooltip.title}
+                    value={tooltip.value}
+                    color={tooltip.color}
+                    position={tooltip.position}
+                />,
+                document.body
+            )}
         </div>
     );
 }
