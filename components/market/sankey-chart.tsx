@@ -39,10 +39,10 @@ const PALETTE = {
     tax: "#F59E0B",     // solid amber
     neutral: "#9CA3AF", // slate gray
     panel: "rgba(17, 20, 28, 0.95)", // dark card
-    border: "rgba(255, 255, 255, 0.08)",
+    border: "rgba(255, 255, 255, 0.12)",
     text: "#F3F4F6",
     subtext: "#9CA3AF",
-    linkOpacity: 0.88,
+    linkOpacity: 0.98,
 };
 
 const SEGMENT_PALETTE = [
@@ -60,7 +60,6 @@ function hashColor(id: string) {
     return SEGMENT_PALETTE[h % SEGMENT_PALETTE.length];
 }
 
-// Infer category from label if backend missed it
 function inferKind(id: string): NodeKind {
     const s = id.toLowerCase();
     if (s.includes("revenue") || s.includes("sales") || s.includes("operations")) return "revenue";
@@ -128,51 +127,52 @@ export default function SankeyChart({
         []
     );
 
-    // Total revenue for filtering minor segments on mobile
-    const totalRev = useMemo(() => {
-        const revNode = data.nodes.find((n) => n.id === "Total Revenue");
-        return revNode?.value || data.links.filter(l => l.target === "Total Revenue").reduce((sum, l) => sum + l.value, 0) || 1;
-    }, [data]);
-
     const enriched = useMemo(() => {
-        const nodeMap = new Map<string, SankeyNode>();
-        data.nodes.forEach((n) => nodeMap.set(n.id, n));
+        // 1) Compute enriched nodes (with inferred kind)
+        const enrichedNodes = data.nodes.map((n) => {
+            let k = n.kind as NodeKind | undefined;
+            if (!k) {
+                const isSourceOfRevenue = data.links.some(
+                    (l) => String(l.source) === n.id && String(l.target) === "Total Revenue"
+                );
+                k = isSourceOfRevenue ? "segment" : inferKind(n.id);
+            }
+            return {
+                ...n,
+                kind: k,
+                color: kindColor(k, n.id),
+            };
+        });
 
-        return {
-            nodes: data.nodes.map((n) => {
-                // Tag segmented nodes feeding into Total Revenue specifically if not already tagged
-                let k = n.kind as NodeKind;
-                if (!k) {
-                    const isSourceOfRevenue = data.links.some(l => l.source === n.id && l.target === "Total Revenue");
-                    k = isSourceOfRevenue ? "segment" : inferKind(n.id);
-                }
-                return {
-                    ...n,
-                    kind: k,
-                    color: kindColor(k, n.id),
-                };
-            }),
-            links: data.links.map((l) => {
-                const target = nodeMap.get(String(l.target));
-                // Use the target's category color for the link flow
-                let k = target?.kind as NodeKind;
-                if (!k) k = inferKind(target?.id || "");
-                const color = kindColor(k, target?.id);
-                return { ...l, color: l.color || color };
-            }),
-        };
+        // 2) Build map from enriched nodes
+        const nodeMap = new Map<string, (typeof enrichedNodes)[number]>();
+        enrichedNodes.forEach((n) => nodeMap.set(n.id, n));
+
+        // 3) Color links using enriched target kind
+        const enrichedLinks = data.links.map((l) => {
+            const target = nodeMap.get(String(l.target));
+            const k = (target?.kind ?? inferKind(String(l.target))) as NodeKind;
+            return { ...l, color: l.color || kindColor(k, target?.id) };
+        });
+
+        return { nodes: enrichedNodes, links: enrichedLinks };
     }, [data]);
+
+    const totalRev = useMemo(() => {
+        const revNode = enriched.nodes.find((n) => n.id === "Total Revenue");
+        return revNode?.value || enriched.links.filter(l => l.target === "Total Revenue").reduce((sum, l) => sum + l.value, 0) || 1;
+    }, [enriched]);
 
     const margin = isMobile
-        ? { top: 20, right: 30, bottom: 20, left: 20 }
-        : { top: 30, right: 240, bottom: 30, left: 180 };
+        ? { top: 20, right: 60, bottom: 20, left: 60 }
+        : { top: 30, right: 280, bottom: 30, left: 180 };
 
     const CardsLayer = (layerProps: any) => {
         const { nodes, width, height: innerH } = layerProps;
 
         const PAD = 12;
-        const cardW = isMobile ? 180 : 215;
-        const cardH = isMobile ? 44 : 52;
+        const cardW = isMobile ? 180 : 200;
+        const cardH = isMobile ? 40 : 52;
 
         return (
             <g>
@@ -180,10 +180,16 @@ export default function SankeyChart({
                     const kind: NodeKind = node.kind || "neutral";
                     const color = node.color || PALETTE.neutral;
 
-                    // Mobile Filter: hide minor segments (<8% of rev)
-                    const isSegment = kind === "segment" || !keyNodes.has(node.id);
-                    const isSignificant = (node.value / totalRev) >= 0.08;
-                    const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || (isSegment && isSignificant);
+                    // Mobile Filter: hide minor segments (<12% of rev)
+                    const isSegment = kind === "segment";
+                    const isSignificant = (node.value / totalRev) >= (isMobile ? 0.12 : 0.08);
+
+                    // Tighten segments on mobile: only show significant ones on the left
+                    const isLeftSide = node.x < width * 0.33;
+                    const shouldShowCard =
+                        !isMobile ||
+                        keyNodes.has(String(node.id)) ||
+                        (isSegment && isSignificant && isLeftSide);
 
                     if (!shouldShowCard) return null;
 
@@ -191,7 +197,7 @@ export default function SankeyChart({
                     const label = truncate(String(node.id), labelMax);
                     const value = node.displayValue ?? node.value ?? 0;
 
-                    const isLeftMost = node.x < 150;
+                    const isLeftMost = node.x < width * 0.4;
                     let x = isLeftMost ? node.x - (cardW + 15) : node.x + node.width + 15;
                     let y = node.y + node.height / 2 - cardH / 2;
 
@@ -212,7 +218,6 @@ export default function SankeyChart({
 
                     return (
                         <g key={node.id}>
-                            {/* accent highlight behind node bar */}
                             <rect
                                 x={node.x - 2}
                                 y={node.y - 2}
@@ -270,13 +275,18 @@ export default function SankeyChart({
 
     if (!isMounted) return <div style={{ height }} />;
 
+    const mobileCanvasWidth = 980;
+    const canvasWidth = isMobile ? mobileCanvasWidth : "100%";
+
     return (
         <div className="relative w-full rounded-2xl overflow-hidden border border-white/5 shadow-2xl" style={{ height, background: PALETTE.background }}>
             <TransformWrapper
-                minScale={0.4}
+                minScale={0.55}
                 maxScale={3}
-                initialScale={isMobile ? 0.85 : 1}
-                centerOnInit={true}
+                initialScale={isMobile ? 1.15 : 1}
+                initialPositionX={isMobile ? -180 : 0}
+                initialPositionY={isMobile ? -20 : 0}
+                centerOnInit={!isMobile}
                 limitToBounds={true}
                 wheel={{ step: 0.1 }}
                 pinch={{ step: 5 }}
@@ -284,7 +294,6 @@ export default function SankeyChart({
             >
                 {({ zoomIn, zoomOut, resetTransform }) => (
                     <>
-                        {/* Controls */}
                         <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 p-2 backdrop-blur shadow-lg">
                             <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-white/10">
                                 <Move className="h-3.5 w-3.5 text-white/40" />
@@ -303,25 +312,23 @@ export default function SankeyChart({
 
                         <TransformComponent
                             wrapperStyle={{ width: "100%", height }}
-                            contentStyle={{ width: "100%", height }}
+                            contentStyle={{ width: canvasWidth, height }}
                         >
-                            <div style={{ width: "100%", height }}>
+                            <div style={{ width: canvasWidth, height }}>
                                 <ResponsiveSankey
                                     data={enriched as any}
                                     margin={margin}
                                     align="justify"
                                     sort="auto"
-                                    nodeThickness={isMobile ? 14 : 20}
-                                    nodeSpacing={isMobile ? 16 : 24}
+                                    nodeThickness={isMobile ? 16 : 20}
+                                    nodeSpacing={isMobile ? 22 : 24}
                                     nodeBorderWidth={0}
                                     nodeOpacity={1}
                                     linkOpacity={PALETTE.linkOpacity}
                                     linkHoverOpacity={1}
                                     linkContract={isMobile ? 1 : 2}
-                                    // Crisp solid flows
                                     enableLinkGradient={false}
                                     linkBlendMode="normal"
-                                    // Hide defaults
                                     nodeTooltip={() => null}
                                     linkTooltip={() => null}
                                     // @ts-ignore
