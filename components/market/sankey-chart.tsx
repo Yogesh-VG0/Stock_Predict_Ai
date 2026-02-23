@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useMemo, useEffect, useState } from "react";
-import { ResponsiveSankey, SankeyNodeDatum } from "@nivo/sankey";
+import React, { useEffect, useMemo, useState } from "react";
+import { ResponsiveSankey } from "@nivo/sankey";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { ZoomIn, ZoomOut, RotateCcw, Move } from "lucide-react";
 
@@ -29,18 +29,27 @@ function formatMoney(v: number) {
     return `$${(v || 0).toFixed(0)}`;
 }
 
-const NEON = {
-    blue: "#2EA0FF",
-    green: "#2DFF9A",
-    yellow: "#FFD54A",
-    red: "#FF4D6D",
-    gray: "#A7B0C0",
-    bg: "transparent",
+// “Infographic solid” palette (closer to your 2nd image)
+const PALETTE = {
+    revenue: "#2F6BFF", // solid blue
+    profit: "#22C55E",  // solid green
+    expense: "#EF4444", // solid red
+    tax: "#F59E0B",     // solid amber
+    neutral: "#94A3B8", // slate/gray
     panel: "rgba(10, 12, 20, 0.78)",
     border: "rgba(255,255,255,0.10)",
+    text: "#E6EAF2",
+    subtext: "#A7B0C0",
 };
 
-const SEGMENT_PALETTE = ["#2EA0FF", "#FFD54A", "#A7B0C0", "#9B5CFF", "#FF7A1A", "#00E5FF"];
+const SEGMENT_PALETTE = [
+    "#2F6BFF", // blue
+    "#F59E0B", // amber
+    "#94A3B8", // gray
+    "#8B5CF6", // purple
+    "#F97316", // orange
+    "#06B6D4", // cyan
+];
 
 function hashColor(id: string) {
     let h = 0;
@@ -51,17 +60,17 @@ function hashColor(id: string) {
 function kindColor(kind: NodeKind, id?: string) {
     switch (kind) {
         case "segment":
-            return id ? hashColor(id) : NEON.gray;
+            return id ? hashColor(id) : PALETTE.neutral;
         case "revenue":
-            return NEON.blue;
+            return PALETTE.revenue;
         case "profit":
-            return NEON.green;
+            return PALETTE.profit;
         case "expense":
-            return NEON.red;
+            return PALETTE.expense;
         case "tax":
-            return NEON.yellow;
+            return PALETTE.tax;
         default:
-            return NEON.gray;
+            return PALETTE.neutral;
     }
 }
 
@@ -73,7 +82,7 @@ function truncate(s: string, max: number) {
 
 export default function SankeyChart({
     data,
-    height = 600,
+    height = 680,
     symbol,
 }: {
     data: { nodes: SankeyNode[]; links: SankeyLink[] };
@@ -89,6 +98,23 @@ export default function SankeyChart({
         return () => window.removeEventListener("resize", onResize);
     }, []);
 
+    // Choose which nodes get cards on mobile (to avoid clutter)
+    const keyNodes = useMemo(
+        () =>
+            new Set([
+                "Total Revenue",
+                "Gross Profit",
+                "Operating Expenses",
+                "Operating Income",
+                "Income Before Tax",
+                "Net Income",
+                "Cost of Revenue",
+                "Taxes",
+            ]),
+        []
+    );
+
+    // Enrich nodes/links with colors (solid)
     const enriched = useMemo(() => {
         const nodeMap = new Map<string, SankeyNode>();
         data.nodes.forEach((n) => nodeMap.set(n.id, n));
@@ -99,151 +125,143 @@ export default function SankeyChart({
                 color: kindColor((n.kind || "neutral") as NodeKind, n.id),
             })),
             links: data.links.map((l) => {
-                const targetNode = nodeMap.get(String(l.target));
-                const inferred = kindColor(((targetNode?.kind || "neutral") as NodeKind));
+                const target = nodeMap.get(String(l.target));
+                const inferred = kindColor((target?.kind || "neutral") as NodeKind, target?.id);
                 return { ...l, color: l.color || inferred };
             }),
         };
     }, [data]);
 
+    // Bigger right margin prevents “end labels cut off”
     const margin = isMobile
-        ? { top: 26, right: 18, bottom: 26, left: 18 }
-        : { top: 28, right: 52, bottom: 28, left: 120 };
+        ? { top: 18, right: 24, bottom: 18, left: 18 }
+        : { top: 22, right: 220, bottom: 22, left: 160 };
 
-    const linkOpacity = isMobile ? 0.65 : 0.55;
+    const nodeThickness = isMobile ? 12 : 18;
+    const nodeSpacing = isMobile ? 12 : 20;
 
-    const keyNodes = new Set([
-        "Total Revenue",
-        "Gross Profit",
-        "Operating Expenses",
-        "Operating Income",
-        "Income Before Tax",
-        "Net Income",
-        "Cost of Revenue",
-        "Taxes",
-    ]);
+    // Custom layer: draw “infographic cards”
+    const CardsLayer = (layerProps: any) => {
+        const { nodes, width, height: innerH } = layerProps;
 
-    const NodeCard = ({ node }: { node: any }) => {
-        const x = node.x;
-        const y = node.y;
-        const w = node.width;
-        const h = node.height;
-
-        const kind = (node as any).kind || "neutral";
-        const color = (node as any).color || NEON.gray;
-
-        const labelMax = isMobile ? 12 : 18;
-        const label = truncate(String(node.id), labelMax);
-
-        const cardW = isMobile ? 180 : 200;
-        const cardH = isMobile ? 42 : 48;
-
-        const value = (node as any).displayValue ?? node.value ?? 0;
-
-        // Show fewer cards on mobile to avoid clutter
-        const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || kind === "segment";
-
-        // Place card
-        const isLeft = x < 140;
-        const rawX = isLeft ? x - (cardW + 10) : x + w + 10;
-        const rawY = y + h / 2 - cardH / 2;
-
-        // Clamp
+        // chart inner area is 0..width / 0..innerH
         const PAD = 10;
-        const viewportW = typeof window !== "undefined" ? window.innerWidth : 1200;
-        let safeX = rawX;
-        if (safeX < PAD) safeX = x + w + 10;
-        if (safeX + cardW > viewportW - PAD) safeX = x - (cardW + 10);
-
-        let safeY = Math.max(PAD, rawY);
-        safeY = Math.min(safeY, height - cardH - PAD);
-
-        const showLogo = String(node.id) === "Total Revenue" && symbol;
-
-        const icon =
-            kind === "profit" ? "✅" :
-                kind === "expense" ? "🧾" :
-                    kind === "tax" ? "🧮" :
-                        kind === "revenue" ? "💰" :
-                            kind === "segment" ? "◼" :
-                                "•";
+        const cardW = isMobile ? 176 : 210;
+        const cardH = isMobile ? 42 : 48;
 
         return (
             <g>
-                <rect x={x} y={y} width={w} height={h} rx={4} ry={4} fill={color} opacity={0.98} />
-                <rect
-                    x={x - 2}
-                    y={y - 2}
-                    width={w + 4}
-                    height={h + 4}
-                    rx={6}
-                    ry={6}
-                    fill="none"
-                    stroke={color}
-                    strokeOpacity={0.22}
-                    strokeWidth={4}
-                />
+                {nodes.map((node: any) => {
+                    const kind: NodeKind = node.kind || "neutral";
+                    const color = node.color || PALETTE.neutral;
 
-                {shouldShowCard && (
-                    <g transform={`translate(${safeX}, ${safeY})`}>
-                        <rect width={cardW} height={cardH} rx={12} ry={12} fill={NEON.panel} stroke={NEON.border} strokeWidth={1} />
-                        <rect x={10} y={cardH / 2 - 12} width={4} height={24} rx={2} fill={color} opacity={0.95} />
+                    const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || kind === "segment";
+                    if (!shouldShowCard) return null;
 
-                        {showLogo ? (
-                            <image
-                                href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-                                x={22}
-                                y={cardH / 2 - 13}
-                                width={26}
-                                height={26}
-                                opacity={0.95}
-                                preserveAspectRatio="xMidYMid meet"
+                    const labelMax = isMobile ? 12 : 18;
+                    const label = truncate(String(node.id), labelMax);
+                    const value = node.displayValue ?? node.value ?? 0;
+
+                    // Card placement:
+                    // - segments on the left -> card to the left if possible, otherwise right
+                    // - mid/right nodes -> card to the right if possible, otherwise left
+                    const preferLeft = node.x < 140;
+                    let x = preferLeft ? node.x - (cardW + 12) : node.x + node.width + 12;
+                    let y = node.y + node.height / 2 - cardH / 2;
+
+                    // Clamp to inner chart bounds
+                    if (x < PAD) x = node.x + node.width + 12;
+                    if (x + cardW > width - PAD) x = node.x - (cardW + 12);
+                    x = Math.max(PAD, Math.min(x, width - cardW - PAD));
+
+                    y = Math.max(PAD, Math.min(y, innerH - cardH - PAD));
+
+                    const showLogo = String(node.id) === "Total Revenue" && symbol;
+                    const icon =
+                        kind === "profit" ? "✅" :
+                            kind === "expense" ? "🧾" :
+                                kind === "tax" ? "🧮" :
+                                    kind === "revenue" ? "💰" :
+                                        kind === "segment" ? "◼" : "•";
+
+                    return (
+                        <g key={node.id}>
+                            {/* accent glow around node bar */}
+                            <rect
+                                x={node.x - 2}
+                                y={node.y - 2}
+                                width={node.width + 4}
+                                height={node.height + 4}
+                                rx={6}
+                                ry={6}
+                                fill="none"
+                                stroke={color}
+                                strokeOpacity={0.18}
+                                strokeWidth={4}
                             />
-                        ) : (
-                            <text x={24} y={cardH / 2 + 6} fontSize={14} fill="#E6EAF2">
-                                {icon}
-                            </text>
-                        )}
 
-                        <text x={52} y={cardH / 2 - 2} fontSize={12} fill="#E6EAF2" fontWeight={750}>
-                            {label}
-                        </text>
-                        <text x={52} y={cardH / 2 + 14} fontSize={12} fill="#A7B0C0" fontWeight={650}>
-                            {formatMoney(Number(value))}
-                        </text>
-                    </g>
-                )}
+                            {/* card */}
+                            <g transform={`translate(${x}, ${y})`}>
+                                <rect
+                                    width={cardW}
+                                    height={cardH}
+                                    rx={12}
+                                    ry={12}
+                                    fill={PALETTE.panel}
+                                    stroke={PALETTE.border}
+                                    strokeWidth={1}
+                                />
+                                <rect x={10} y={cardH / 2 - 12} width={4} height={24} rx={2} fill={color} opacity={0.98} />
+
+                                {showLogo ? (
+                                    <image
+                                        href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                                        x={22}
+                                        y={cardH / 2 - 13}
+                                        width={26}
+                                        height={26}
+                                        opacity={0.95}
+                                        preserveAspectRatio="xMidYMid meet"
+                                    />
+                                ) : (
+                                    <text x={24} y={cardH / 2 + 6} fontSize={14} fill={PALETTE.text}>
+                                        {icon}
+                                    </text>
+                                )}
+
+                                <text x={52} y={cardH / 2 - 2} fontSize={12} fill={PALETTE.text} fontWeight={800}>
+                                    {label}
+                                </text>
+                                <text x={52} y={cardH / 2 + 14} fontSize={12} fill={PALETTE.subtext} fontWeight={650}>
+                                    {formatMoney(Number(value))}
+                                </text>
+                            </g>
+                        </g>
+                    );
+                })}
             </g>
         );
     };
 
-    const NodeCardsLayer = (props: any) => (
-        <g>
-            {props.nodes?.map((n: any) => (
-                <NodeCard key={n.id} node={n} />
-            ))}
-        </g>
-    );
-
     return (
         <div className="relative w-full" style={{ height }}>
-            {/* Background */}
+            {/* Background like infographic */}
             <div
                 className="absolute inset-0 rounded-2xl border border-zinc-800/60 pointer-events-none"
                 style={{
                     background:
-                        "radial-gradient(1200px 420px at 20% 10%, rgba(46,160,255,0.08), transparent 55%)," +
-                        "radial-gradient(900px 380px at 70% 20%, rgba(45,255,154,0.07), transparent 55%)," +
-                        "radial-gradient(900px 380px at 70% 80%, rgba(255,77,109,0.06), transparent 55%)," +
+                        "radial-gradient(1200px 420px at 20% 10%, rgba(47,107,255,0.10), transparent 55%)," +
+                        "radial-gradient(900px 380px at 70% 20%, rgba(34,197,94,0.08), transparent 55%)," +
+                        "radial-gradient(900px 380px at 70% 80%, rgba(239,68,68,0.07), transparent 55%)," +
                         "linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.35))",
                 }}
             />
 
             <TransformWrapper
-                minScale={0.5}
-                maxScale={2.5}
-                initialScale={isMobile ? 0.75 : 1}
-                centerOnInit={true}
+                minScale={0.55}
+                maxScale={2.75}
+                initialScale={isMobile ? 0.72 : 1}
+                centerOnInit
                 limitToBounds={false}
                 wheel={{ step: 0.12 }}
                 pinch={{ step: 6 }}
@@ -268,31 +286,37 @@ export default function SankeyChart({
                             </button>
                         </div>
 
-                        {/* Chart */}
-                        <TransformComponent wrapperStyle={{ width: "100%", height, overflow: "visible" }} contentStyle={{ width: "100%", height }}>
+                        {/* IMPORTANT: overflow visible so right-side cards are NOT clipped */}
+                        <TransformComponent
+                            wrapperStyle={{ width: "100%", height, overflow: "visible" }}
+                            contentStyle={{ width: "100%", height, overflow: "visible" }}
+                        >
                             <div style={{ width: "100%", height }}>
                                 <ResponsiveSankey
                                     data={enriched as any}
                                     margin={margin}
                                     align="justify"
                                     sort="auto"
-                                    nodeThickness={isMobile ? 12 : 18}
-                                    nodeSpacing={isMobile ? 12 : 24}
+                                    nodeThickness={nodeThickness}
+                                    nodeSpacing={nodeSpacing}
                                     nodeBorderWidth={0}
-                                    linkOpacity={linkOpacity}
-                                    linkHoverOpacity={0.9}
-                                    linkContract={isMobile ? 1 : 2}
-                                    enableLinkGradient={true}
+                                    nodeBorderColor={{ from: "color", modifiers: [["darker", 0.2]] }}
+                                    // Solid, more “infographic” look:
+                                    enableLinkGradient={false}
                                     linkBlendMode="normal"
-                                    // Disable default tooltips
+                                    linkOpacity={isMobile ? 0.70 : 0.60}
+                                    linkHoverOpacity={0.92}
+                                    linkContract={isMobile ? 1 : 2}
+                                    // No default tooltips/labels (we render cards)
                                     nodeTooltip={() => null}
                                     linkTooltip={() => null}
                                     theme={{
                                         background: "transparent",
-                                        text: { fill: "#E6EAF2" },
+                                        text: { fill: PALETTE.text },
                                         tooltip: { container: { display: "none" } },
                                     }}
-                                    layers={["links", "nodes", (p: any) => <NodeCardsLayer {...p} />]}
+                                    // Custom layer draws the cards AFTER nodes/links
+                                    layers={["links", "nodes", CardsLayer]}
                                 />
                             </div>
                         </TransformComponent>
