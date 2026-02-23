@@ -30,15 +30,14 @@ function formatMoney(v: number) {
     return `$${(v || 0).toFixed(0)}`;
 }
 
-// Premium Dark Infographic palette
 const PALETTE = {
     background: "#08090D",
-    revenue: "#3B82F6", // solid blue
-    profit: "#22C55E",  // solid green
-    expense: "#EF4444", // solid red
-    tax: "#F59E0B",     // solid amber
-    neutral: "#9CA3AF", // slate gray
-    panel: "rgba(17, 20, 28, 0.95)", // dark card
+    revenue: "#3B82F6",
+    profit: "#22C55E",
+    expense: "#EF4444",
+    tax: "#F59E0B",
+    neutral: "#9CA3AF",
+    panel: "rgba(17, 20, 28, 0.95)",
     border: "rgba(255, 255, 255, 0.12)",
     text: "#F3F4F6",
     subtext: "#9CA3AF",
@@ -46,12 +45,7 @@ const PALETTE = {
 };
 
 const SEGMENT_PALETTE = [
-    "#3B82F6", // blue
-    "#F59E0B", // amber
-    "#A78BFA", // soft purple
-    "#F97316", // orange
-    "#06B6D4", // cyan
-    "#94A3B8", // slate
+    "#3B82F6", "#F59E0B", "#A78BFA", "#F97316", "#06B6D4", "#94A3B8",
 ];
 
 function hashColor(id: string) {
@@ -71,31 +65,17 @@ function inferKind(id: string): NodeKind {
 
 function kindColor(kind: NodeKind, id?: string) {
     switch (kind) {
-        case "segment":
-            return id ? hashColor(id) : PALETTE.revenue;
-        case "revenue":
-            return PALETTE.revenue;
-        case "profit":
-            return PALETTE.profit;
-        case "expense":
-            return PALETTE.expense;
-        case "tax":
-            return PALETTE.tax;
-        default:
-            return PALETTE.neutral;
+        case "segment": return id ? hashColor(id) : PALETTE.revenue;
+        case "revenue": return PALETTE.revenue;
+        case "profit": return PALETTE.profit;
+        case "expense": return PALETTE.expense;
+        case "tax": return PALETTE.tax;
+        default: return PALETTE.neutral;
     }
 }
 
-function truncate(s: string, max: number) {
-    if (!s) return "";
-    if (s.length <= max) return s;
-    return s.slice(0, max - 1) + "…";
-}
-
 function svgDataUri(svg: string) {
-    const encoded = encodeURIComponent(svg)
-        .replace(/'/g, "%27")
-        .replace(/"/g, "%22");
+    const encoded = encodeURIComponent(svg).replace(/'/g, "%27").replace(/"/g, "%22");
     return `data:image/svg+xml,${encoded}`;
 }
 
@@ -115,21 +95,63 @@ const ICONS: Record<string, string> = {
     "Other/Interest Income": svgDataUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#F3F4F6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4m0 4h.01"/></svg>`),
 };
 
+/** Wrap long text into lines that fit within maxWidth (approximate) */
+function wrapLabel(text: string, maxCharsPerLine: number, maxLines: number): string[] {
+    if (!text) return [""];
+    if (text.length <= maxCharsPerLine) return [text];
+    const words = text.split(/\s+/);
+    const lines: string[] = [];
+    let current = "";
+    for (const word of words) {
+        const test = current ? `${current} ${word}` : word;
+        if (test.length > maxCharsPerLine && current) {
+            lines.push(current);
+            current = word;
+        } else {
+            current = test;
+        }
+        if (lines.length >= maxLines) break;
+    }
+    if (current && lines.length < maxLines) {
+        lines.push(current);
+    }
+    // Truncate last line if needed
+    if (lines.length > 0) {
+        const last = lines[lines.length - 1];
+        if (last.length > maxCharsPerLine) {
+            lines[lines.length - 1] = last.slice(0, maxCharsPerLine - 1) + "…";
+        }
+    }
+    // If we had more words, add ellipsis to last line
+    if (lines.length >= maxLines && words.join(" ").length > lines.join(" ").length) {
+        const last = lines[lines.length - 1];
+        if (!last.endsWith("…")) {
+            lines[lines.length - 1] = last.length > maxCharsPerLine - 1
+                ? last.slice(0, maxCharsPerLine - 1) + "…"
+                : last + "…";
+        }
+    }
+    return lines;
+}
+
 function SankeyTooltip({ title, value, color }: { title: string; value: string; color: string }) {
     return (
         <div
             style={{
-                background: "rgba(17, 20, 28, 0.95)",
+                background: "rgba(17, 20, 28, 0.97)",
                 border: "1px solid rgba(255,255,255,0.12)",
-                padding: "10px 12px",
+                padding: "10px 14px",
                 borderRadius: 12,
                 color: "#F3F4F6",
                 fontSize: 12,
+                maxWidth: 320,
+                wordWrap: "break-word",
+                overflowWrap: "break-word",
             }}
         >
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block" }} />
-                <strong style={{ fontSize: 13 }}>{title}</strong>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block", flexShrink: 0, marginTop: 2 }} />
+                <strong style={{ fontSize: 13, lineHeight: 1.3, wordBreak: "break-word" }}>{title}</strong>
             </div>
             <div style={{ color: "#9CA3AF" }}>{value}</div>
         </div>
@@ -172,7 +194,6 @@ export default function SankeyChart({
     );
 
     const enriched = useMemo(() => {
-        // 1) Compute enriched nodes (with inferred kind)
         const enrichedNodes = data.nodes.map((n) => {
             const id = String(n.id);
             let k = n.kind as NodeKind | undefined;
@@ -182,18 +203,12 @@ export default function SankeyChart({
                 );
                 k = isSourceOfRevenue ? "segment" : inferKind(id);
             }
-            return {
-                ...n,
-                kind: k,
-                color: kindColor(k, id),
-            };
+            return { ...n, kind: k, color: kindColor(k, id) };
         });
 
-        // 2) Build map from enriched nodes (normalize keys for reliable lookup)
         const nodeMap = new Map<string, (typeof enrichedNodes)[number]>();
         enrichedNodes.forEach((n) => nodeMap.set(String(n.id), n));
 
-        // 3) Color links using enriched target kind
         const enrichedLinks = data.links.map((l) => {
             const target = nodeMap.get(String(l.target));
             const k = (target?.kind ?? inferKind(String(l.target))) as NodeKind;
@@ -216,7 +231,15 @@ export default function SankeyChart({
     }, [enriched, isMobile]);
 
     const cardW = isMobile ? 190 : 220;
-    // On desktop, right margin must fit 2 columns: cardW*2 + 28px gap + 12px outer pad
+
+    // Margins: reserve space for cards in the SVG margin areas.
+    // The Nivo layer receives (innerW, innerH) = (canvasWidth - margin.left - margin.right, height - margin.top - margin.bottom).
+    // The layer's coordinate origin (0,0) maps to (margin.left, margin.top) in SVG space.
+    // So from the layer's perspective:
+    //   - left margin area:  x in [-margin.left, 0)
+    //   - inner plot area:   x in [0, innerW]
+    //   - right margin area: x in (innerW, innerW + margin.right)
+    //   - SVG right edge:    x = innerW + margin.right - margin.left  (approximately, but we use canvasWidth)
     const margin = isMobile
         ? { top: 54, right: 18, bottom: 24, left: 18 }
         : { top: 54, right: cardW * 2 + 56, bottom: 36, left: cardW + 90 };
@@ -230,14 +253,16 @@ export default function SankeyChart({
         return Number(n?.displayValue ?? n?.value ?? 0);
     }, [enriched]);
 
+    const canvasWidth = isMobile ? 1100 : 1400;
+
     const CardsLayer = (layerProps: any) => {
         const { nodes, width: innerW, height: innerH } = layerProps;
 
         const PAD = 12;
         const GAP = isMobile ? 10 : 8;
-        const cardH = isMobile ? 44 : 56;
+        const cardH = isMobile ? 54 : 62;
 
-        const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
+        const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
 
         type RailKey = "L" | "R1" | "R2";
 
@@ -251,22 +276,30 @@ export default function SankeyChart({
             y: number;
         };
 
-        const minX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
+        const minNodeX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
 
-        // Rails (make them ALWAYS visible in the SVG)
-        const maxX = innerW + margin.right - cardW - PAD; // rightmost safe card left edge
-        const minXSafe = PAD;                              // leftmost safe card left edge
+        // COORDINATE SYSTEM:
+        // The layer's (0,0) is at SVG (margin.left, margin.top).
+        // The SVG total width = canvasWidth.
+        // From the layer's perspective:
+        //   leftmost visible x  = -margin.left  (SVG x=0)
+        //   rightmost visible x = canvasWidth - margin.left  (SVG x=canvasWidth)
+        // So the safe card bounds (left edge of card) are:
+        const safeLeft = -margin.left + PAD;
+        const safeRight = canvasWidth - margin.left - cardW - PAD;
+        // And for Y:
+        const safeTop = -margin.top + PAD;
+        const safeBottom = innerH + margin.bottom - cardH - PAD;
 
-        // Desktop: keep LEFT cards inside inner plot, use margin space only on the right
-        const LEFT_RAIL_X = PAD;
+        // Rail positions (in layer coordinates)
+        // Left rail: in the left margin area (negative x from layer perspective)
+        const LEFT_RAIL_DESKTOP = -margin.left + PAD;
+        const LEFT_RAIL_MOBILE = PAD;
 
-        // Desktop right rails live in the right margin space
-        const RIGHT_RAIL_1 = innerW + (margin.right - cardW - PAD);               // outer right
-        const RIGHT_RAIL_2 = innerW + (margin.right - (cardW * 2) - (PAD + 16));  // inner right
-
-        // Mobile: keep everything inside inner plot (no margin space)
-        const MOBILE_LEFT = PAD;
-        const MOBILE_RIGHT = innerW - cardW - PAD;
+        // Right rails: in the right margin area (x > innerW from layer perspective)
+        const RIGHT_RAIL_1_DESKTOP = innerW + PAD;                          // inner right column (closer to plot)
+        const RIGHT_RAIL_2_DESKTOP = innerW + cardW + PAD + 16;             // outer right column
+        const RIGHT_RAIL_MOBILE = innerW - cardW - PAD;
 
         const candidates: CardCandidate[] = [];
         let rightIndex = 0;
@@ -289,7 +322,7 @@ export default function SankeyChart({
             const shouldShowCard =
                 !isMobile ||
                 keyNodes.has(id) ||
-                (isSegment && isSignificant && (isMobile ? topSegments.has(id) : true));
+                (isSegment && isSignificant && topSegments.has(id));
 
             if (!shouldShowCard) continue;
 
@@ -297,40 +330,39 @@ export default function SankeyChart({
                 (Number.isFinite(Number(node.depth)) ? Number(node.depth) : undefined) ??
                 (Number.isFinite(Number(node.layer)) ? Number(node.layer) : undefined);
 
-            const isFirstColumn = rawDepth === 0 || Math.abs(nx - minX) < 2;
+            const isFirstColumn = rawDepth === 0 || Math.abs(nx - minNodeX) < 2;
             const side: "L" | "R" = isSegment || isFirstColumn ? "L" : "R";
 
             const centerY = ny + nh / 2;
-            const desiredY = clamp(centerY - cardH / 2, PAD, innerH - cardH - PAD);
+            const desiredY = clamp(centerY - cardH / 2, safeTop, safeBottom);
 
             let x: number;
             let rail: RailKey;
 
             if (side === "L") {
-                x = isMobile ? MOBILE_LEFT : LEFT_RAIL_X;
+                x = isMobile ? LEFT_RAIL_MOBILE : LEFT_RAIL_DESKTOP;
                 rail = "L";
             } else if (isMobile) {
-                x = MOBILE_RIGHT;
+                x = RIGHT_RAIL_MOBILE;
                 rail = "R1";
             } else {
-                // alternate on desktop
                 if (rightIndex % 2 === 0) {
-                    x = RIGHT_RAIL_1;
+                    x = RIGHT_RAIL_1_DESKTOP;
                     rail = "R1";
                 } else {
-                    x = RIGHT_RAIL_2;
+                    x = RIGHT_RAIL_2_DESKTOP;
                     rail = "R2";
                 }
                 rightIndex++;
             }
 
-            // HARD CLAMP so cards can NEVER leave the visible SVG
-            x = clamp(x, minXSafe, maxX);
+            // HARD CLAMP: card can NEVER leave visible SVG
+            x = clamp(x, safeLeft, safeRight);
 
             candidates.push({ id, node, side, rail, x, desiredY, y: desiredY });
         }
 
-        // De-dupe: if multiple candidates share the same id, keep only the first
+        // De-dupe by id
         const seen = new Set<string>();
         const uniqueCandidates = candidates.filter((c) => {
             if (seen.has(c.id)) return false;
@@ -338,44 +370,43 @@ export default function SankeyChart({
             return true;
         });
 
-        // Stack cards PER RAIL so they don't crowd into one column
+        // Stack cards per rail to prevent overlap
         const resolveRail = (rail: RailKey) => {
             const arr = uniqueCandidates.filter((c) => c.rail === rail).sort((a, b) => a.desiredY - b.desiredY);
+            if (!arr.length) return;
 
-            let cursor = PAD;
+            // Forward pass: push down to avoid overlap
+            let cursor = safeTop;
             for (const c of arr) {
                 c.y = Math.max(c.desiredY, cursor);
-                c.y = Math.min(c.y, innerH - cardH - PAD);
+                c.y = Math.min(c.y, safeBottom);
                 cursor = c.y + cardH + GAP;
             }
 
-            // If overflow, compress upward from bottom
-            if (arr.length) {
-                const last = arr[arr.length - 1];
-                const overflow = last.y + cardH + PAD - innerH;
-                if (overflow > 0) {
-                    for (let i = arr.length - 1; i >= 0; i--) {
-                        arr[i].y = clamp(arr[i].y - overflow, PAD, innerH - cardH - PAD);
-                        if (i > 0) {
-                            arr[i - 1].y = Math.min(arr[i - 1].y, arr[i].y - cardH - GAP);
-                            arr[i - 1].y = clamp(arr[i - 1].y, PAD, innerH - cardH - PAD);
-                        }
+            // Backward pass: compress upward if overflow
+            const last = arr[arr.length - 1];
+            const overflow = last.y + cardH + PAD - (innerH + margin.bottom);
+            if (overflow > 0) {
+                for (let i = arr.length - 1; i >= 0; i--) {
+                    arr[i].y = clamp(arr[i].y - overflow, safeTop, safeBottom);
+                    if (i > 0) {
+                        arr[i - 1].y = Math.min(arr[i - 1].y, arr[i].y - cardH - GAP);
+                        arr[i - 1].y = clamp(arr[i - 1].y, safeTop, safeBottom);
                     }
                 }
             }
 
-            // Center stack vertically if there is extra space (desktop only)
-            if (!isMobile && arr.length) {
+            // Center vertically when there's slack (desktop only)
+            if (!isMobile && arr.length > 0) {
                 const top = arr[0].y;
                 const bottom = arr[arr.length - 1].y + cardH;
                 const used = bottom - top;
-                const available = innerH - PAD * 2;
+                const available = safeBottom - safeTop + cardH;
                 const slack = available - used;
-
                 if (slack > 6) {
                     const shift = slack / 2;
                     for (const c of arr) {
-                        c.y = clamp(c.y + shift, PAD, innerH - cardH - PAD);
+                        c.y = clamp(c.y + shift, safeTop, safeBottom);
                     }
                 }
             }
@@ -384,6 +415,14 @@ export default function SankeyChart({
         resolveRail("L");
         resolveRail("R1");
         if (!isMobile) resolveRail("R2");
+
+        // Final Y clamp
+        for (const c of uniqueCandidates) {
+            c.y = clamp(c.y, safeTop, safeBottom);
+        }
+
+        const maxCharsPerLine = isMobile ? 18 : 20;
+        const maxLines = isMobile ? 2 : 2;
 
         return (
             <g>
@@ -398,21 +437,20 @@ export default function SankeyChart({
                     const nodeCX = nx + nw / 2;
                     const nodeCY = ny + nh / 2;
 
-                    // Anchor is the card edge (so the line stops exactly at the card)
+                    // Anchor at card edge facing the node
                     const anchorX = side === "L" ? x + cardW : x;
                     const anchorY = y + cardH / 2;
 
-                    // Keep bezier control points proportional to distance (prevents insane long curves)
+                    // Proportional bezier control
                     const dx = anchorX - nodeCX;
-                    const ctrl = clamp(Math.abs(dx) * 0.35, 30, 90) * (dx < 0 ? -1 : 1);
+                    const ctrl = clamp(Math.abs(dx) * 0.35, 40, 120) * (dx < 0 ? -1 : 1);
 
-                    const labelMax = isMobile ? 18 : 22;
-                    const label = truncate(id, labelMax);
+                    const lines = wrapLabel(id, maxCharsPerLine, maxLines);
                     const value = node.displayValue ?? node.value ?? 0;
                     const iconHref = ICONS[id];
 
                     return (
-                        <g key={`${id}__${rail}__${idx}`}>
+                        <g key={`${id}-${rail}-${idx}`}>
                             {/* Node highlight */}
                             <rect
                                 x={nx - 2}
@@ -463,10 +501,32 @@ export default function SankeyChart({
                                     <circle cx={38} cy={cardH / 2} r={6} fill={color} opacity={0.9} />
                                 )}
 
-                                <text x={60} y={cardH / 2 - 2} fontSize={13} fill={PALETTE.text} fontWeight={700}>
-                                    {label}
-                                </text>
-                                <text x={60} y={cardH / 2 + 16} fontSize={13} fill={PALETTE.subtext} fontWeight={500}>
+                                {/* Multi-line label */}
+                                {lines.map((line, li) => (
+                                    <text
+                                        key={li}
+                                        x={60}
+                                        y={lines.length === 1
+                                            ? cardH / 2 - 2
+                                            : cardH / 2 - 10 + li * 16
+                                        }
+                                        fontSize={12}
+                                        fill={PALETTE.text}
+                                        fontWeight={700}
+                                    >
+                                        {line}
+                                    </text>
+                                ))}
+                                <text
+                                    x={60}
+                                    y={lines.length === 1
+                                        ? cardH / 2 + 16
+                                        : cardH / 2 - 10 + lines.length * 16
+                                    }
+                                    fontSize={12}
+                                    fill={PALETTE.subtext}
+                                    fontWeight={500}
+                                >
                                     {formatMoney(Number(value))}
                                 </text>
                             </g>
@@ -479,7 +539,6 @@ export default function SankeyChart({
 
     if (!isMounted) return <div style={{ height }} />;
 
-    const canvasWidth = isMobile ? 1100 : 1400;
     const linkColorFn = (link: any) => link.color;
 
     return (
@@ -521,7 +580,7 @@ export default function SankeyChart({
             )}
 
             <div className="relative w-full h-full rounded-2xl">
-            <TransformWrapper
+                <TransformWrapper
                     minScale={0.55}
                     maxScale={3}
                     initialScale={isMobile ? 1.05 : 1}
@@ -535,84 +594,84 @@ export default function SankeyChart({
                     pinch={{ step: 5 }}
                     doubleClick={{ disabled: true }}
                 >
-                {({ zoomIn, zoomOut, resetTransform }) => (
-                    <>
-                        <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 p-2 backdrop-blur shadow-lg">
-                            <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-white/10">
-                                <Move className="h-3.5 w-3.5 text-white/40" />
-                                <span className="text-[10px] text-white/40 font-bold tracking-widest uppercase">Pan</span>
+                    {({ zoomIn, zoomOut, resetTransform }) => (
+                        <>
+                            <div className="absolute right-4 top-4 z-10 flex items-center gap-2 rounded-xl border border-white/10 bg-black/60 p-2 backdrop-blur shadow-lg">
+                                <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-white/10">
+                                    <Move className="h-3.5 w-3.5 text-white/40" />
+                                    <span className="text-[10px] text-white/40 font-bold tracking-widest uppercase">Pan</span>
+                                </div>
+                                <button onClick={() => zoomOut()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom out">
+                                    <ZoomOut className="h-4 w-4 text-white/70" />
+                                </button>
+                                <button onClick={() => zoomIn()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom in">
+                                    <ZoomIn className="h-4 w-4 text-white/70" />
+                                </button>
+                                <button onClick={() => resetTransform()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Reset">
+                                    <RotateCcw className="h-4 w-4 text-white/70" />
+                                </button>
                             </div>
-                            <button onClick={() => zoomOut()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom out">
-                                <ZoomOut className="h-4 w-4 text-white/70" />
-                            </button>
-                            <button onClick={() => zoomIn()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom in">
-                                <ZoomIn className="h-4 w-4 text-white/70" />
-                            </button>
-                            <button onClick={() => resetTransform()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Reset">
-                                <RotateCcw className="h-4 w-4 text-white/70" />
-                            </button>
-                        </div>
 
-                        <TransformComponent
-                            wrapperStyle={{
-                                width: "100%",
-                                height,
-                                overflow: "hidden",
-                                touchAction: "none",
-                                userSelect: "none",
-                            }}
-                            contentStyle={{
-                                width: canvasWidth,
-                                height,
-                                overflow: "hidden",
-                            }}
-                        >
-                            <div style={{ width: canvasWidth, height, overflow: "hidden" }}>
-                                <ResponsiveSankey
-                                    {...({
-                                        data: enriched,
-                                        margin,
-                                        align: "justify" as const,
-                                        sort: "auto" as const,
-                                        colors: (node: any) => node.color,
-                                        linkColor: linkColorFn,
-                                        nodeThickness: isMobile ? 16 : 24,
-                                        nodeSpacing: isMobile ? 22 : 24,
-                                        nodeBorderWidth: 0,
-                                        nodeOpacity: 1,
-                                        linkOpacity: isMobile ? 0.9 : 0.95,
-                                        linkHoverOpacity: 1,
-                                        linkContract: isMobile ? 1 : 3,
-                                        enableLinkGradient: false,
-                                        linkBlendMode: "normal" as const,
-                                        nodeTooltip: ({ node }: any) => (
-                                            <SankeyTooltip
-                                                title={String(node?.id ?? node?.label ?? "Unknown")}
-                                                value={formatMoney(Number(node.value ?? node.displayValue ?? 0))}
-                                                color={node.color || PALETTE.neutral}
-                                            />
-                                        ),
-                                        linkTooltip: ({ link }: any) => (
-                                            <SankeyTooltip
-                                                title={`${link?.source?.id ?? link?.source ?? "?"} → ${link?.target?.id ?? link?.target ?? "?"}`}
-                                                value={formatMoney(Number(link.value ?? 0))}
-                                                color={link.color || PALETTE.neutral}
-                                            />
-                                        ),
-                                        nodeLabel: () => "",
-                                        theme: {
-                                            background: "transparent",
-                                            text: { fill: PALETTE.text, fontSize: 12 },
-                                            tooltip: { container: { zIndex: 9999 } },
-                                        },
-                                        layers: ["links", "nodes", CardsLayer],
-                                    } as any)}
-                                />
-                            </div>
-                        </TransformComponent>
-                    </>
-                )}
-            </TransformWrapper>
+                            <TransformComponent
+                                wrapperStyle={{
+                                    width: "100%",
+                                    height,
+                                    overflow: "hidden",
+                                    touchAction: "none",
+                                    userSelect: "none",
+                                }}
+                                contentStyle={{
+                                    width: canvasWidth,
+                                    height,
+                                    overflow: "hidden",
+                                }}
+                            >
+                                <div style={{ width: canvasWidth, height, overflow: "hidden" }}>
+                                    <ResponsiveSankey
+                                        {...({
+                                            data: enriched,
+                                            margin,
+                                            align: "justify" as const,
+                                            sort: "auto" as const,
+                                            colors: (node: any) => node.color,
+                                            linkColor: linkColorFn,
+                                            nodeThickness: isMobile ? 16 : 24,
+                                            nodeSpacing: isMobile ? 22 : 24,
+                                            nodeBorderWidth: 0,
+                                            nodeOpacity: 1,
+                                            linkOpacity: isMobile ? 0.9 : 0.95,
+                                            linkHoverOpacity: 1,
+                                            linkContract: isMobile ? 1 : 3,
+                                            enableLinkGradient: false,
+                                            linkBlendMode: "normal" as const,
+                                            nodeTooltip: ({ node }: any) => (
+                                                <SankeyTooltip
+                                                    title={String(node?.id ?? node?.label ?? "Unknown")}
+                                                    value={formatMoney(Number(node.value ?? node.displayValue ?? 0))}
+                                                    color={node.color || PALETTE.neutral}
+                                                />
+                                            ),
+                                            linkTooltip: ({ link }: any) => (
+                                                <SankeyTooltip
+                                                    title={`${link?.source?.id ?? link?.source ?? "?"} → ${link?.target?.id ?? link?.target ?? "?"}`}
+                                                    value={formatMoney(Number(link.value ?? 0))}
+                                                    color={link.color || PALETTE.neutral}
+                                                />
+                                            ),
+                                            nodeLabel: () => "",
+                                            theme: {
+                                                background: "transparent",
+                                                text: { fill: PALETTE.text, fontSize: 12 },
+                                                tooltip: { container: { zIndex: 9999 } },
+                                            },
+                                            layers: ["links", "nodes", CardsLayer],
+                                        } as any)}
+                                    />
+                                </div>
+                            </TransformComponent>
+                        </>
+                    )}
+                </TransformWrapper>
             </div>
         </div>
     );
