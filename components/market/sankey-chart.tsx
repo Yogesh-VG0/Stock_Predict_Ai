@@ -123,13 +123,7 @@ export default function SankeyChart({
         "Taxes",
     ]);
 
-    const NodeCard = (nodeProps: any) => {
-        const node = nodeProps.node as SankeyNodeDatum<any, any> & {
-            kind?: NodeKind;
-            displayValue?: number;
-            color?: string;
-        };
-
+    const NodeCard = ({ node }: { node: any }) => {
         const x = node.x;
         const y = node.y;
         const w = node.width;
@@ -223,6 +217,14 @@ export default function SankeyChart({
         );
     };
 
+    const NodeCardsLayer = (props: any) => (
+        <g>
+            {props.nodes?.map((n: any) => (
+                <NodeCard key={n.id} node={n} />
+            ))}
+        </g>
+    );
+
     return (
         <div className="relative w-full" style={{ height }}>
             {/* Background */}
@@ -267,7 +269,7 @@ export default function SankeyChart({
                         </div>
 
                         {/* Chart */}
-                        <TransformComponent wrapperStyle={{ width: "100%", height }} contentStyle={{ width: "100%", height }}>
+                        <TransformComponent wrapperStyle={{ width: "100%", height, overflow: "visible" }} contentStyle={{ width: "100%", height }}>
                             <div style={{ width: "100%", height }}>
                                 <ResponsiveSankey
                                     data={enriched as any}
@@ -282,10 +284,7 @@ export default function SankeyChart({
                                     linkContract={isMobile ? 1 : 2}
                                     enableLinkGradient={true}
                                     linkBlendMode="normal"
-                                    // Disable default labels & tooltips (we draw our own)
-                                    // @ts-ignore - Nivo generic mappings fail strict TS bounds depending on version
-                                    nodeLabel={() => ""}
-                                    labelTextColor="transparent"
+                                    // Disable default tooltips
                                     nodeTooltip={() => null}
                                     linkTooltip={() => null}
                                     theme={{
@@ -293,8 +292,7 @@ export default function SankeyChart({
                                         text: { fill: "#E6EAF2" },
                                         tooltip: { container: { display: "none" } },
                                     }}
-                                    // @ts-ignore
-                                    nodeComponent={NodeCard}
+                                    layers={["links", "nodes", (p: any) => <NodeCardsLayer {...p} />]}
                                 />
                             </div>
                         </TransformComponent>
