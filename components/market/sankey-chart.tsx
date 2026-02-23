@@ -1,145 +1,200 @@
-"use client"
+"use client";
 
-import { ResponsiveSankey } from '@nivo/sankey'
-import { useTheme } from 'next-themes'
-import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { DollarSign } from 'lucide-react'
+import React, { useMemo } from "react";
+import { ResponsiveSankey, SankeyNodeDatum, SankeyLinkDatum } from "@nivo/sankey";
 
-interface SankeyNode {
+type NodeKind = "segment" | "revenue" | "expense" | "profit" | "tax" | "neutral";
+
+type SankeyNode = {
     id: string;
-    nodeColor?: string;
-}
+    kind?: NodeKind;
+};
 
-interface SankeyLink {
+type SankeyLink = {
     source: string;
     target: string;
     value: number;
     color?: string;
-}
-
-interface SankeyData {
-    nodes: SankeyNode[];
-    links: SankeyLink[];
-}
-
-interface SankeyChartProps {
-    data: SankeyData;
-    height?: number;
-}
-
-// Custom format for large numbers (billions/millions)
-const formatCurrency = (value: number) => {
-    if (value >= 1e9) {
-        return `$${(value / 1e9).toFixed(2)}B`;
-    }
-    if (value >= 1e6) {
-        return `$${(value / 1e6).toFixed(2)}M`;
-    }
-    return `$${value.toLocaleString()}`;
 };
 
-export default function SankeyChart({ data, height = 600 }: SankeyChartProps) {
-    const { theme } = useTheme();
-    const [mounted, setMounted] = useState(false);
+export default function SankeyChart({
+    data,
+    height = 560,
+}: {
+    data: { nodes: SankeyNode[]; links: SankeyLink[] };
+    height?: number;
+}) {
+    const kindColor = (kind: NodeKind) => {
+        switch (kind) {
+            case "segment":
+                return "#60a5fa"; // blue-400
+            case "revenue":
+                return "#3b82f6"; // blue-500
+            case "profit":
+                return "#10b981"; // emerald-500
+            case "expense":
+                return "#ef4444"; // red-500
+            case "tax":
+                return "#f59e0b"; // amber-500
+            default:
+                return "#a1a1aa"; // zinc-400
+        }
+    };
 
-    useEffect(() => {
-        setMounted(true);
-    }, []);
+    const getKindIcon = (kind: NodeKind) => {
+        switch (kind) {
+            case "revenue": return "💰";
+            case "expense": return "🧾";
+            case "profit": return "✅";
+            case "tax": return "🧮";
+            case "segment": return "📊";
+            default: return "";
+        }
+    };
 
-    if (!mounted) return (
-        <div className={`w-full h-[${height}px] bg-zinc-900/50 rounded-lg animate-pulse flex items-center justify-center`}>
-            <div className="text-zinc-600 flex items-center gap-2">
-                <DollarSign className="h-5 w-5 animate-spin" /> Rendering Financial Flow...
-            </div>
-        </div>
-    );
+    // truncate for labels (prevents left overflow)
+    const formatNodeLabel = (id: string, max = 18) => {
+        if (!id) return "";
+        let cleanId = id.replace(" Segment", "").trim();
+        if (cleanId.length <= max) return cleanId;
+        return cleanId.slice(0, max - 1) + "…";
+    };
 
-    const isDark = theme === 'dark' || true; // Force dark for now based on app aesthetics
+    const enriched = useMemo(() => {
+        // Need to protect against empty data throws in Nivo
+        if (!data || !data.nodes || !data.links) return { nodes: [], links: [] };
+
+        const nodeMap = new Map<string, SankeyNode>();
+        for (const n of data.nodes) nodeMap.set(n.id, n);
+
+        return {
+            nodes: data.nodes.map((n) => ({
+                ...n,
+                color: kindColor((n.kind || "neutral") as NodeKind),
+            })),
+            links: data.links.map((l) => {
+                const t = typeof l.target === 'string' ? nodeMap.get(l.target) : nodeMap.get((l.target as SankeyNode).id);
+                // If link color already set by backend, keep it. Else infer from target kind.
+                const inferred =
+                    t?.kind === "expense" ? "#ef4444" :
+                        t?.kind === "tax" ? "#f59e0b" :
+                            t?.kind === "profit" ? "#10b981" :
+                                "#60a5fa";
+
+                return { ...l, color: l.color || inferred };
+            }),
+        };
+    }, [data]);
+
+    // Responsive margins — give left side more room on desktop
+    // On mobile we *truncate* more and reduce margins to fit.
+    const isClient = typeof window !== "undefined";
+    const vw = isClient ? window.innerWidth : 1200;
+    const isMobile = vw < 640;
+
+    const margin = isMobile
+        ? { top: 24, right: 18, bottom: 24, left: 18 }
+        : { top: 28, right: 40, bottom: 28, left: 90 };
+
+    const labelMax = isMobile ? 12 : 18;
+
+    if (enriched.nodes.length === 0) return null;
 
     return (
-        <motion.div
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.5 }}
-            style={{ height }}
-            className="w-full relative"
-        >
+        <div style={{ height }}>
             <ResponsiveSankey
-                data={data}
-                margin={{ top: 20, right: 120, bottom: 20, left: 120 }}
+                data={enriched}
+                margin={margin}
                 align="justify"
-                colors={(node) => node.nodeColor || '#3b82f6'}
-                linkBlendMode="multiply"
-                nodeOpacity={0.85}
-                nodeHoverOthersOpacity={0.15}
-                nodeThickness={14}
-                nodeSpacing={24}
-                nodeBorderWidth={0}
-                nodeBorderRadius={3}
-                linkOpacity={0.4}
-                linkHoverOthersOpacity={0.1}
+                sort="auto"
+                // "Premium feel" geometry
+                nodeThickness={isMobile ? 12 : 16}
+                nodeSpacing={isMobile ? 12 : 16}
+                nodeBorderWidth={1}
+                nodeBorderColor={{ from: "color", modifiers: [["darker", 0.6]] }}
+                // Make links "flowy"
+                linkOpacity={0.35}
+                linkHoverOpacity={0.85}
+                linkContract={2}
                 enableLinkGradient={true}
+                linkBlendMode="screen"
+                // Labels
                 labelPosition="outside"
                 labelOrientation="horizontal"
-                labelPadding={16}
-                labelTextColor={isDark ? '#e4e4e7' : '#27272a'}
-                valueFormat={(value) => formatCurrency(value)}
+                labelPadding={10}
+                labelTextColor="#e4e4e7" // zinc-200
+                label={(node: any) => formatNodeLabel(String(node.id), labelMax)}
+                // Dark theme polish
                 theme={{
                     text: {
-                        fontSize: 12,
-                        fill: isDark ? '#e4e4e7' : '#27272a',
-                        fontFamily: 'inherit',
+                        fill: "#e4e4e7",
+                        fontSize: isMobile ? 10 : 12,
                     },
                     tooltip: {
                         container: {
-                            background: isDark ? '#18181b' : '#ffffff',
-                            color: isDark ? '#f4f4f5' : '#18181b',
-                            fontSize: 13,
-                            borderRadius: '8px',
-                            border: `1px solid ${isDark ? '#27272a' : '#e4e4e7'}`,
-                            boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)',
+                            background: "rgba(9, 9, 11, 0.92)",
+                            border: "1px solid rgba(63, 63, 70, 0.6)",
+                            borderRadius: "12px",
+                            boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
+                            color: "#e4e4e7",
                         },
                     },
+                    grid: { line: { stroke: "rgba(63,63,70,0.25)" } },
                 }}
-                // Custom link color mapping
-                // @ts-ignore - nivo typing can be strict
-                linkColor={(link: any) => {
-                    if (link.color) return link.color;
-                    if (link.source.id === 'Gross Profit' && link.target.id === 'Operating Expenses') return '#ef4444';
-                    return '#10b981';
-                }}
-                // Custom Node Rendering for clean badges
-                nodeTooltip={({ node }) => (
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 shadow-xl max-w-xs">
-                        <div className="flex items-center gap-2 mb-1">
-                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: node.color }}></div>
-                            <strong className="text-zinc-100">{node.id}</strong>
-                        </div>
-                        <div className="text-zinc-400 text-sm ml-5">
-                            Value: <span className="text-white font-medium">{formatCurrency(node.value)}</span>
-                        </div>
-                    </div>
-                )}
-                linkTooltip={({ link }) => {
-                    const isLoss = link.color === '#ef4444' || link.color === 'red';
+                // Tooltips (full names shown here)
+                nodeTooltip={({ node }) => {
+                    const id = String(node.id);
+                    const val = node.value || 0;
+                    const kind = (node as any).kind || "neutral";
+                    const icon = getKindIcon(kind);
+
                     return (
-                        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 shadow-xl flex items-center gap-3">
-                            <div className="flex flex-col items-end">
-                                <span className="text-xs text-zinc-500 truncate max-w-[120px]">{link.source.id}</span>
-                                <div className="w-16 h-1 mt-1 rounded-full bg-gradient-to-r from-zinc-700 to-transparent"></div>
+                        <div style={{ padding: 10 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                <span
+                                    style={{
+                                        width: 10,
+                                        height: 10,
+                                        borderRadius: 999,
+                                        background: (node as any).color,
+                                        display: "inline-block",
+                                    }}
+                                />
+                                <div style={{ fontWeight: 700, fontSize: 12 }}>{icon} {id}</div>
                             </div>
-                            <div className={`text-lg font-bold ${isLoss ? 'text-red-400' : 'text-emerald-400'}`}>
-                                {formatCurrency(link.value)}
+                            <div style={{ fontSize: 12, color: "#a1a1aa" }}>
+                                {String(kind).toUpperCase()}
                             </div>
-                            <div className="flex flex-col items-start">
-                                <span className="text-xs text-zinc-500 truncate max-w-[120px]">{link.target.id}</span>
-                                <div className="w-16 h-1 mt-1 rounded-full bg-gradient-to-l from-zinc-700 to-transparent"></div>
+                            <div style={{ fontWeight: 800, marginTop: 6 }}>
+                                {formatMoney(val)}
                             </div>
                         </div>
-                    )
+                    );
+                }}
+                linkTooltip={({ link }: any) => {
+                    let sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+                    let targetId = typeof link.target === 'string' ? link.target : link.target.id;
+                    const source = String(sourceId);
+                    const target = String(targetId);
+                    return (
+                        <div style={{ padding: 10 }}>
+                            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>
+                                {source} → {target}
+                            </div>
+                            <div style={{ fontWeight: 800 }}>{formatMoney(link.value)}</div>
+                        </div>
+                    );
                 }}
             />
-        </motion.div>
-    )
+        </div>
+    );
+}
+
+function formatMoney(v: number) {
+    const abs = Math.abs(v || 0);
+    if (abs >= 1e12) return `$${(v / 1e12).toFixed(2)}T`;
+    if (abs >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+    if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `$${(v / 1e3).toFixed(2)}K`;
+    return `$${(v || 0).toFixed(0)}`;
 }

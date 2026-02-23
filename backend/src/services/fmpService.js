@@ -189,11 +189,11 @@ const getSankeyData = async (symbol) => {
             };
 
             // Helper to add unique nodes
-            const addNode = (id, label) => {
+            const addNode = (id, kind = "neutral") => {
                 if (!output.nodes.find(n => n.id === id)) {
                     output.nodes.push({
                         id: id,
-                        nodeColor: 'hsl(210, 70%, 50%)' // default
+                        kind: kind // "segment" | "revenue" | "expense" | "profit" | "tax" | "neutral"
                     });
                 }
             };
@@ -212,7 +212,7 @@ const getSankeyData = async (symbol) => {
             };
 
             // 1. Revenue Sources -> Total Revenue
-            addNode('Total Revenue');
+            addNode('Total Revenue', 'revenue');
 
             let totalSegmentedRevenue = 0;
 
@@ -221,7 +221,7 @@ const getSankeyData = async (symbol) => {
                 for (const [segmentName, revenueValue] of Object.entries(segmentationData)) {
                     // Clean up extremely long segment names or map known ones
                     let cleanName = segmentName.replace(' Segment', '').trim();
-                    addNode(cleanName);
+                    addNode(cleanName, 'segment');
                     addLink(cleanName, 'Total Revenue', revenueValue, '#3b82f6'); // Blue for incoming revenue sources
                     totalSegmentedRevenue += revenueValue;
                 }
@@ -229,24 +229,24 @@ const getSankeyData = async (symbol) => {
                 // If segmented revenue doesn't perfectly match total revenue, make an "Other Revenue" bucket
                 const diff = incomeData.revenue - totalSegmentedRevenue;
                 if (diff > (incomeData.revenue * 0.05)) { // If discrepancy is > 5%
-                    addNode('Other Revenue');
+                    addNode('Other Revenue', 'revenue');
                     addLink('Other Revenue', 'Total Revenue', diff, '#3b82f6');
                 }
             } else {
                 // Fallback if no segmentation: Just have an abstract 'Sales' node feeding Revenue,
                 // so the graph has a starting point (Sankey needs roots)
-                addNode('Sales/Operations');
+                addNode('Sales/Operations', 'segment');
                 addLink('Sales/Operations', 'Total Revenue', incomeData.revenue, '#3b82f6');
             }
 
             // 2. Total Revenue -> Cost of Revenue & Gross Profit
-            addNode('Cost of Revenue');
-            addNode('Gross Profit');
+            addNode('Cost of Revenue', 'expense');
+            addNode('Gross Profit', 'profit');
             addLink('Total Revenue', 'Cost of Revenue', incomeData.costOfRevenue, '#ef4444'); // Red for expense
             addLink('Total Revenue', 'Gross Profit', incomeData.grossProfit, '#22c55e'); // Green for profit
 
             // 3. Gross Profit -> Operating Expenses & Operating Income
-            addNode('Operating Expenses');
+            addNode('Operating Expenses', 'expense');
 
             const opexTotal = Math.max(0, incomeData.operatingExpenses || 0);
             addLink('Gross Profit', 'Operating Expenses', opexTotal, '#ef4444');
@@ -257,35 +257,35 @@ const getSankeyData = async (symbol) => {
             const otherOpex = Math.max(0, opexTotal - (rd + sga));
 
             if (rd > 0) {
-                addNode('R&D');
+                addNode('R&D', 'expense');
                 addLink('Operating Expenses', 'R&D', rd, '#ef4444');
             }
             if (sga > 0) {
-                addNode('SG&A');
+                addNode('SG&A', 'expense');
                 addLink('Operating Expenses', 'SG&A', sga, '#ef4444');
             }
             if (otherOpex > 0) {
-                addNode('Other OpEx');
+                addNode('Other OpEx', 'expense');
                 addLink('Operating Expenses', 'Other OpEx', otherOpex, '#ef4444');
             }
 
             // Map the remaining Gross Profit to Operating Income
-            addNode('Operating Income');
+            addNode('Operating Income', 'profit');
             // Ensure operating income doesn't mathematically break the flow (FMP data can be weird)
             const opIncomeVal = Math.max(0, incomeData.operatingIncome);
             addLink('Gross Profit', 'Operating Income', opIncomeVal, '#22c55e');
 
             // 4. Operating Income (and Other Income) -> Income Before Tax
-            addNode('Income Before Tax');
+            addNode('Income Before Tax', 'profit');
 
             // Handling non-operating income/expenses (Interest, etc)
             const otherIncome = incomeData.totalOtherIncomeExpensesNet || 0;
             if (otherIncome < 0) {
-                addNode('Other/Interest Expense');
+                addNode('Other/Interest Expense', 'expense');
                 addLink('Operating Income', 'Other/Interest Expense', Math.abs(otherIncome), '#ef4444');
                 addLink('Operating Income', 'Income Before Tax', Math.max(0, incomeData.incomeBeforeTax), '#22c55e');
             } else if (otherIncome > 0) {
-                addNode('Other/Interest Income');
+                addNode('Other/Interest Income', 'revenue');
                 addLink('Other/Interest Income', 'Income Before Tax', otherIncome, '#22c55e');
                 addLink('Operating Income', 'Income Before Tax', opIncomeVal, '#22c55e');
             } else {
@@ -293,11 +293,11 @@ const getSankeyData = async (symbol) => {
             }
 
             // 5. Income Before Tax -> Taxes & Net Income
-            addNode('Net Income');
+            addNode('Net Income', 'profit');
 
             const taxes = incomeData.incomeTaxExpense || 0;
             if (taxes > 0) {
-                addNode('Taxes');
+                addNode('Taxes', 'tax');
                 addLink('Income Before Tax', 'Taxes', taxes, '#ef4444');
             }
 

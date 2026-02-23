@@ -126,7 +126,7 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                             {stockData ? stockData.name : currentSymbol}
                             <span className="text-zinc-500 text-lg">({currentSymbol})</span>
                         </h1>
-                        <p className="text-zinc-400 text-sm">Income Statement Cash Flow Analysis</p>
+                        <p className="text-zinc-400 text-sm">Income Statement Flow Analysis</p>
                     </div>
                 </div>
 
@@ -201,9 +201,12 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                             </div>
 
                             {/* The Sankey Chart */}
-                            <div className="p-4 bg-black/40 rounded-xl border border-zinc-800/50 overflow-x-auto">
-                                <div className="min-w-[800px]">
-                                    <SankeyChart data={sankeyData.sankey} height={600} />
+                            <div className="p-3 sm:p-4 bg-black/40 rounded-xl border border-zinc-800/50">
+                                {/* Only allow horizontal scroll on very narrow screens */}
+                                <div className="overflow-x-auto">
+                                    <div className="min-w-[640px] sm:min-w-0">
+                                        <SankeyChart data={sankeyData.sankey} height={typeof window !== 'undefined' && window.innerWidth < 640 ? 420 : 600} />
+                                    </div>
                                 </div>
                             </div>
                         </div>
