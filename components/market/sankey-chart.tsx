@@ -136,27 +136,6 @@ function SankeyTooltip({ title, value, color }: { title: string; value: string; 
     );
 }
 
-function layoutCards(nodes: any[], width: number, innerH: number, cardH: number, pad: number) {
-    const left = nodes.filter((n) => n.x < width * 0.5).sort((a, b) => a.y - b.y);
-    const right = nodes.filter((n) => n.x >= width * 0.5).sort((a, b) => a.y - b.y);
-
-    const place = (arr: any[]) => {
-        let cursor = pad;
-        const out = new Map<string, number>();
-        for (const n of arr) {
-            const id = String(n.id);
-            let top = n.y + n.height / 2 - cardH / 2;
-            top = Math.max(top, cursor);
-            top = Math.min(top, innerH - cardH - pad);
-            out.set(id, top);
-            cursor = top + cardH + 8;
-        }
-        return out;
-    };
-
-    return { L: place(left), R: place(right) };
-}
-
 export default function SankeyChart({
     data,
     height = 680,
@@ -236,63 +215,128 @@ export default function SankeyChart({
         return new Set(segs.slice(0, isMobile ? 4 : 8).map((n: any) => String(n.id)));
     }, [enriched, isMobile]);
 
+    const cardW = isMobile ? 190 : 220;
     const margin = isMobile
-        ? { top: 20, right: 60, bottom: 20, left: 60 }
-        : { top: 30, right: 320, bottom: 30, left: 180 };
+        ? { top: 54, right: 18, bottom: 24, left: 18 }
+        : { top: 54, right: cardW + 90, bottom: 36, left: cardW + 90 };
+
+    const totalRevenueNode = useMemo(() => {
+        const n: any = enriched.nodes.find((x: any) => String(x.id) === "Total Revenue");
+        return n;
+    }, [enriched]);
+    const totalRevenueValue = Number(totalRevenueNode?.displayValue ?? totalRevenueNode?.value ?? 0);
 
     const CardsLayer = (layerProps: any) => {
         const { nodes, width, height: innerH } = layerProps;
 
         const PAD = 12;
-        const cardW = isMobile ? 190 : 220;
+        const GAP = 8;
         const cardH = isMobile ? 44 : 56;
+        const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
 
-        const { L: leftY, R: rightY } = layoutCards(nodes, width, innerH, cardH, PAD);
+        type CardCandidate = {
+            id: string;
+            node: any;
+            side: "L" | "R";
+            x: number;
+            desiredY: number;
+            y: number;
+        };
+
+        const minX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
+
+        const candidates: CardCandidate[] = [];
+
+        for (const node of nodes) {
+            const id = String(node.id);
+            if (id === "Total Revenue") continue;
+
+            const kind: NodeKind = node.kind || "neutral";
+            const nx = Number(node.x);
+            const ny = Number(node.y);
+            const nw = Number(node.width);
+            const nh = Number(node.height);
+            if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nw) || !Number.isFinite(nh)) continue;
+
+            const nodeVal = Number(node.displayValue ?? node.value ?? 0);
+            const isSegment = kind === "segment";
+            const isSignificant = (nodeVal / totalRev) >= (isMobile ? 0.12 : 0.08);
+
+            const shouldShowCard =
+                !isMobile ||
+                keyNodes.has(id) ||
+                (isSegment && isSignificant && (isMobile ? topSegments.has(id) : true));
+
+            if (!shouldShowCard) continue;
+
+            const rawDepth =
+                (Number.isFinite(Number(node.depth)) ? Number(node.depth) : undefined) ??
+                (Number.isFinite(Number(node.layer)) ? Number(node.layer) : undefined);
+
+            const isFirstColumn =
+                rawDepth === 0 ||
+                Math.abs(nx - minX) < 2;
+
+            const side: "L" | "R" = isSegment || isFirstColumn ? "L" : "R";
+
+            const centerY = ny + nh / 2;
+            const desiredY = clamp(centerY - cardH / 2, PAD, innerH - cardH - PAD);
+
+            let x = side === "L" ? nx - (cardW + 18) : nx + nw + 18;
+            if (!isMobile) {
+                x = clamp(x, -cardW - 40, width + 40);
+            }
+
+            candidates.push({ id, node, side, x, desiredY, y: desiredY });
+        }
+
+        const resolveSide = (side: "L" | "R") => {
+            const arr = candidates.filter((c) => c.side === side).sort((a, b) => a.desiredY - b.desiredY);
+
+            let cursor = PAD;
+            for (const c of arr) {
+                c.y = Math.max(c.desiredY, cursor);
+                c.y = Math.min(c.y, innerH - cardH - PAD);
+                cursor = c.y + cardH + GAP;
+            }
+
+            if (arr.length) {
+                const last = arr[arr.length - 1];
+                const overflow = last.y + cardH + PAD - innerH;
+                if (overflow > 0) {
+                    for (let i = arr.length - 1; i >= 0; i--) {
+                        arr[i].y = clamp(arr[i].y - overflow, PAD, innerH - cardH - PAD);
+                        if (i > 0) {
+                            arr[i - 1].y = Math.min(arr[i - 1].y, arr[i].y - cardH - GAP);
+                            arr[i - 1].y = clamp(arr[i - 1].y, PAD, innerH - cardH - PAD);
+                        }
+                    }
+                }
+            }
+        };
+
+        resolveSide("L");
+        resolveSide("R");
 
         return (
             <g>
-                {nodes.map((node: any) => {
-                    const kind: NodeKind = node.kind || "neutral";
+                {candidates.map(({ id, node, side, x, y }) => {
                     const color = node.color || PALETTE.neutral;
 
-                    const isSegment = kind === "segment";
-                    const nodeVal = Number(node.displayValue ?? node.value ?? 0);
-                    const isSignificant = (nodeVal / totalRev) >= (isMobile ? 0.12 : 0.08);
-
-                    const shouldShowCard =
-                        !isMobile ||
-                        keyNodes.has(String(node.id)) ||
-                        (isSegment && isSignificant && (isMobile ? topSegments.has(String(node.id)) : true));
-
-                    if (!shouldShowCard) return null;
-
-                    const id = String(node.id);
                     const nx = Number(node.x);
                     const ny = Number(node.y);
                     const nw = Number(node.width);
                     const nh = Number(node.height);
 
-                    if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nw) || !Number.isFinite(nh)) {
-                        return null;
-                    }
+                    const anchorX = side === "L" ? x + cardW : x;
+                    const anchorY = y + cardH / 2;
+                    const nodeCX = nx + nw / 2;
+                    const nodeCY = ny + nh / 2;
 
                     const labelMax = isMobile ? 14 : 22;
                     const label = truncate(id, labelMax);
                     const value = node.displayValue ?? node.value ?? 0;
-
-                    const isLeftMost = nx < width * 0.5;
-                    let x = isLeftMost ? nx - (cardW + 15) : nx + nw + 15;
-                    const layoutY = isLeftMost ? leftY.get(id) : rightY.get(id);
-                    const y = layoutY ?? (ny + nh / 2 - cardH / 2);
-
-                    if (x < PAD) x = nx + nw + 15;
-                    if (x + cardW > width - PAD) x = nx - (cardW + 15);
-                    x = Math.max(PAD, Math.min(x, width - cardW - PAD));
-
-                    const showLogo = id === "Total Revenue" && symbol;
-                    const iconHref = showLogo
-                        ? `https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`
-                        : ICONS[id];
+                    const iconHref = ICONS[id];
 
                     return (
                         <g key={id}>
@@ -307,6 +351,14 @@ export default function SankeyChart({
                                 stroke={color}
                                 strokeOpacity={0.25}
                                 strokeWidth={4}
+                            />
+
+                            <path
+                                d={`M ${nodeCX} ${nodeCY} C ${nodeCX + (side === "L" ? -40 : 40)} ${nodeCY}, ${anchorX + (side === "L" ? 40 : -40)} ${anchorY}, ${anchorX} ${anchorY}`}
+                                fill="none"
+                                stroke={color}
+                                strokeOpacity={0.35}
+                                strokeWidth={1.25}
                             />
 
                             <g transform={`translate(${x}, ${y})`}>
@@ -357,6 +409,41 @@ export default function SankeyChart({
     return (
         <div className="sankeyWrap relative w-full rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
             <div className="absolute inset-0 rounded-2xl" style={{ background: PALETTE.background }} />
+
+            {symbol && (
+                <div className="absolute left-4 top-4 z-20">
+                    <div
+                        style={{
+                            width: isMobile ? 240 : 280,
+                            borderRadius: 14,
+                            background: PALETTE.panel,
+                            border: `1px solid ${PALETTE.border}`,
+                            padding: "10px 12px",
+                            display: "flex",
+                            gap: 10,
+                            alignItems: "center",
+                            boxShadow: "0 10px 30px rgba(0,0,0,0.55)",
+                        }}
+                    >
+                        <img
+                            src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                            alt={symbol}
+                            style={{ width: 32, height: 32, borderRadius: 8, objectFit: "contain" }}
+                            onError={(e) => {
+                                const target = e.target as HTMLImageElement;
+                                target.style.display = "none";
+                            }}
+                        />
+                        <div style={{ lineHeight: 1.1 }}>
+                            <div style={{ color: PALETTE.text, fontWeight: 800, fontSize: 13 }}>Total Revenue</div>
+                            <div style={{ color: PALETTE.subtext, fontWeight: 600, fontSize: 13 }}>
+                                {formatMoney(totalRevenueValue)}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             <div className="relative w-full h-full rounded-2xl">
             <TransformWrapper
                 minScale={0.55}
