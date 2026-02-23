@@ -80,12 +80,26 @@ export default function SankeyChart({
     symbol?: string;
 }) {
     const [isMobile, setIsMobile] = useState(false);
+    const [isTablet, setIsTablet] = useState(false);
+    const [windowWidth, setWindowWidth] = useState(0);
     const [isMounted, setIsMounted] = useState(false);
     const chartRef = useRef<ReactECharts>(null);
 
+    // Responsive height
+    const chartHeight = useMemo(() => {
+        if (isMobile) return Math.max(propHeight, 500);
+        if (isTablet) return Math.max(propHeight, 600);
+        return propHeight;
+    }, [propHeight, isMobile, isTablet]);
+
     useEffect(() => {
         setIsMounted(true);
-        const onResize = () => setIsMobile(window.innerWidth < 640);
+        const onResize = () => {
+            const width = window.innerWidth;
+            setWindowWidth(width);
+            setIsMobile(width < 480);
+            setIsTablet(width < 768 && width >= 480);
+        };
         onResize();
         window.addEventListener("resize", onResize);
         return () => window.removeEventListener("resize", onResize);
@@ -141,6 +155,14 @@ export default function SankeyChart({
             },
         }));
 
+        // Responsive margins
+        const topMargin = isMobile ? 80 : isTablet ? 70 : 60;
+        const bottomMargin = isMobile ? 20 : isTablet ? 30 : 40;
+        const sideMargin = isMobile ? 60 : isTablet ? 100 : 200;
+        const nodeThickness = isMobile ? 12 : isTablet ? 16 : 20;
+        const nodeSpacing = isMobile ? 14 : isTablet ? 16 : 16;
+        const labelFontSize = isMobile ? 9 : isTablet ? 10 : 12;
+
         return {
             backgroundColor: "transparent",
             tooltip: {
@@ -152,7 +174,7 @@ export default function SankeyChart({
                 padding: [10, 14],
                 textStyle: {
                     color: PALETTE.text,
-                    fontSize: 13,
+                    fontSize: isMobile ? 11 : 13,
                 },
                 formatter: (params: any) => {
                     if (params.dataType === "edge") {
@@ -177,22 +199,24 @@ export default function SankeyChart({
                 },
                 data: nodes,
                 links: links,
-                top: isMobile ? 20 : 60,
-                bottom: isMobile ? 20 : 40,
-                left: isMobile ? 10 : 200,
-                right: isMobile ? 10 : 200,
-                nodeWidth: isMobile ? 14 : 20,
-                nodeGap: isMobile ? 18 : 16,
+                top: topMargin,
+                bottom: bottomMargin,
+                left: sideMargin,
+                right: sideMargin,
+                nodeWidth: nodeThickness,
+                nodeGap: nodeSpacing,
                 layoutIterations: 32,
                 draggable: false,
                 label: {
                     show: true,
                     color: PALETTE.text,
-                    fontSize: isMobile ? 10 : 12,
-                    fontWeight: 600,
+                    fontSize: labelFontSize,
+                    fontWeight: 500,
                     formatter: (params: any) => {
                         const name = params.name;
                         const value = params.value;
+                        // On mobile, show only name to prevent overflow
+                        if (isMobile) return name;
                         if (!value) return name;
                         return `${name}\n${formatMoney(value)}`;
                     },
@@ -213,7 +237,7 @@ export default function SankeyChart({
                 right: 0,
             },
         };
-    }, [enriched, isMobile]);
+    }, [enriched, isMobile, isTablet]);
 
     // Export to PNG
     const handleExportPng = useCallback(() => {
@@ -234,18 +258,18 @@ export default function SankeyChart({
         document.body.removeChild(link);
     }, [symbol]);
 
-    if (!isMounted) return <div style={{ height: propHeight }} />;
+    if (!isMounted) return <div style={{ height: chartHeight }} />;
 
     return (
         <div 
             className="relative w-full overflow-hidden rounded-2xl border border-white/5 shadow-2xl" 
-            style={{ height: propHeight, background: PALETTE.background }}
+            style={{ height: chartHeight, background: PALETTE.background }}
         >
             {/* Revenue badge */}
             {symbol && (
-                <div className="absolute left-3 top-3 z-20">
+                <div className={`absolute z-20 ${isMobile ? "left-2 top-16" : "left-3 top-3"}`}>
                     <div style={{
-                        width: isMobile ? 180 : 220,
+                        width: isMobile ? 150 : isTablet ? 180 : 220,
                         borderRadius: 10,
                         background: PALETTE.panel,
                         border: `1px solid ${PALETTE.border}`,
@@ -290,7 +314,7 @@ export default function SankeyChart({
                 option={chartOption}
                 style={{
                     width: "100%",
-                    height: "100%",
+                    height: chartHeight,
                 }}
                 opts={{
                     renderer: "canvas",
