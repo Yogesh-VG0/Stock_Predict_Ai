@@ -40,10 +40,25 @@ const NEON = {
     border: "rgba(255,255,255,0.10)",
 };
 
-function kindColor(kind: NodeKind) {
+const SEGMENT_PALETTE = [
+    "#2EA0FF", // neon blue
+    "#FFD54A", // neon yellow
+    "#A7B0C0", // gray
+    "#9B5CFF", // neon purple
+    "#FF7A1A", // neon orange
+    "#00E5FF", // cyan
+];
+
+function hashColor(id: string) {
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return SEGMENT_PALETTE[h % SEGMENT_PALETTE.length];
+}
+
+function kindColor(kind: NodeKind, id?: string) {
     switch (kind) {
         case "segment":
-            return NEON.gray;
+            return id ? hashColor(id) : NEON.gray;
         case "revenue":
             return NEON.blue;
         case "profit":
@@ -89,7 +104,7 @@ export default function SankeyChart({
         return {
             nodes: data.nodes.map((n) => ({
                 ...n,
-                color: kindColor((n.kind || "neutral") as NodeKind),
+                color: kindColor((n.kind || "neutral") as NodeKind, n.id),
             })),
             links: data.links.map((l) => {
                 const target = typeof l.target === "string" ? nodeMap.get(l.target) : nodeMap.get((l.target as SankeyNode).id);
@@ -127,6 +142,24 @@ export default function SankeyChart({
         const cardX = isLeft ? x - (cardW + 10) : x + w + 10;
         const cardY = y + h / 2 - cardH / 2;
 
+        // Clamp cards so they never go off-screen
+        const PAD = 8;
+
+        // Estimate canvas width: Nivo uses innerWidth (chart width - margins).
+        // We can approximate with viewport width here; it’s fine because we can zoom/pan anyway.
+        const viewportW = typeof window !== "undefined" ? window.innerWidth : 1200;
+
+        // If the card would go off the left edge, place it to the RIGHT of the node instead.
+        let safeCardX = cardX;
+        if (safeCardX < PAD) safeCardX = x + w + 10;
+
+        // If the card would go off the right edge, place it to the LEFT of the node instead.
+        if (safeCardX + cardW > viewportW - PAD) safeCardX = x - (cardW + 10);
+
+        // Clamp vertical too
+        let safeCardY = Math.max(PAD, cardY);
+        safeCardY = Math.min(safeCardY, height - cardH - PAD);
+
         const showLogo = String(node.id).toLowerCase() === "total revenue" && symbol;
 
         const icon =
@@ -138,6 +171,17 @@ export default function SankeyChart({
                                 "•";
 
         const value = (node as any).displayValue ?? node.value ?? 0;
+
+        const keyNodes = new Set([
+            "Total Revenue",
+            "Gross Profit",
+            "Operating Expenses",
+            "Operating Income",
+            "Net Income",
+            "Income Before Tax",
+        ]);
+
+        const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || kind === "segment";
 
         return (
             <g>
@@ -168,57 +212,59 @@ export default function SankeyChart({
                 />
 
                 {/* Label card */}
-                <g transform={`translate(${cardX}, ${cardY})`}>
-                    <rect
-                        width={cardW}
-                        height={cardH}
-                        rx={10}
-                        ry={10}
-                        fill={NEON.panel}
-                        stroke={NEON.border}
-                        strokeWidth={1}
-                    />
-
-                    {/* left accent */}
-                    <rect x={10} y={cardH / 2 - 12} width={4} height={24} rx={2} fill={color} opacity={0.95} />
-
-                    {/* icon / logo */}
-                    {showLogo ? (
-                        <image
-                            href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-                            x={22}
-                            y={cardH / 2 - 13}
-                            width={26}
-                            height={26}
-                            opacity={0.95}
-                            preserveAspectRatio="xMidYMid meet"
-                            onError={(e) => {
-                                // Ignore if image fails to load
-                                (e.target as any).href.baseVal = "";
-                            }}
+                {shouldShowCard && (
+                    <g transform={`translate(${safeCardX}, ${safeCardY})`}>
+                        <rect
+                            width={cardW}
+                            height={cardH}
+                            rx={10}
+                            ry={10}
+                            fill={NEON.panel}
+                            stroke={NEON.border}
+                            strokeWidth={1}
                         />
-                    ) : (
-                        <text x={24} y={cardH / 2 + 5} fontSize={14} fill="#E6EAF2">
-                            {icon}
+
+                        {/* left accent */}
+                        <rect x={10} y={cardH / 2 - 12} width={4} height={24} rx={2} fill={color} opacity={0.95} />
+
+                        {/* icon / logo */}
+                        {showLogo ? (
+                            <image
+                                href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                                x={22}
+                                y={cardH / 2 - 13}
+                                width={26}
+                                height={26}
+                                opacity={0.95}
+                                preserveAspectRatio="xMidYMid meet"
+                                onError={(e) => {
+                                    // Ignore if image fails to load
+                                    (e.target as any).href.baseVal = "";
+                                }}
+                            />
+                        ) : (
+                            <text x={24} y={cardH / 2 + 5} fontSize={14} fill="#E6EAF2">
+                                {icon}
+                            </text>
+                        )}
+
+                        {/* label */}
+                        <text x={50} y={cardH / 2 - 2} fontSize={12} fill="#E6EAF2" fontWeight={700}>
+                            {label}
                         </text>
-                    )}
 
-                    {/* label */}
-                    <text x={50} y={cardH / 2 - 2} fontSize={12} fill="#E6EAF2" fontWeight={700}>
-                        {label}
-                    </text>
-
-                    {/* value */}
-                    <text x={50} y={cardH / 2 + 14} fontSize={12} fill="#A7B0C0" fontWeight={600}>
-                        {formatMoney(Number(value))}
-                    </text>
-                </g>
+                        {/* value */}
+                        <text x={50} y={cardH / 2 + 14} fontSize={12} fill="#A7B0C0" fontWeight={600}>
+                            {formatMoney(Number(value))}
+                        </text>
+                    </g>
+                )}
             </g>
         );
     };
 
     // Make links thicker & "solid neon"
-    const linkOpacity = isMobile ? 0.45 : 0.35;
+    const linkOpacity = isMobile ? 0.65 : 0.55;
 
     return (
         <div className="relative w-full overflow-hidden" style={{ height }}>
@@ -278,7 +324,7 @@ export default function SankeyChart({
                                             linkHoverOpacity={0.85}
                                             linkContract={isMobile ? 1 : 2}
                                             enableLinkGradient={true}
-                                            linkBlendMode="screen"
+                                            linkBlendMode="normal"
                                             // We draw labels ourselves via nodeComponent, so hide default labels
                                             labelPosition="outside"
                                             labelOrientation="horizontal"
