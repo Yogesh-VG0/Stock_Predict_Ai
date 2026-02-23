@@ -27,6 +27,8 @@
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",
     "date-fns": "^4.1.0",
+    "echarts": "^6.0.0",
+    "echarts-for-react": "^3.0.6",
     "framer-motion": "latest",
     "lucide-react": "^0.454.0",
     "next": "15.2.8",
