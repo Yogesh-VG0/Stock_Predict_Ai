@@ -144,10 +144,11 @@ function layoutCards(nodes: any[], width: number, innerH: number, cardH: number,
         let cursor = pad;
         const out = new Map<string, number>();
         for (const n of arr) {
+            const id = String(n.id);
             let top = n.y + n.height / 2 - cardH / 2;
             top = Math.max(top, cursor);
             top = Math.min(top, innerH - cardH - pad);
-            out.set(n.id, top);
+            out.set(id, top);
             cursor = top + cardH + 8;
         }
         return out;
@@ -194,23 +195,24 @@ export default function SankeyChart({
     const enriched = useMemo(() => {
         // 1) Compute enriched nodes (with inferred kind)
         const enrichedNodes = data.nodes.map((n) => {
+            const id = String(n.id);
             let k = n.kind as NodeKind | undefined;
             if (!k) {
                 const isSourceOfRevenue = data.links.some(
-                    (l) => String(l.source) === n.id && String(l.target) === "Total Revenue"
+                    (l) => String(l.source) === id && String(l.target) === "Total Revenue"
                 );
-                k = isSourceOfRevenue ? "segment" : inferKind(n.id);
+                k = isSourceOfRevenue ? "segment" : inferKind(id);
             }
             return {
                 ...n,
                 kind: k,
-                color: kindColor(k, n.id),
+                color: kindColor(k, id),
             };
         });
 
-        // 2) Build map from enriched nodes
+        // 2) Build map from enriched nodes (normalize keys for reliable lookup)
         const nodeMap = new Map<string, (typeof enrichedNodes)[number]>();
-        enrichedNodes.forEach((n) => nodeMap.set(n.id, n));
+        enrichedNodes.forEach((n) => nodeMap.set(String(n.id), n));
 
         // 3) Color links using enriched target kind
         const enrichedLinks = data.links.map((l) => {
@@ -223,8 +225,9 @@ export default function SankeyChart({
     }, [data]);
 
     const totalRev = useMemo(() => {
-        const revNode: any = enriched.nodes.find((n) => n.id === "Total Revenue");
-        return Number(revNode?.displayValue ?? revNode?.value ?? 1);
+        const revNode: any = enriched.nodes.find((n) => String(n.id) === "Total Revenue");
+        const v = Number(revNode?.displayValue ?? revNode?.value ?? 0);
+        return Number.isFinite(v) && v > 0 ? v : 1;
     }, [enriched]);
 
     const topSegments = useMemo(() => {
@@ -259,35 +262,45 @@ export default function SankeyChart({
                     const shouldShowCard =
                         !isMobile ||
                         keyNodes.has(String(node.id)) ||
-                        (isSegment && isSignificant && topSegments.has(String(node.id)));
+                        (isSegment && isSignificant && (isMobile ? topSegments.has(String(node.id)) : true));
 
                     if (!shouldShowCard) return null;
 
+                    const id = String(node.id);
+                    const nx = Number(node.x);
+                    const ny = Number(node.y);
+                    const nw = Number(node.width);
+                    const nh = Number(node.height);
+
+                    if (!Number.isFinite(nx) || !Number.isFinite(ny) || !Number.isFinite(nw) || !Number.isFinite(nh)) {
+                        return null;
+                    }
+
                     const labelMax = isMobile ? 14 : 22;
-                    const label = truncate(String(node.id), labelMax);
+                    const label = truncate(id, labelMax);
                     const value = node.displayValue ?? node.value ?? 0;
 
-                    const isLeftMost = node.x < width * 0.5;
-                    let x = isLeftMost ? node.x - (cardW + 15) : node.x + node.width + 15;
-                    const layoutY = isLeftMost ? leftY.get(node.id) : rightY.get(node.id);
-                    const y = layoutY ?? node.y + node.height / 2 - cardH / 2;
+                    const isLeftMost = nx < width * 0.5;
+                    let x = isLeftMost ? nx - (cardW + 15) : nx + nw + 15;
+                    const layoutY = isLeftMost ? leftY.get(id) : rightY.get(id);
+                    const y = layoutY ?? (ny + nh / 2 - cardH / 2);
 
-                    if (x < PAD) x = node.x + node.width + 15;
-                    if (x + cardW > width - PAD) x = node.x - (cardW + 15);
+                    if (x < PAD) x = nx + nw + 15;
+                    if (x + cardW > width - PAD) x = nx - (cardW + 15);
                     x = Math.max(PAD, Math.min(x, width - cardW - PAD));
 
-                    const showLogo = String(node.id) === "Total Revenue" && symbol;
+                    const showLogo = id === "Total Revenue" && symbol;
                     const iconHref = showLogo
                         ? `https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`
-                        : ICONS[String(node.id)];
+                        : ICONS[id];
 
                     return (
-                        <g key={node.id}>
+                        <g key={id}>
                             <rect
-                                x={node.x - 2}
-                                y={node.y - 2}
-                                width={node.width + 4}
-                                height={node.height + 4}
+                                x={nx - 2}
+                                y={ny - 2}
+                                width={nw + 4}
+                                height={nh + 4}
                                 rx={6}
                                 ry={6}
                                 fill="none"
@@ -342,7 +355,7 @@ export default function SankeyChart({
     const linkColorFn = (link: any) => link.color;
 
     return (
-        <div className="relative w-full rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
+        <div className="sankeyWrap relative w-full rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
             <div className="absolute inset-0 rounded-2xl" style={{ background: PALETTE.background }} />
             <div className="relative w-full h-full rounded-2xl">
             <TransformWrapper
@@ -350,7 +363,7 @@ export default function SankeyChart({
                 maxScale={3}
                 initialScale={isMobile ? 1.05 : 1}
                 initialPositionX={isMobile ? -140 : 0}
-                initialPositionY={isMobile ? -10 : 0}
+                initialPositionY={0}
                 centerOnInit={!isMobile}
                 limitToBounds={false}
                 panning={{ excluded: [] }}
@@ -378,10 +391,10 @@ export default function SankeyChart({
                         </div>
 
                         <TransformComponent
-                            wrapperStyle={{ width: "100%", height }}
-                            contentStyle={{ width: canvasWidth, height }}
+                            wrapperStyle={{ width: "100%", height, overflow: "visible" }}
+                            contentStyle={{ width: canvasWidth, height, overflow: "visible" }}
                         >
-                            <div style={{ width: canvasWidth, height }}>
+                            <div style={{ width: canvasWidth, height, overflow: "visible" }}>
                                 <ResponsiveSankey
                                     {...({
                                         data: enriched,
@@ -399,18 +412,18 @@ export default function SankeyChart({
                                         linkContract: isMobile ? 1 : 3,
                                         enableLinkGradient: false,
                                         linkBlendMode: "normal" as const,
-                                        nodeTooltip: (n: any) => (
+                                        nodeTooltip: ({ node }: any) => (
                                             <SankeyTooltip
-                                                title={String(n.id)}
-                                                value={formatMoney(Number(n.value ?? n.displayValue ?? 0))}
-                                                color={n.color || PALETTE.neutral}
+                                                title={String(node?.id ?? node?.label ?? "Unknown")}
+                                                value={formatMoney(Number(node.value ?? node.displayValue ?? 0))}
+                                                color={node.color || PALETTE.neutral}
                                             />
                                         ),
-                                        linkTooltip: (l: any) => (
+                                        linkTooltip: ({ link }: any) => (
                                             <SankeyTooltip
-                                                title={`${l.source?.id ?? l.source} → ${l.target?.id ?? l.target}`}
-                                                value={formatMoney(Number(l.value ?? 0))}
-                                                color={l.color || PALETTE.neutral}
+                                                title={`${link?.source?.id ?? link?.source ?? "?"} → ${link?.target?.id ?? link?.target ?? "?"}`}
+                                                value={formatMoney(Number(link.value ?? 0))}
+                                                color={link.color || PALETTE.neutral}
                                             />
                                         ),
                                         nodeLabel: () => "",

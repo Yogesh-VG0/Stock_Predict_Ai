@@ -188,6 +188,17 @@ const getSankeyData = async (symbol) => {
                 return Number.isFinite(n) ? n : 0;
             };
 
+            const revenueTotal = Math.max(0, toNum(incomeData.revenue));
+            let costOfRevenue = Math.max(0, toNum(incomeData.costOfRevenue));
+            let grossProfit = Math.max(0, toNum(incomeData.grossProfit));
+
+            if (grossProfit <= 0 && revenueTotal > 0 && costOfRevenue > 0) {
+                grossProfit = Math.max(0, revenueTotal - costOfRevenue);
+            }
+            if (costOfRevenue <= 0 && revenueTotal > 0 && grossProfit > 0) {
+                costOfRevenue = Math.max(0, revenueTotal - grossProfit);
+            }
+
             const output = {
                 nodes: [],
                 links: []
@@ -232,7 +243,6 @@ const getSankeyData = async (symbol) => {
                     totalSegmentedRevenue += segVal;
                 }
 
-                const revenueTotal = toNum(incomeData.revenue);
                 const diff = revenueTotal - totalSegmentedRevenue;
                 if (diff > revenueTotal * 0.05) {
                     addNode('Other Revenue', 'revenue');
@@ -240,14 +250,14 @@ const getSankeyData = async (symbol) => {
                 }
             } else {
                 addNode('Sales/Operations', 'segment');
-                addLink('Sales/Operations', 'Total Revenue', toNum(incomeData.revenue), '#3b82f6');
+                addLink('Sales/Operations', 'Total Revenue', revenueTotal, '#3b82f6');
             }
 
             // 2. Total Revenue -> Cost of Revenue & Gross Profit
             addNode('Cost of Revenue', 'expense');
             addNode('Gross Profit', 'profit');
-            addLink('Total Revenue', 'Cost of Revenue', incomeData.costOfRevenue, '#ef4444'); // Red for expense
-            addLink('Total Revenue', 'Gross Profit', incomeData.grossProfit, '#22c55e'); // Green for profit
+            addLink('Total Revenue', 'Cost of Revenue', costOfRevenue, '#ef4444');
+            addLink('Total Revenue', 'Gross Profit', grossProfit, '#22c55e');
 
             // 3. Gross Profit -> Operating Expenses & Operating Income
             addNode('Operating Expenses', 'expense');
@@ -274,7 +284,7 @@ const getSankeyData = async (symbol) => {
 
             // Map the remaining Gross Profit to Operating Income
             addNode('Operating Income', 'profit');
-            const grossProfitVal = Math.max(0, toNum(incomeData.grossProfit));
+            const grossProfitVal = grossProfit;
             const opIncomeValReported = Math.max(0, toNum(incomeData.operatingIncome));
             const opIncomeVal = Math.min(opIncomeValReported, Math.max(0, grossProfitVal - opexTotal));
             addLink('Gross Profit', 'Operating Income', opIncomeVal, '#22c55e');
@@ -312,11 +322,9 @@ const getSankeyData = async (symbol) => {
             const netIncomeVal = Math.max(0, toNum(incomeData.netIncome));
             addLink('Income Before Tax', 'Net Income', Math.min(netIncomeVal, ibtReported || netIncomeVal), '#22c55e');
 
-            const revenue = toNum(incomeData.revenue);
-            const grossProfit = toNum(incomeData.grossProfit);
             let grossProfitMargin = toNum(incomeData.grossProfitRatio);
-            if (grossProfitMargin <= 0 && revenue > 0 && grossProfit > 0) {
-                grossProfitMargin = grossProfit / revenue;
+            if (grossProfitMargin <= 0 && revenueTotal > 0 && grossProfit > 0) {
+                grossProfitMargin = grossProfit / revenueTotal;
             }
             const netIncome = toNum(incomeData.netIncome);
 
@@ -334,7 +342,7 @@ const getSankeyData = async (symbol) => {
 
             const finalData = {
                 financials: {
-                    revenue,
+                    revenue: revenueTotal,
                     grossProfit,
                     grossProfitMargin,
                     netIncome,

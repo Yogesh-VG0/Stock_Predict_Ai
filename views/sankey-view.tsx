@@ -102,27 +102,21 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                 </form>
 
                 <div className="flex flex-wrap gap-1.5 sm:gap-2">
-                    {PRESET_TICKERS.map((ticker) => {
-                        const available = FMP_FREE_SYMBOLS.has(ticker)
-                        return (
-                            <button
-                                key={ticker}
-                                type="button"
-                                disabled={!available}
-                                onClick={() => available && setCurrentSymbol(ticker)}
-                                className={cn(
-                                    "flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap",
-                                    available
-                                        ? currentSymbol === ticker
-                                            ? "bg-emerald-500 text-black"
-                                            : "bg-zinc-800 text-white hover:bg-zinc-700"
-                                        : "bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-800"
-                                )}
-                            >
-                                {ticker}
-                            </button>
-                        )
-                    })}
+                    {trackedStocks.map((ticker) => (
+                        <button
+                            key={ticker}
+                            type="button"
+                            onClick={() => setCurrentSymbol(ticker)}
+                            className={cn(
+                                "flex items-center gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-md text-xs sm:text-sm font-medium transition-colors whitespace-nowrap",
+                                currentSymbol === ticker
+                                    ? "bg-emerald-500 text-black"
+                                    : "bg-zinc-800 text-white hover:bg-zinc-700"
+                            )}
+                        >
+                            {ticker}
+                        </button>
+                    ))}
                 </div>
             </motion.div>
 

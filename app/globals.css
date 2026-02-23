@@ -127,3 +127,15 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #52525b;
 }
+
+/* Sankey chart: prevent SVG and pan/zoom wrapper from clipping cards */
+.sankeyWrap {
+  overflow: visible !important;
+}
+.sankeyWrap svg {
+  overflow: visible !important;
+}
+.sankeyWrap .react-transform-wrapper,
+.sankeyWrap .react-transform-component {
+  overflow: visible !important;
+}
