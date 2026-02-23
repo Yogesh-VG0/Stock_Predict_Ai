@@ -85,9 +85,18 @@ export default function SankeyChart({
     const [isMounted, setIsMounted] = useState(false);
     const chartRef = useRef<ReactECharts>(null);
 
+    // On mobile, give the chart a generous fixed width so it can breathe.
+    // The outer container will scroll horizontally.
+    const mobileChartWidth = useMemo(() => {
+        if (!isMobile) return undefined; // let it fill 100%
+        const nodeCount = data?.nodes?.length ?? 0;
+        // Base 600px, scale up with nodes
+        return Math.max(700, Math.min(1100, nodeCount * 70));
+    }, [isMobile, data?.nodes?.length]);
+
     // Responsive height
     const chartHeight = useMemo(() => {
-        if (isMobile) return Math.max(propHeight, 500);
+        if (isMobile) return Math.max(propHeight, 560);
         if (isTablet) return Math.max(propHeight, 600);
         return propHeight;
     }, [propHeight, isMobile, isTablet]);
@@ -155,13 +164,13 @@ export default function SankeyChart({
             },
         }));
 
-        // Responsive margins
-        const topMargin = isMobile ? 80 : isTablet ? 70 : 60;
+        // Responsive margins — mobile uses wider canvas (scrollable), so we can be generous
+        const topMargin = isMobile ? 55 : isTablet ? 70 : 60;
         const bottomMargin = isMobile ? 20 : isTablet ? 30 : 40;
-        const sideMargin = isMobile ? 60 : isTablet ? 100 : 200;
-        const nodeThickness = isMobile ? 12 : isTablet ? 16 : 20;
-        const nodeSpacing = isMobile ? 14 : isTablet ? 16 : 16;
-        const labelFontSize = isMobile ? 9 : isTablet ? 10 : 12;
+        const sideMargin = isMobile ? 90 : isTablet ? 100 : 200;
+        const nodeThickness = isMobile ? 14 : isTablet ? 16 : 20;
+        const nodeSpacing = isMobile ? 16 : isTablet ? 16 : 16;
+        const labelFontSize = isMobile ? 10 : isTablet ? 10 : 12;
 
         return {
             backgroundColor: "transparent",
@@ -213,12 +222,21 @@ export default function SankeyChart({
                     fontSize: labelFontSize,
                     fontWeight: 500,
                     formatter: (params: any) => {
-                        const name = params.name;
+                        const name = params.name as string;
                         const value = params.value;
-                        // On mobile, show only name to prevent overflow
-                        if (isMobile) return name;
-                        if (!value) return name;
-                        return `${name}\n${formatMoney(value)}`;
+                        // Wrap long labels: if more than 3 words, split into lines of ~3 words
+                        const words = name.split(/\s+/);
+                        let wrappedName = name;
+                        if (words.length > 3) {
+                            const lines: string[] = [];
+                            for (let i = 0; i < words.length; i += 3) {
+                                lines.push(words.slice(i, i + 3).join(" "));
+                            }
+                            wrappedName = lines.join("\n");
+                        }
+                        if (isMobile) return wrappedName;
+                        if (!value) return wrappedName;
+                        return `${wrappedName}\n${formatMoney(value)}`;
                     },
                 },
                 lineStyle: {
@@ -260,66 +278,92 @@ export default function SankeyChart({
 
     if (!isMounted) return <div style={{ height: chartHeight }} />;
 
+    // Inner chart width: on mobile use the computed wider width, otherwise 100%
+    const innerWidth = isMobile && mobileChartWidth ? mobileChartWidth : undefined;
+
     return (
-        <div 
-            className="relative w-full overflow-hidden rounded-2xl border border-white/5 shadow-2xl" 
-            style={{ height: chartHeight, background: PALETTE.background }}
-        >
-            {/* Revenue badge */}
-            {symbol && (
-                <div className={`absolute z-20 ${isMobile ? "left-2 top-16" : "left-3 top-3"}`}>
-                    <div style={{
-                        width: isMobile ? 150 : isTablet ? 180 : 220,
-                        borderRadius: 10,
-                        background: PALETTE.panel,
-                        border: `1px solid ${PALETTE.border}`,
-                        padding: "7px 10px",
-                        display: "flex",
-                        gap: 8,
-                        alignItems: "center",
-                        boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
-                    }}>
-                        <img
-                            src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-                            alt={symbol}
-                            style={{ width: 26, height: 26, borderRadius: 5, objectFit: "contain" }}
-                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                        />
-                        <div style={{ lineHeight: 1.1 }}>
-                            <div style={{ color: PALETTE.text, fontWeight: 800, fontSize: 11 }}>Total Revenue</div>
-                            <div style={{ color: PALETTE.subtext, fontWeight: 600, fontSize: 11 }}>
-                                {formatMoney(totalRevenueValue)}
+        <div className="relative w-full rounded-2xl border border-white/5 shadow-2xl" style={{ background: PALETTE.background }}>
+            {/* Sticky overlay controls — stay visible even when scrolling */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between p-3">
+                {/* Revenue badge */}
+                {symbol && (
+                    <div className="pointer-events-auto" style={{ marginTop: isMobile ? 4 : 0 }}>
+                        <div style={{
+                            width: isMobile ? 150 : isTablet ? 180 : 220,
+                            borderRadius: 10,
+                            background: PALETTE.panel,
+                            border: `1px solid ${PALETTE.border}`,
+                            padding: "7px 10px",
+                            display: "flex",
+                            gap: 8,
+                            alignItems: "center",
+                            boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
+                        }}>
+                            <img
+                                src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                                alt={symbol}
+                                style={{ width: 26, height: 26, borderRadius: 5, objectFit: "contain" }}
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                            />
+                            <div style={{ lineHeight: 1.1 }}>
+                                <div style={{ color: PALETTE.text, fontWeight: 800, fontSize: 11 }}>Total Revenue</div>
+                                <div style={{ color: PALETTE.subtext, fontWeight: 600, fontSize: 11 }}>
+                                    {formatMoney(totalRevenueValue)}
+                                </div>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                {/* Export button */}
+                <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-white/10 bg-black/70 p-1 backdrop-blur shadow-lg">
+                    <button
+                        onClick={handleExportPng}
+                        className="flex items-center gap-1 px-2 py-1 rounded hover:bg-white/10 transition"
+                        aria-label="Export PNG"
+                        title="Download PNG"
+                    >
+                        <Download className="h-3.5 w-3.5 text-white/70" />
+                        <span className="text-[8px] text-white/70 font-bold tracking-widest uppercase">PNG</span>
+                    </button>
+                </div>
+            </div>
+
+            {/* Mobile scroll hint */}
+            {isMobile && (
+                <div className="pointer-events-none absolute bottom-3 inset-x-0 z-20 flex justify-center">
+                    <div className="flex items-center gap-1.5 rounded-full bg-white/10 backdrop-blur px-3 py-1 text-[10px] text-white/60 font-medium">
+                        <Move className="h-3 w-3" />
+                        Swipe to explore
                     </div>
                 </div>
             )}
 
-            {/* Export button */}
-            <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg border border-white/10 bg-black/70 p-1 backdrop-blur shadow-lg">
-                <button 
-                    onClick={handleExportPng}
-                    className="flex items-center gap-1 px-2 py-1 rounded hover:bg-white/10 transition"
-                    aria-label="Export PNG"
-                    title="Download PNG"
-                >
-                    <Download className="h-3.5 w-3.5 text-white/70" />
-                    <span className="text-[8px] text-white/70 font-bold tracking-widest uppercase">PNG</span>
-                </button>
-            </div>
-
-            {/* ECharts Sankey - Canvas rendered */}
-            <ReactECharts
-                ref={chartRef}
-                option={chartOption}
+            {/* Scrollable chart area — only scrolls horizontally on mobile */}
+            <div
+                className="w-full"
                 style={{
-                    width: "100%",
+                    overflowX: isMobile ? "auto" : "hidden",
+                    overflowY: "hidden",
+                    WebkitOverflowScrolling: "touch",
                     height: chartHeight,
                 }}
-                opts={{
-                    renderer: "canvas",
-                }}
-            />
+            >
+                <div style={{ width: innerWidth ?? "100%", minWidth: "100%", height: chartHeight }}>
+                    <ReactECharts
+                        ref={chartRef}
+                        option={chartOption}
+                        style={{
+                            width: "100%",
+                            height: chartHeight,
+                        }}
+                        opts={{
+                            renderer: "canvas",
+                            width: innerWidth,
+                        }}
+                    />
+                </div>
+            </div>
         </div>
     );
 }
