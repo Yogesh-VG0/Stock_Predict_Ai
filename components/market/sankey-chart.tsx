@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import { ResponsiveSankey, SankeyNodeDatum, SankeyLinkDatum } from "@nivo/sankey";
 
 type NodeKind = "segment" | "revenue" | "expense" | "profit" | "tax" | "neutral";
@@ -27,17 +27,17 @@ export default function SankeyChart({
     const kindColor = (kind: NodeKind) => {
         switch (kind) {
             case "segment":
-                return "#60a5fa"; // blue-400
+                return "#3b82f6"; // neon blue
             case "revenue":
-                return "#3b82f6"; // blue-500
+                return "#eab308"; // solid neon yellow
             case "profit":
-                return "#10b981"; // emerald-500
+                return "#22c55e"; // neon green
             case "expense":
-                return "#ef4444"; // red-500
+                return "#ef4444"; // neon red
             case "tax":
-                return "#f59e0b"; // amber-500
+                return "#f97316"; // neon orange
             default:
-                return "#a1a1aa"; // zinc-400
+                return "#9ca3af"; // solid gray
         }
     };
 
@@ -96,96 +96,116 @@ export default function SankeyChart({
         ? { top: 24, right: 18, bottom: 24, left: 18 }
         : { top: 28, right: 40, bottom: 28, left: 90 };
 
-    const labelMax = isMobile ? 12 : 18;
+    const labelMax = isMobile ? 12 : 22;
 
     if (enriched.nodes.length === 0) return null;
 
-    return (
-        <div style={{ height }}>
-            <ResponsiveSankey
-                data={enriched}
-                margin={margin}
-                align="justify"
-                sort="auto"
-                // "Premium feel" geometry
-                nodeThickness={isMobile ? 12 : 16}
-                nodeSpacing={isMobile ? 12 : 16}
-                nodeBorderWidth={1}
-                nodeBorderColor={{ from: "color", modifiers: [["darker", 0.6]] }}
-                // Make links "flowy"
-                linkOpacity={0.35}
-                linkHoverOpacity={0.85}
-                linkContract={2}
-                enableLinkGradient={true}
-                linkBlendMode="screen"
-                // Labels
-                labelPosition="outside"
-                labelOrientation="horizontal"
-                labelPadding={10}
-                labelTextColor="#e4e4e7" // zinc-200
-                label={(node: any) => formatNodeLabel(String(node.id), labelMax)}
-                // Dark theme polish
-                theme={{
-                    text: {
-                        fill: "#e4e4e7",
-                        fontSize: isMobile ? 10 : 12,
-                    },
-                    tooltip: {
-                        container: {
-                            background: "rgba(9, 9, 11, 0.92)",
-                            border: "1px solid rgba(63, 63, 70, 0.6)",
-                            borderRadius: "12px",
-                            boxShadow: "0 10px 30px rgba(0,0,0,0.45)",
-                            color: "#e4e4e7",
-                        },
-                    },
-                    grid: { line: { stroke: "rgba(63,63,70,0.25)" } },
-                }}
-                // Tooltips (full names shown here)
-                nodeTooltip={({ node }) => {
-                    const id = String(node.id);
-                    const val = node.value || 0;
-                    const kind = (node as any).kind || "neutral";
-                    const icon = getKindIcon(kind);
+    const [zoom, setZoom] = useState(1);
 
-                    return (
-                        <div style={{ padding: 10 }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                                <span
-                                    style={{
-                                        width: 10,
-                                        height: 10,
-                                        borderRadius: 999,
-                                        background: (node as any).color,
-                                        display: "inline-block",
-                                    }}
-                                />
-                                <div style={{ fontWeight: 700, fontSize: 12 }}>{icon} {id}</div>
-                            </div>
-                            <div style={{ fontSize: 12, color: "#a1a1aa" }}>
-                                {String(kind).toUpperCase()}
-                            </div>
-                            <div style={{ fontWeight: 800, marginTop: 6 }}>
-                                {formatMoney(val)}
-                            </div>
-                        </div>
-                    );
-                }}
-                linkTooltip={({ link }: any) => {
-                    let sourceId = typeof link.source === 'string' ? link.source : link.source.id;
-                    let targetId = typeof link.target === 'string' ? link.target : link.target.id;
-                    const source = String(sourceId);
-                    const target = String(targetId);
-                    return (
-                        <div style={{ padding: 10 }}>
-                            <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>
-                                {source} → {target}
-                            </div>
-                            <div style={{ fontWeight: 800 }}>{formatMoney(link.value)}</div>
-                        </div>
-                    );
-                }}
-            />
+    return (
+        <div className="relative w-full flex flex-col">
+            {/* Zoom Controls */}
+            <div className="absolute top-2 right-2 z-10 flex items-center gap-1 bg-zinc-900/80 p-1 rounded-md border border-zinc-700/50 backdrop-blur-sm">
+                <button onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors" title="Zoom Out">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" /></svg>
+                </button>
+                <button onClick={() => setZoom(1)} className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors" title="Reset Zoom">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" /></svg>
+                </button>
+                <button onClick={() => setZoom(z => Math.min(2.5, z + 0.1))} className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-colors" title="Zoom In">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="11" y1="8" x2="11" y2="14" /><line x1="8" y1="11" x2="14" y2="11" /></svg>
+                </button>
+            </div>
+
+            <div className="w-full overflow-auto rounded-lg hide-scrollbar">
+                <div style={{ height: height * zoom, minWidth: isMobile ? 800 * zoom : `${100 * zoom}%`, transform: `scale(${zoom})`, transformOrigin: 'top left', transition: 'width 0.2s, height 0.2s, transform 0.2s ease-out' }}>
+                    <ResponsiveSankey
+                        data={enriched}
+                        margin={margin}
+                        align="justify"
+                        sort="auto"
+                        // "Premium feel" geometry
+                        nodeThickness={isMobile ? 12 : 16}
+                        nodeSpacing={isMobile ? 12 : 16}
+                        nodeBorderWidth={1}
+                        nodeBorderColor={{ from: "color", modifiers: [["darker", 0.6]] }}
+                        // Make links "flowy"
+                        linkOpacity={0.35}
+                        linkHoverOpacity={0.85}
+                        linkContract={2}
+                        enableLinkGradient={true}
+                        linkBlendMode="screen"
+                        // Labels
+                        labelPosition="outside"
+                        labelOrientation="horizontal"
+                        labelPadding={14}
+                        labelTextColor="#ffffff" // bright white for readability
+                        label={(node: any) => `${getKindIcon(node.kind || 'neutral')} ${formatNodeLabel(String(node.id), labelMax)}`}
+                        // Dark theme polish
+                        theme={{
+                            text: {
+                                fill: "#ffffff",
+                                fontSize: isMobile ? 11 : 13,
+                                fontWeight: 600,
+                            },
+                            tooltip: {
+                                container: {
+                                    background: "rgba(9, 9, 11, 0.95)",
+                                    border: "1px solid rgba(63, 63, 70, 0.8)",
+                                    borderRadius: "12px",
+                                    boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
+                                    color: "#e4e4e7",
+                                },
+                            },
+                            grid: { line: { stroke: "rgba(63,63,70,0.25)" } },
+                        }}
+                        // Tooltips (full names shown here)
+                        nodeTooltip={({ node }) => {
+                            const id = String(node.id);
+                            const val = node.value || 0;
+                            const kind = (node as any).kind || "neutral";
+                            const icon = getKindIcon(kind);
+
+                            return (
+                                <div style={{ padding: 10 }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                        <span
+                                            style={{
+                                                width: 10,
+                                                height: 10,
+                                                borderRadius: 999,
+                                                background: (node as any).color,
+                                                display: "inline-block",
+                                            }}
+                                        />
+                                        <div style={{ fontWeight: 700, fontSize: 12 }}>{icon} {id}</div>
+                                    </div>
+                                    <div style={{ fontSize: 12, color: "#a1a1aa" }}>
+                                        {String(kind).toUpperCase()}
+                                    </div>
+                                    <div style={{ fontWeight: 800, marginTop: 6 }}>
+                                        {formatMoney(val)}
+                                    </div>
+                                </div>
+                            );
+                        }}
+                        linkTooltip={({ link }: any) => {
+                            let sourceId = typeof link.source === 'string' ? link.source : link.source.id;
+                            let targetId = typeof link.target === 'string' ? link.target : link.target.id;
+                            const source = String(sourceId);
+                            const target = String(targetId);
+                            return (
+                                <div style={{ padding: 10 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>
+                                        {source} → {target}
+                                    </div>
+                                    <div style={{ fontWeight: 800 }}>{formatMoney(link.value)}</div>
+                                </div>
+                            );
+                        }}
+                    />
+                </div>
+            </div>
         </div>
     );
 }
