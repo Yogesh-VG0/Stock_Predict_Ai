@@ -43,9 +43,7 @@ const PALETTE = {
     subtext: "#9CA3AF",
 };
 
-const SEGMENT_PALETTE = [
-    "#3B82F6", "#F59E0B", "#A78BFA", "#F97316", "#06B6D4", "#94A3B8",
-];
+const SEGMENT_PALETTE = ["#3B82F6", "#F59E0B", "#A78BFA", "#F97316", "#06B6D4", "#94A3B8"];
 
 function hashColor(id: string) {
     let h = 0;
@@ -102,24 +100,23 @@ const ICONS: Record<string, string> = {
 
 function SankeyTooltip({ title, value, color }: { title: string; value: string; color: string }) {
     return (
-        <div
-            style={{
-                background: "rgba(17, 20, 28, 0.97)",
-                border: "1px solid rgba(255,255,255,0.12)",
-                padding: "10px 14px",
-                borderRadius: 12,
-                color: "#F3F4F6",
-                fontSize: 12,
-                maxWidth: 320,
-                wordWrap: "break-word",
-                overflowWrap: "break-word",
-            }}
-        >
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
-                <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block", flexShrink: 0, marginTop: 2 }} />
-                <strong style={{ fontSize: 13, lineHeight: 1.3, wordBreak: "break-word" }}>{title}</strong>
+        <div style={{
+            background: "rgba(17, 20, 28, 0.97)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            padding: "10px 14px",
+            borderRadius: 10,
+            color: "#F3F4F6",
+            fontSize: 13,
+            maxWidth: 360,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+        }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, background: color, display: "inline-block", flexShrink: 0 }} />
+                <strong style={{ fontSize: 13 }}>{title}</strong>
             </div>
-            <div style={{ color: "#9CA3AF" }}>{value}</div>
+            <div style={{ color: "#9CA3AF", fontSize: 13 }}>{value}</div>
         </div>
     );
 }
@@ -145,17 +142,10 @@ export default function SankeyChart({
     }, []);
 
     const keyNodes = useMemo(
-        () =>
-            new Set([
-                "Total Revenue",
-                "Gross Profit",
-                "Operating Expenses",
-                "Operating Income",
-                "Income Before Tax",
-                "Net Income",
-                "Cost of Revenue",
-                "Taxes",
-            ]),
+        () => new Set([
+            "Total Revenue", "Gross Profit", "Operating Expenses", "Operating Income",
+            "Income Before Tax", "Net Income", "Cost of Revenue", "Taxes",
+        ]),
         []
     );
 
@@ -171,16 +161,13 @@ export default function SankeyChart({
             }
             return { ...n, kind: k, color: kindColor(k, id) };
         });
-
         const nodeMap = new Map<string, (typeof enrichedNodes)[number]>();
         enrichedNodes.forEach((n) => nodeMap.set(String(n.id), n));
-
         const enrichedLinks = data.links.map((l) => {
             const target = nodeMap.get(String(l.target));
             const k = (target?.kind ?? inferKind(String(l.target))) as NodeKind;
             return { ...l, color: l.color || kindColor(k, target?.id) };
         });
-
         return { nodes: enrichedNodes, links: enrichedLinks };
     }, [data]);
 
@@ -193,36 +180,37 @@ export default function SankeyChart({
     const topSegments = useMemo(() => {
         const segs = enriched.nodes.filter((n: any) => n.kind === "segment");
         segs.sort((a: any, b: any) => (Number(b.displayValue ?? b.value ?? 0) - Number(a.displayValue ?? a.value ?? 0)));
-        return new Set(segs.slice(0, isMobile ? 4 : 8).map((n: any) => String(n.id)));
+        return new Set(segs.slice(0, isMobile ? 3 : 8).map((n: any) => String(n.id)));
     }, [enriched, isMobile]);
 
-    // Count how many right-side cards we'll have to compute dynamic height
-    const rightCardCount = useMemo(() => {
+    // Card dimensions
+    const cardW = isMobile ? 140 : 190;
+    const cardH = isMobile ? 40 : 48;
+    const GAP = isMobile ? 4 : 5;
+    const PAD = 8;
+
+    // Count right-side nodes for height calculation
+    const rightNodeCount = useMemo(() => {
         return enriched.nodes.filter((n: any) => {
             const id = String(n.id);
             if (id === "Total Revenue") return false;
             const k = n.kind as NodeKind;
-            const isSegment = k === "segment";
-            if (isSegment) return false; // segments go left
-            return true;
+            return k !== "segment";
         }).length;
     }, [enriched]);
 
-    const cardW = isMobile ? 170 : 200;
-    const cardH = isMobile ? 48 : 52;
+    // Height: ensure enough space for right-side cards in a single column
+    const height = useMemo(() => {
+        const minForCards = rightNodeCount * (cardH + GAP) + 140;
+        return Math.max(propHeight, isMobile ? propHeight : minForCards);
+    }, [propHeight, rightNodeCount, cardH, GAP, isMobile]);
 
-    // Dynamic height: ensure enough vertical space for all right-side cards
-    // Each right column can hold cards stacked with GAP between them
-    const GAP = 6;
-    const PAD = 10;
-    const rightColumnsDesktop = 2;
-    const cardsPerColumn = Math.ceil(rightCardCount / rightColumnsDesktop);
-    const minHeightForCards = cardsPerColumn * (cardH + GAP) + 120;
-    const height = Math.max(propHeight, isMobile ? propHeight : minHeightForCards);
-
-    const margin = isMobile
-        ? { top: 54, right: 12, bottom: 24, left: 12 }
-        : { top: 54, right: cardW * 2 + 48, bottom: 36, left: cardW + 48 };
+    // Margins: on desktop, reserve space for left + right card columns
+    // On mobile, minimal margins - cards overlay the plot area
+    const margin = useMemo(() => {
+        if (isMobile) return { top: 10, right: 10, bottom: 10, left: 10 };
+        return { top: 40, right: cardW + 40, bottom: 30, left: cardW + 40 };
+    }, [isMobile, cardW]);
 
     const totalRevenueValue = useMemo(() => {
         const vFromLinks = enriched.links
@@ -233,15 +221,14 @@ export default function SankeyChart({
         return Number(n?.displayValue ?? n?.value ?? 0);
     }, [enriched]);
 
-    const canvasWidth = isMobile ? 1100 : 1400;
+    const canvasWidth = isMobile ? 900 : 1400;
 
     const CardsLayer = (layerProps: any) => {
         const { nodes, width: innerW, height: innerH } = layerProps;
 
         const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
 
-        type RailKey = "L" | "R1" | "R2";
-
+        type RailKey = "L" | "R";
         type CardCandidate = {
             id: string;
             node: any;
@@ -253,40 +240,26 @@ export default function SankeyChart({
         };
 
         const minNodeX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
-        const maxNodeX = nodes.reduce((m: number, n: any) => Math.max(m, Number(n.x ?? -Infinity)), -Infinity);
 
-        // COORDINATE SYSTEM:
-        // Layer origin (0,0) = SVG (margin.left, margin.top)
-        // SVG total width = canvasWidth
-        // Visible x range from layer: [-margin.left, canvasWidth - margin.left]
-        // Visible y range from layer: [-margin.top, height - margin.top]
-
+        // SVG visible bounds from layer coordinate perspective
         const svgLeft = -margin.left;
         const svgRight = canvasWidth - margin.left;
-        const svgTop = -margin.top;
-        const svgBottom = height - margin.top;
 
-        // Safe card placement bounds
+        // Card placement bounds
         const safeLeft = svgLeft + PAD;
         const safeRight = svgRight - cardW - PAD;
-        const safeTop = svgTop + PAD;
-        const safeBottom = svgBottom - cardH - PAD;
+        const safeTop = -margin.top + PAD;
+        const safeBottom = innerH + margin.bottom - cardH - PAD;
 
-        // LEFT RAIL: in the left margin, cards right-aligned to leave space before plot
-        const LEFT_RAIL = safeLeft;
-
-        // RIGHT RAILS (desktop): two columns in the right margin area
-        // Column 1 (closer to plot): starts just after the rightmost node
-        // Column 2 (further right): starts after column 1
-        const rightMarginStart = innerW + 16;
-        const RIGHT_RAIL_1 = clamp(rightMarginStart, safeLeft, safeRight);
-        const RIGHT_RAIL_2 = clamp(rightMarginStart + cardW + 12, safeLeft, safeRight);
-
-        // MOBILE: single right rail inside plot area
-        const MOBILE_RIGHT = clamp(innerW - cardW - PAD, safeLeft, safeRight);
+        // Rail X positions
+        // Left rail: in the left margin area
+        const LEFT_X = isMobile ? PAD : (safeLeft);
+        // Right rail: in the right margin area, single column
+        const RIGHT_X = isMobile
+            ? (innerW - cardW + PAD)  // mobile: right edge of inner area
+            : (innerW + 20);          // desktop: just past the plot area into right margin
 
         const candidates: CardCandidate[] = [];
-        let rightIndex = 0;
 
         for (const node of nodes) {
             const id = String(node.id);
@@ -301,12 +274,12 @@ export default function SankeyChart({
 
             const nodeVal = Number(node.displayValue ?? node.value ?? 0);
             const isSegment = kind === "segment";
-            const isSignificant = (nodeVal / totalRev) >= (isMobile ? 0.12 : 0.08);
+            const isSignificant = (nodeVal / totalRev) >= (isMobile ? 0.15 : 0.08);
 
-            const shouldShowCard =
-                !isMobile ||
-                keyNodes.has(id) ||
-                (isSegment && isSignificant && topSegments.has(id));
+            // On mobile, show fewer cards to avoid crowding
+            const shouldShowCard = isMobile
+                ? (keyNodes.has(id) || (isSegment && isSignificant && topSegments.has(id)))
+                : true;
 
             if (!shouldShowCard) continue;
 
@@ -320,44 +293,23 @@ export default function SankeyChart({
             const centerY = ny + nh / 2;
             const desiredY = clamp(centerY - cardH / 2, safeTop, safeBottom);
 
-            let x: number;
-            let rail: RailKey;
-
-            if (side === "L") {
-                x = isMobile ? PAD : LEFT_RAIL;
-                rail = "L";
-            } else if (isMobile) {
-                x = MOBILE_RIGHT;
-                rail = "R1";
-            } else {
-                // Distribute evenly between two right columns
-                if (rightIndex % 2 === 0) {
-                    x = RIGHT_RAIL_1;
-                    rail = "R1";
-                } else {
-                    x = RIGHT_RAIL_2;
-                    rail = "R2";
-                }
-                rightIndex++;
-            }
-
-            // Hard clamp
-            x = clamp(x, safeLeft, safeRight);
+            const x = clamp(side === "L" ? LEFT_X : RIGHT_X, safeLeft, safeRight);
+            const rail: RailKey = side === "L" ? "L" : "R";
 
             candidates.push({ id, node, side, rail, x, desiredY, y: desiredY });
         }
 
-        // De-dupe by id
+        // De-dupe
         const seen = new Set<string>();
-        const uniqueCandidates = candidates.filter((c) => {
+        const unique = candidates.filter((c) => {
             if (seen.has(c.id)) return false;
             seen.add(c.id);
             return true;
         });
 
-        // Stack cards per rail
+        // Stack per rail
         const resolveRail = (rail: RailKey) => {
-            const arr = uniqueCandidates.filter((c) => c.rail === rail).sort((a, b) => a.desiredY - b.desiredY);
+            const arr = unique.filter((c) => c.rail === rail).sort((a, b) => a.desiredY - b.desiredY);
             if (!arr.length) return;
 
             // Forward pass
@@ -370,25 +322,24 @@ export default function SankeyChart({
 
             // Backward pass if overflow
             const last = arr[arr.length - 1];
-            if (last.y + cardH > safeBottom + cardH) {
-                // Compress from bottom
-                let bottomCursor = safeBottom;
+            if (last.y > safeBottom) {
+                let bc = safeBottom;
                 for (let i = arr.length - 1; i >= 0; i--) {
-                    arr[i].y = Math.min(arr[i].y, bottomCursor);
+                    arr[i].y = Math.min(arr[i].y, bc);
                     arr[i].y = Math.max(arr[i].y, safeTop);
-                    bottomCursor = arr[i].y - cardH - GAP;
+                    bc = arr[i].y - cardH - GAP;
                 }
             }
 
-            // Center vertically if slack
-            if (!isMobile && arr.length > 0) {
+            // Center if slack
+            if (arr.length > 0) {
                 const stackTop = arr[0].y;
                 const stackBottom = arr[arr.length - 1].y + cardH;
                 const used = stackBottom - stackTop;
                 const available = safeBottom - safeTop + cardH;
                 const slack = available - used;
-                if (slack > 10) {
-                    const shift = slack / 2;
+                if (slack > 20) {
+                    const shift = slack * 0.4; // Don't fully center, bias toward top
                     for (const c of arr) {
                         c.y = clamp(c.y + shift, safeTop, safeBottom);
                     }
@@ -397,20 +348,12 @@ export default function SankeyChart({
         };
 
         resolveRail("L");
-        resolveRail("R1");
-        if (!isMobile) resolveRail("R2");
-
-        // Final clamp all Y
-        for (const c of uniqueCandidates) {
-            c.y = clamp(c.y, safeTop, safeBottom);
-            c.x = clamp(c.x, safeLeft, safeRight);
-        }
+        resolveRail("R");
 
         return (
             <g>
-                {uniqueCandidates.map(({ id, node, side, x, y, rail }, idx) => {
+                {unique.map(({ id, node, side, x, y, rail }, idx) => {
                     const color = node.color || PALETTE.neutral;
-
                     const nx = Number(node.x);
                     const ny = Number(node.y);
                     const nw = Number(node.width);
@@ -418,16 +361,13 @@ export default function SankeyChart({
 
                     const nodeCX = nx + nw / 2;
                     const nodeCY = ny + nh / 2;
-
                     const anchorX = side === "L" ? x + cardW : x;
                     const anchorY = y + cardH / 2;
 
-                    // Proportional bezier - shorter curves for closer cards
                     const dx = anchorX - nodeCX;
-                    const absDx = Math.abs(dx);
-                    const ctrl = clamp(absDx * 0.3, 20, 80) * (dx < 0 ? -1 : 1);
+                    const ctrl = clamp(Math.abs(dx) * 0.3, 15, 60) * (dx < 0 ? -1 : 1);
 
-                    const label = truncate(id, isMobile ? 16 : 20);
+                    const label = truncate(id, isMobile ? 14 : 18);
                     const value = node.displayValue ?? node.value ?? 0;
                     const iconHref = ICONS[id];
 
@@ -435,59 +375,39 @@ export default function SankeyChart({
                         <g key={`${id}-${rail}-${idx}`}>
                             {/* Node highlight */}
                             <rect
-                                x={nx - 2}
-                                y={ny - 2}
-                                width={nw + 4}
-                                height={nh + 4}
-                                rx={6}
-                                ry={6}
-                                fill="none"
-                                stroke={color}
-                                strokeOpacity={0.2}
-                                strokeWidth={3}
+                                x={nx - 1} y={ny - 1}
+                                width={nw + 2} height={nh + 2}
+                                rx={4} ry={4}
+                                fill="none" stroke={color} strokeOpacity={0.15} strokeWidth={2}
                             />
-
-                            {/* Connector line */}
+                            {/* Connector */}
                             <path
                                 d={`M ${nodeCX} ${nodeCY} C ${nodeCX + ctrl} ${nodeCY}, ${anchorX - ctrl} ${anchorY}, ${anchorX} ${anchorY}`}
-                                fill="none"
-                                stroke={color}
-                                strokeOpacity={0.3}
-                                strokeWidth={1}
+                                fill="none" stroke={color} strokeOpacity={0.25} strokeWidth={1}
                             />
-
                             {/* Card */}
                             <g transform={`translate(${x}, ${y})`}>
                                 <rect
-                                    width={cardW}
-                                    height={cardH}
-                                    rx={8}
-                                    ry={8}
-                                    fill={PALETTE.panel}
-                                    stroke={PALETTE.border}
-                                    strokeWidth={1}
+                                    width={cardW} height={cardH}
+                                    rx={7} ry={7}
+                                    fill={PALETTE.panel} stroke={PALETTE.border} strokeWidth={0.75}
                                 />
-                                {/* Color accent bar */}
-                                <rect x={10} y={cardH / 2 - 12} width={3} height={24} rx={1.5} fill={color} />
-
+                                <rect x={8} y={cardH / 2 - 10} width={3} height={20} rx={1.5} fill={color} />
                                 {iconHref ? (
                                     <image
                                         href={iconHref}
-                                        x={20}
-                                        y={cardH / 2 - 12}
-                                        width={24}
-                                        height={24}
-                                        opacity={0.9}
+                                        x={16} y={cardH / 2 - 10}
+                                        width={20} height={20}
+                                        opacity={0.85}
                                         preserveAspectRatio="xMidYMid meet"
                                     />
                                 ) : (
-                                    <circle cx={32} cy={cardH / 2} r={5} fill={color} opacity={0.85} />
+                                    <circle cx={26} cy={cardH / 2} r={4} fill={color} opacity={0.8} />
                                 )}
-
-                                <text x={50} y={cardH / 2 - 3} fontSize={11.5} fill={PALETTE.text} fontWeight={700}>
+                                <text x={42} y={cardH / 2 - 3} fontSize={isMobile ? 10 : 11.5} fill={PALETTE.text} fontWeight={700}>
                                     {label}
                                 </text>
-                                <text x={50} y={cardH / 2 + 13} fontSize={11} fill={PALETTE.subtext} fontWeight={500}>
+                                <text x={42} y={cardH / 2 + 11} fontSize={isMobile ? 9 : 10.5} fill={PALETTE.subtext} fontWeight={500}>
                                     {formatMoney(Number(value))}
                                 </text>
                             </g>
@@ -506,34 +426,29 @@ export default function SankeyChart({
         <div className="sankeyWrap relative w-full overflow-hidden rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
             <div className="absolute inset-0 rounded-2xl" style={{ background: PALETTE.background }} />
 
-            {/* Revenue badge - positioned to not overlap zoom controls */}
+            {/* Revenue badge */}
             {symbol && (
-                <div className="absolute left-3 top-3 z-20 sm:left-4 sm:top-4">
-                    <div
-                        style={{
-                            width: isMobile ? 200 : 240,
-                            borderRadius: 12,
-                            background: PALETTE.panel,
-                            border: `1px solid ${PALETTE.border}`,
-                            padding: "8px 10px",
-                            display: "flex",
-                            gap: 8,
-                            alignItems: "center",
-                            boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-                        }}
-                    >
+                <div className="absolute left-3 top-3 z-20">
+                    <div style={{
+                        width: isMobile ? 180 : 220,
+                        borderRadius: 10,
+                        background: PALETTE.panel,
+                        border: `1px solid ${PALETTE.border}`,
+                        padding: "7px 10px",
+                        display: "flex",
+                        gap: 8,
+                        alignItems: "center",
+                        boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
+                    }}>
                         <img
                             src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
                             alt={symbol}
-                            style={{ width: 28, height: 28, borderRadius: 6, objectFit: "contain" }}
-                            onError={(e) => {
-                                const target = e.target as HTMLImageElement;
-                                target.style.display = "none";
-                            }}
+                            style={{ width: 26, height: 26, borderRadius: 5, objectFit: "contain" }}
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                         />
-                        <div style={{ lineHeight: 1.1, minWidth: 0 }}>
-                            <div style={{ color: PALETTE.text, fontWeight: 800, fontSize: 12 }}>Total Revenue</div>
-                            <div style={{ color: PALETTE.subtext, fontWeight: 600, fontSize: 12 }}>
+                        <div style={{ lineHeight: 1.1 }}>
+                            <div style={{ color: PALETTE.text, fontWeight: 800, fontSize: 11 }}>Total Revenue</div>
+                            <div style={{ color: PALETTE.subtext, fontWeight: 600, fontSize: 11 }}>
                                 {formatMoney(totalRevenueValue)}
                             </div>
                         </div>
@@ -543,51 +458,41 @@ export default function SankeyChart({
 
             <div className="relative w-full h-full rounded-2xl">
                 <TransformWrapper
-                    minScale={0.5}
+                    minScale={0.4}
                     maxScale={3}
-                    initialScale={isMobile ? 0.95 : 1}
-                    {...(isMobile ? { initialPositionX: -100 } : {})}
+                    initialScale={isMobile ? 0.85 : 0.82}
+                    initialPositionX={isMobile ? -50 : 0}
                     initialPositionY={0}
-                    centerOnInit={!isMobile}
-                    limitToBounds={true}
+                    centerOnInit={true}
+                    limitToBounds={false}
                     panning={{ excluded: [] }}
                     alignmentAnimation={{ disabled: true }}
-                    wheel={{ step: 0.1 }}
+                    wheel={{ step: 0.08 }}
                     pinch={{ step: 5 }}
                     doubleClick={{ disabled: true }}
                 >
                     {({ zoomIn, zoomOut, resetTransform }) => (
                         <>
-                            {/* Zoom controls - positioned to not overlap revenue badge */}
-                            <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-xl border border-white/10 bg-black/70 p-1.5 backdrop-blur shadow-lg sm:right-4 sm:top-4 sm:gap-2 sm:p-2">
-                                <div className="hidden sm:flex items-center gap-1.5 pr-2 border-r border-white/10">
+                            {/* Zoom controls */}
+                            <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg border border-white/10 bg-black/70 p-1 backdrop-blur shadow-lg">
+                                <div className="hidden sm:flex items-center gap-1 pr-1.5 border-r border-white/10">
                                     <Move className="h-3 w-3 text-white/40" />
-                                    <span className="text-[9px] text-white/40 font-bold tracking-widest uppercase">Pan</span>
+                                    <span className="text-[8px] text-white/40 font-bold tracking-widest uppercase">Pan</span>
                                 </div>
-                                <button onClick={() => zoomOut()} className="p-1 rounded-lg hover:bg-white/10 transition" aria-label="Zoom out">
+                                <button onClick={() => zoomOut()} className="p-1 rounded hover:bg-white/10 transition" aria-label="Zoom out">
                                     <ZoomOut className="h-3.5 w-3.5 text-white/70" />
                                 </button>
-                                <button onClick={() => zoomIn()} className="p-1 rounded-lg hover:bg-white/10 transition" aria-label="Zoom in">
+                                <button onClick={() => zoomIn()} className="p-1 rounded hover:bg-white/10 transition" aria-label="Zoom in">
                                     <ZoomIn className="h-3.5 w-3.5 text-white/70" />
                                 </button>
-                                <button onClick={() => resetTransform()} className="p-1 rounded-lg hover:bg-white/10 transition" aria-label="Reset">
+                                <button onClick={() => resetTransform()} className="p-1 rounded hover:bg-white/10 transition" aria-label="Reset">
                                     <RotateCcw className="h-3.5 w-3.5 text-white/70" />
                                 </button>
                             </div>
 
                             <TransformComponent
-                                wrapperStyle={{
-                                    width: "100%",
-                                    height,
-                                    overflow: "hidden",
-                                    touchAction: "none",
-                                    userSelect: "none",
-                                }}
-                                contentStyle={{
-                                    width: canvasWidth,
-                                    height,
-                                    overflow: "hidden",
-                                }}
+                                wrapperStyle={{ width: "100%", height, overflow: "hidden", touchAction: "none", userSelect: "none" }}
+                                contentStyle={{ width: canvasWidth, height, overflow: "hidden" }}
                             >
                                 <div style={{ width: canvasWidth, height, overflow: "hidden" }}>
                                     <ResponsiveSankey
@@ -598,25 +503,25 @@ export default function SankeyChart({
                                             sort: "auto" as const,
                                             colors: (node: any) => node.color,
                                             linkColor: linkColorFn,
-                                            nodeThickness: isMobile ? 16 : 22,
-                                            nodeSpacing: isMobile ? 20 : 22,
+                                            nodeThickness: isMobile ? 14 : 20,
+                                            nodeSpacing: isMobile ? 18 : 20,
                                             nodeBorderWidth: 0,
                                             nodeOpacity: 1,
-                                            linkOpacity: isMobile ? 0.9 : 0.95,
+                                            linkOpacity: isMobile ? 0.85 : 0.92,
                                             linkHoverOpacity: 1,
-                                            linkContract: isMobile ? 1 : 3,
+                                            linkContract: isMobile ? 1 : 2,
                                             enableLinkGradient: false,
                                             linkBlendMode: "normal" as const,
                                             nodeTooltip: ({ node }: any) => (
                                                 <SankeyTooltip
-                                                    title={String(node?.id ?? node?.label ?? "Unknown")}
+                                                    title={String(node?.id ?? "Unknown")}
                                                     value={formatMoney(Number(node.value ?? node.displayValue ?? 0))}
                                                     color={node.color || PALETTE.neutral}
                                                 />
                                             ),
                                             linkTooltip: ({ link }: any) => (
                                                 <SankeyTooltip
-                                                    title={`${link?.source?.id ?? link?.source ?? "?"} → ${link?.target?.id ?? link?.target ?? "?"}`}
+                                                    title={`${link?.source?.id ?? "?"} → ${link?.target?.id ?? "?"}`}
                                                     value={formatMoney(Number(link.value ?? 0))}
                                                     color={link.color || PALETTE.neutral}
                                                 />
