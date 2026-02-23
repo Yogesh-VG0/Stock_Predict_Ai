@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useEffect, useState } from "react";
-import { ResponsiveSankey, SankeyNodeDatum, SankeyLinkDatum } from "@nivo/sankey";
+import { ResponsiveSankey, SankeyNodeDatum } from "@nivo/sankey";
 import { TransformWrapper, TransformComponent } from "react-zoom-pan-pinch";
 import { ZoomIn, ZoomOut, RotateCcw, Move } from "lucide-react";
 
@@ -36,18 +36,11 @@ const NEON = {
     red: "#FF4D6D",
     gray: "#A7B0C0",
     bg: "transparent",
-    panel: "rgba(10, 12, 20, 0.75)",
+    panel: "rgba(10, 12, 20, 0.78)",
     border: "rgba(255,255,255,0.10)",
 };
 
-const SEGMENT_PALETTE = [
-    "#2EA0FF", // neon blue
-    "#FFD54A", // neon yellow
-    "#A7B0C0", // gray
-    "#9B5CFF", // neon purple
-    "#FF7A1A", // neon orange
-    "#00E5FF", // cyan
-];
+const SEGMENT_PALETTE = ["#2EA0FF", "#FFD54A", "#A7B0C0", "#9B5CFF", "#FF7A1A", "#00E5FF"];
 
 function hashColor(id: string) {
     let h = 0;
@@ -72,7 +65,6 @@ function kindColor(kind: NodeKind, id?: string) {
     }
 }
 
-// Truncate but keep it readable
 function truncate(s: string, max: number) {
     if (!s) return "";
     if (s.length <= max) return s;
@@ -107,21 +99,37 @@ export default function SankeyChart({
                 color: kindColor((n.kind || "neutral") as NodeKind, n.id),
             })),
             links: data.links.map((l) => {
-                const target = typeof l.target === "string" ? nodeMap.get(l.target) : nodeMap.get((l.target as SankeyNode).id);
-                const inferred = kindColor(((target?.kind || "neutral") as NodeKind));
+                const targetNode = nodeMap.get(String(l.target));
+                const inferred = kindColor(((targetNode?.kind || "neutral") as NodeKind));
                 return { ...l, color: l.color || inferred };
             }),
         };
     }, [data]);
 
-    // More left padding on desktop; on mobile we rely on zoom + truncation
     const margin = isMobile
-        ? { top: 28, right: 18, bottom: 28, left: 18 }
-        : { top: 28, right: 42, bottom: 28, left: 110 };
+        ? { top: 26, right: 18, bottom: 26, left: 18 }
+        : { top: 28, right: 52, bottom: 28, left: 120 };
 
-    // Render "node cards" like the infographic (label + value + icon)
+    const linkOpacity = isMobile ? 0.65 : 0.55;
+
+    const keyNodes = new Set([
+        "Total Revenue",
+        "Gross Profit",
+        "Operating Expenses",
+        "Operating Income",
+        "Income Before Tax",
+        "Net Income",
+        "Cost of Revenue",
+        "Taxes",
+    ]);
+
     const NodeCard = (nodeProps: any) => {
-        const node = nodeProps.node as SankeyNodeDatum<any, any> & { kind?: NodeKind; displayValue?: number; color?: string };
+        const node = nodeProps.node as SankeyNodeDatum<any, any> & {
+            kind?: NodeKind;
+            displayValue?: number;
+            color?: string;
+        };
+
         const x = node.x;
         const y = node.y;
         const w = node.width;
@@ -133,71 +141,42 @@ export default function SankeyChart({
         const labelMax = isMobile ? 12 : 18;
         const label = truncate(String(node.id), labelMax);
 
-        // Make sure tiny nodes still show a card
-        const cardW = Math.max(w + 140, isMobile ? 170 : 190);
-        const cardH = Math.max(h + 14, isMobile ? 40 : 46);
+        const cardW = isMobile ? 180 : 200;
+        const cardH = isMobile ? 42 : 48;
 
-        // Place label card slightly outside node
-        const isLeft = x < 120;
-        const cardX = isLeft ? x - (cardW + 10) : x + w + 10;
-        const cardY = y + h / 2 - cardH / 2;
+        const value = (node as any).displayValue ?? node.value ?? 0;
 
-        // Clamp cards so they never go off-screen
-        const PAD = 8;
+        // Show fewer cards on mobile to avoid clutter
+        const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || kind === "segment";
 
-        // Estimate canvas width: Nivo uses innerWidth (chart width - margins).
-        // We can approximate with viewport width here; it’s fine because we can zoom/pan anyway.
+        // Place card
+        const isLeft = x < 140;
+        const rawX = isLeft ? x - (cardW + 10) : x + w + 10;
+        const rawY = y + h / 2 - cardH / 2;
+
+        // Clamp
+        const PAD = 10;
         const viewportW = typeof window !== "undefined" ? window.innerWidth : 1200;
+        let safeX = rawX;
+        if (safeX < PAD) safeX = x + w + 10;
+        if (safeX + cardW > viewportW - PAD) safeX = x - (cardW + 10);
 
-        // If the card would go off the left edge, place it to the RIGHT of the node instead.
-        let safeCardX = cardX;
-        if (safeCardX < PAD) safeCardX = x + w + 10;
+        let safeY = Math.max(PAD, rawY);
+        safeY = Math.min(safeY, height - cardH - PAD);
 
-        // If the card would go off the right edge, place it to the LEFT of the node instead.
-        if (safeCardX + cardW > viewportW - PAD) safeCardX = x - (cardW + 10);
-
-        // Clamp vertical too
-        let safeCardY = Math.max(PAD, cardY);
-        safeCardY = Math.min(safeCardY, height - cardH - PAD);
-
-        const showLogo = String(node.id).toLowerCase() === "total revenue" && symbol;
+        const showLogo = String(node.id) === "Total Revenue" && symbol;
 
         const icon =
             kind === "profit" ? "✅" :
                 kind === "expense" ? "🧾" :
                     kind === "tax" ? "🧮" :
                         kind === "revenue" ? "💰" :
-                            kind === "segment" ? "📱" :
+                            kind === "segment" ? "◼" :
                                 "•";
-
-        const value = (node as any).displayValue ?? node.value ?? 0;
-
-        const keyNodes = new Set([
-            "Total Revenue",
-            "Gross Profit",
-            "Operating Expenses",
-            "Operating Income",
-            "Net Income",
-            "Income Before Tax",
-        ]);
-
-        const shouldShowCard = !isMobile || keyNodes.has(String(node.id)) || kind === "segment";
 
         return (
             <g>
-                {/* The actual node bar */}
-                <rect
-                    x={x}
-                    y={y}
-                    width={w}
-                    height={h}
-                    rx={3}
-                    ry={3}
-                    fill={color}
-                    opacity={0.98}
-                />
-
-                {/* Glow (subtle) */}
+                <rect x={x} y={y} width={w} height={h} rx={4} ry={4} fill={color} opacity={0.98} />
                 <rect
                     x={x - 2}
                     y={y - 2}
@@ -207,27 +186,15 @@ export default function SankeyChart({
                     ry={6}
                     fill="none"
                     stroke={color}
-                    strokeOpacity={0.25}
+                    strokeOpacity={0.22}
                     strokeWidth={4}
                 />
 
-                {/* Label card */}
                 {shouldShowCard && (
-                    <g transform={`translate(${safeCardX}, ${safeCardY})`}>
-                        <rect
-                            width={cardW}
-                            height={cardH}
-                            rx={10}
-                            ry={10}
-                            fill={NEON.panel}
-                            stroke={NEON.border}
-                            strokeWidth={1}
-                        />
-
-                        {/* left accent */}
+                    <g transform={`translate(${safeX}, ${safeY})`}>
+                        <rect width={cardW} height={cardH} rx={12} ry={12} fill={NEON.panel} stroke={NEON.border} strokeWidth={1} />
                         <rect x={10} y={cardH / 2 - 12} width={4} height={24} rx={2} fill={color} opacity={0.95} />
 
-                        {/* icon / logo */}
                         {showLogo ? (
                             <image
                                 href={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
@@ -237,24 +204,17 @@ export default function SankeyChart({
                                 height={26}
                                 opacity={0.95}
                                 preserveAspectRatio="xMidYMid meet"
-                                onError={(e) => {
-                                    // Ignore if image fails to load
-                                    (e.target as any).href.baseVal = "";
-                                }}
                             />
                         ) : (
-                            <text x={24} y={cardH / 2 + 5} fontSize={14} fill="#E6EAF2">
+                            <text x={24} y={cardH / 2 + 6} fontSize={14} fill="#E6EAF2">
                                 {icon}
                             </text>
                         )}
 
-                        {/* label */}
-                        <text x={50} y={cardH / 2 - 2} fontSize={12} fill="#E6EAF2" fontWeight={700}>
+                        <text x={52} y={cardH / 2 - 2} fontSize={12} fill="#E6EAF2" fontWeight={750}>
                             {label}
                         </text>
-
-                        {/* value */}
-                        <text x={50} y={cardH / 2 + 14} fontSize={12} fill="#A7B0C0" fontWeight={600}>
+                        <text x={52} y={cardH / 2 + 14} fontSize={12} fill="#A7B0C0" fontWeight={650}>
                             {formatMoney(Number(value))}
                         </text>
                     </g>
@@ -263,103 +223,84 @@ export default function SankeyChart({
         );
     };
 
-    // Make links thicker & "solid neon"
-    const linkOpacity = isMobile ? 0.65 : 0.55;
-
     return (
-        <div className="relative w-full overflow-hidden" style={{ height }}>
-            {/* Zoom controls */}
-            <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-xl border border-zinc-800 bg-black/60 p-2 backdrop-blur hover:bg-black/80 transition-colors cursor-default">
-                <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-zinc-800">
-                    <Move className="h-4 w-4 text-zinc-300" />
-                    <span className="text-xs text-zinc-400 font-medium tracking-wide uppercase">Drag</span>
-                </div>
-                <TransformWrapper
-                    minScale={0.5}
-                    maxScale={2.5}
-                    initialScale={isMobile ? 0.75 : 1}
-                    centerOnInit={true}
-                    limitToBounds={false}
-                    wheel={{ step: 0.12 }}
-                    pinch={{ step: 6 }}
-                    doubleClick={{ disabled: true }}
-                >
-                    {({ zoomIn, zoomOut, resetTransform }) => (
-                        <>
-                            <button
-                                onClick={() => zoomOut()}
-                                className="p-1.5 rounded-lg hover:bg-white/10 transition"
-                                aria-label="Zoom out"
-                            >
-                                <ZoomOut className="h-4 w-4 text-zinc-200" />
-                            </button>
-                            <button
-                                onClick={() => zoomIn()}
-                                className="p-1.5 rounded-lg hover:bg-white/10 transition"
-                                aria-label="Zoom in"
-                            >
-                                <ZoomIn className="h-4 w-4 text-zinc-200" />
-                            </button>
-                            <button
-                                onClick={() => resetTransform()}
-                                className="p-1.5 rounded-lg hover:bg-white/10 transition"
-                                aria-label="Reset"
-                            >
-                                <RotateCcw className="h-4 w-4 text-zinc-200" />
-                            </button>
-
-                            <div className="w-full h-full bg-transparent flex items-center justify-center">
-                                <TransformComponent wrapperStyle={{ width: "100%", height }} contentStyle={{ width: "100%", height }}>
-                                    <div style={{ width: "100%", height }}>
-                                        {/* @ts-ignore - Nivo generic component mappings often fail strict TS bounds */}
-                                        <ResponsiveSankey
-                                            data={enriched as any}
-                                            margin={margin}
-                                            align="justify"
-                                            sort="auto"
-                                            nodeThickness={isMobile ? 12 : 18}
-                                            nodeSpacing={isMobile ? 12 : 24}
-                                            nodeBorderWidth={0}
-                                            linkOpacity={linkOpacity}
-                                            linkHoverOpacity={0.85}
-                                            linkContract={isMobile ? 1 : 2}
-                                            enableLinkGradient={true}
-                                            linkBlendMode="normal"
-                                            // We draw labels ourselves via nodeComponent, so hide default labels
-                                            labelPosition="outside"
-                                            labelOrientation="horizontal"
-                                            labelPadding={0}
-                                            labelTextColor="transparent"
-                                            label={() => ""}
-                                            nodeTooltip={() => null}
-                                            linkTooltip={() => null}
-                                            theme={{
-                                                background: NEON.bg,
-                                                text: { fill: "#E6EAF2" },
-                                                tooltip: { container: { display: "none" } },
-                                            }}
-                                            // @ts-ignore - nodeComponent is valid in Nivo but missing in some typedefs
-                                            nodeComponent={NodeCard}
-                                        />
-                                    </div>
-                                </TransformComponent>
-                            </div>
-                        </>
-                    )}
-                </TransformWrapper>
-            </div>
-
-            {/* Background panel */}
+        <div className="relative w-full" style={{ height }}>
+            {/* Background */}
             <div
-                className="w-full rounded-2xl border border-zinc-800/60 absolute top-0 left-0 pointer-events-none -z-20"
+                className="absolute inset-0 rounded-2xl border border-zinc-800/60 pointer-events-none"
                 style={{
-                    height,
                     background:
-                        "radial-gradient(1200px 400px at 20% 10%, rgba(46,160,255,0.06), transparent 55%)," +
-                        "radial-gradient(900px 380px at 70% 20%, rgba(45,255,154,0.05), transparent 55%)," +
-                        "radial-gradient(900px 380px at 70% 80%, rgba(255,77,109,0.04), transparent 55%)",
+                        "radial-gradient(1200px 420px at 20% 10%, rgba(46,160,255,0.08), transparent 55%)," +
+                        "radial-gradient(900px 380px at 70% 20%, rgba(45,255,154,0.07), transparent 55%)," +
+                        "radial-gradient(900px 380px at 70% 80%, rgba(255,77,109,0.06), transparent 55%)," +
+                        "linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.35))",
                 }}
             />
+
+            <TransformWrapper
+                minScale={0.5}
+                maxScale={2.5}
+                initialScale={isMobile ? 0.75 : 1}
+                centerOnInit={true}
+                limitToBounds={false}
+                wheel={{ step: 0.12 }}
+                pinch={{ step: 6 }}
+                doubleClick={{ disabled: true }}
+            >
+                {({ zoomIn, zoomOut, resetTransform }) => (
+                    <>
+                        {/* Controls */}
+                        <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-xl border border-zinc-800 bg-black/60 p-2 backdrop-blur hover:bg-black/80 transition-colors">
+                            <div className="hidden sm:flex items-center gap-2 pr-2 border-r border-zinc-800">
+                                <Move className="h-4 w-4 text-zinc-300" />
+                                <span className="text-xs text-zinc-400 font-medium tracking-wide uppercase">Drag</span>
+                            </div>
+                            <button onClick={() => zoomOut()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom out">
+                                <ZoomOut className="h-4 w-4 text-zinc-200" />
+                            </button>
+                            <button onClick={() => zoomIn()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Zoom in">
+                                <ZoomIn className="h-4 w-4 text-zinc-200" />
+                            </button>
+                            <button onClick={() => resetTransform()} className="p-1.5 rounded-lg hover:bg-white/10 transition" aria-label="Reset">
+                                <RotateCcw className="h-4 w-4 text-zinc-200" />
+                            </button>
+                        </div>
+
+                        {/* Chart */}
+                        <TransformComponent wrapperStyle={{ width: "100%", height }} contentStyle={{ width: "100%", height }}>
+                            <div style={{ width: "100%", height }}>
+                                <ResponsiveSankey
+                                    data={enriched as any}
+                                    margin={margin}
+                                    align="justify"
+                                    sort="auto"
+                                    nodeThickness={isMobile ? 12 : 18}
+                                    nodeSpacing={isMobile ? 12 : 24}
+                                    nodeBorderWidth={0}
+                                    linkOpacity={linkOpacity}
+                                    linkHoverOpacity={0.9}
+                                    linkContract={isMobile ? 1 : 2}
+                                    enableLinkGradient={true}
+                                    linkBlendMode="normal"
+                                    // Disable default labels & tooltips (we draw our own)
+                                    // @ts-ignore - Nivo generic mappings fail strict TS bounds depending on version
+                                    nodeLabel={() => ""}
+                                    labelTextColor="transparent"
+                                    nodeTooltip={() => null}
+                                    linkTooltip={() => null}
+                                    theme={{
+                                        background: "transparent",
+                                        text: { fill: "#E6EAF2" },
+                                        tooltip: { container: { display: "none" } },
+                                    }}
+                                    // @ts-ignore
+                                    nodeComponent={NodeCard}
+                                />
+                            </div>
+                        </TransformComponent>
+                    </>
+                )}
+            </TransformWrapper>
         </div>
     );
 }

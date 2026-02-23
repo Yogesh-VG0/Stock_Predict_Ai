@@ -177,10 +177,10 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
                                     <div className="text-xs text-zinc-400 mb-1">Gross Profit</div>
                                     <div className="text-xl font-bold text-emerald-400">
-                                        {formatCurrency(sankeyData.financials.revenue * sankeyData.financials.grossProfitMargin)}
+                                        {formatCurrency(sankeyData.financials.revenue * Number(sankeyData.financials.grossProfitMargin || 0))}
                                     </div>
                                     <div className="text-xs text-zinc-500 mt-1">
-                                        {(sankeyData.financials.grossProfitMargin * 100).toFixed(1)}% Margin
+                                        {(Number(sankeyData.financials.grossProfitMargin || 0) * 100).toFixed(1)}% Margin
                                     </div>
                                 </div>
                                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">

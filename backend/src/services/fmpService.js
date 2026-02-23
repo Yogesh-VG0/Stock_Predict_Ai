@@ -319,7 +319,7 @@ const getSankeyData = async (symbol) => {
                 financials: {
                     revenue: incomeData.revenue,
                     netIncome: incomeData.netIncome,
-                    grossProfitMargin: incomeData.grossProfitRatio,
+                    grossProfitMargin: incomeData.grossProfitRatio ?? (incomeData.grossProfit / incomeData.revenue),
                     date: incomeData.date,
                     period: incomeData.period,
                     fiscalYear: incomeData.fiscalYear
