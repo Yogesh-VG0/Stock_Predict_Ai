@@ -304,6 +304,17 @@ const getSankeyData = async (symbol) => {
             addLink('Income Before Tax', 'Net Income', Math.max(0, incomeData.netIncome), '#22c55e');
 
 
+            // Compute node totals so frontend can render inline numbers
+            const nodeTotals = {};
+            for (const link of output.links) {
+                nodeTotals[link.source] = (nodeTotals[link.source] || 0) + link.value;
+                nodeTotals[link.target] = (nodeTotals[link.target] || 0) + link.value;
+            }
+            output.nodes = output.nodes.map(n => ({
+                ...n,
+                displayValue: nodeTotals[n.id] || 0
+            }));
+
             const finalData = {
                 financials: {
                     revenue: incomeData.revenue,

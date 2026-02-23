@@ -202,12 +202,11 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
 
                             {/* The Sankey Chart */}
                             <div className="p-3 sm:p-4 bg-black/40 rounded-xl border border-zinc-800/50">
-                                {/* Only allow horizontal scroll on very narrow screens */}
-                                <div className="overflow-x-auto">
-                                    <div className="min-w-[640px] sm:min-w-0">
-                                        <SankeyChart data={sankeyData.sankey} height={typeof window !== 'undefined' && window.innerWidth < 640 ? 420 : 600} />
-                                    </div>
-                                </div>
+                                <SankeyChart
+                                    data={sankeyData.sankey}
+                                    symbol={currentSymbol}
+                                    height={typeof window !== 'undefined' && window.innerWidth < 640 ? 520 : 680}
+                                />
                             </div>
                         </div>
                     ) : (
