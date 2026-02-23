@@ -231,17 +231,21 @@ export default function SankeyChart({
     }, [enriched]);
 
     const CardsLayer = (layerProps: any) => {
-        const { nodes, width, height: innerH } = layerProps;
+        const { nodes, width: innerW, height: innerH } = layerProps;
 
         const PAD = 12;
-        const GAP = 8;
+        const GAP = isMobile ? 10 : 8;
         const cardH = isMobile ? 44 : 56;
+
         const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(v, max));
+
+        type RailKey = "L" | "R1" | "R2";
 
         type CardCandidate = {
             id: string;
             node: any;
             side: "L" | "R";
+            rail: RailKey;
             x: number;
             desiredY: number;
             y: number;
@@ -249,10 +253,20 @@ export default function SankeyChart({
 
         const minX = nodes.reduce((m: number, n: any) => Math.min(m, Number(n.x ?? Infinity)), Infinity);
 
-        // Two right rails: outer (rail 1) and inner (rail 2)
-        const LEFT_RAIL_X = 12;
-        const RIGHT_RAIL_1 = width - cardW - 12;        // outer right column
-        const RIGHT_RAIL_2 = width - (cardW * 2) - 28;  // inner right column
+        // Rails (make them ALWAYS visible in the SVG)
+        const maxX = innerW + margin.right - cardW - PAD; // rightmost safe card left edge
+        const minXSafe = PAD;                              // leftmost safe card left edge
+
+        // Desktop: keep LEFT cards inside inner plot, use margin space only on the right
+        const LEFT_RAIL_X = PAD;
+
+        // Desktop right rails live in the right margin space
+        const RIGHT_RAIL_1 = innerW + (margin.right - cardW - PAD);               // outer right
+        const RIGHT_RAIL_2 = innerW + (margin.right - (cardW * 2) - (PAD + 16));  // inner right
+
+        // Mobile: keep everything inside inner plot (no margin space)
+        const MOBILE_LEFT = PAD;
+        const MOBILE_RIGHT = innerW - cardW - PAD;
 
         const candidates: CardCandidate[] = [];
         let rightIndex = 0;
@@ -283,34 +297,50 @@ export default function SankeyChart({
                 (Number.isFinite(Number(node.depth)) ? Number(node.depth) : undefined) ??
                 (Number.isFinite(Number(node.layer)) ? Number(node.layer) : undefined);
 
-            const isFirstColumn =
-                rawDepth === 0 ||
-                Math.abs(nx - minX) < 2;
-
+            const isFirstColumn = rawDepth === 0 || Math.abs(nx - minX) < 2;
             const side: "L" | "R" = isSegment || isFirstColumn ? "L" : "R";
 
             const centerY = ny + nh / 2;
             const desiredY = clamp(centerY - cardH / 2, PAD, innerH - cardH - PAD);
 
-            // On desktop, alternate right-side cards between two columns to reduce crowding
             let x: number;
+            let rail: RailKey;
+
             if (side === "L") {
-                x = LEFT_RAIL_X;
+                x = isMobile ? MOBILE_LEFT : LEFT_RAIL_X;
+                rail = "L";
             } else if (isMobile) {
-                x = RIGHT_RAIL_1;
+                x = MOBILE_RIGHT;
+                rail = "R1";
             } else {
-                x = (rightIndex % 2 === 0) ? RIGHT_RAIL_1 : RIGHT_RAIL_2;
+                // alternate on desktop
+                if (rightIndex % 2 === 0) {
+                    x = RIGHT_RAIL_1;
+                    rail = "R1";
+                } else {
+                    x = RIGHT_RAIL_2;
+                    rail = "R2";
+                }
                 rightIndex++;
             }
 
-            candidates.push({ id, node, side, x, desiredY, y: desiredY });
+            // HARD CLAMP so cards can NEVER leave the visible SVG
+            x = clamp(x, minXSafe, maxX);
+
+            candidates.push({ id, node, side, rail, x, desiredY, y: desiredY });
         }
 
-        // Resolve stacking per rail (unique x position) to avoid overlaps within each column
-        const resolveRail = (railX: number) => {
-            const arr = candidates
-                .filter((c) => c.x === railX)
-                .sort((a, b) => a.desiredY - b.desiredY);
+        // De-dupe: if multiple candidates share the same id, keep only the first
+        const seen = new Set<string>();
+        const uniqueCandidates = candidates.filter((c) => {
+            if (seen.has(c.id)) return false;
+            seen.add(c.id);
+            return true;
+        });
+
+        // Stack cards PER RAIL so they don't crowd into one column
+        const resolveRail = (rail: RailKey) => {
+            const arr = uniqueCandidates.filter((c) => c.rail === rail).sort((a, b) => a.desiredY - b.desiredY);
 
             let cursor = PAD;
             for (const c of arr) {
@@ -319,6 +349,7 @@ export default function SankeyChart({
                 cursor = c.y + cardH + GAP;
             }
 
+            // If overflow, compress upward from bottom
             if (arr.length) {
                 const last = arr[arr.length - 1];
                 const overflow = last.y + cardH + PAD - innerH;
@@ -332,15 +363,31 @@ export default function SankeyChart({
                     }
                 }
             }
+
+            // Center stack vertically if there is extra space (desktop only)
+            if (!isMobile && arr.length) {
+                const top = arr[0].y;
+                const bottom = arr[arr.length - 1].y + cardH;
+                const used = bottom - top;
+                const available = innerH - PAD * 2;
+                const slack = available - used;
+
+                if (slack > 6) {
+                    const shift = slack / 2;
+                    for (const c of arr) {
+                        c.y = clamp(c.y + shift, PAD, innerH - cardH - PAD);
+                    }
+                }
+            }
         };
 
-        resolveRail(LEFT_RAIL_X);
-        resolveRail(RIGHT_RAIL_1);
-        if (!isMobile) resolveRail(RIGHT_RAIL_2);
+        resolveRail("L");
+        resolveRail("R1");
+        if (!isMobile) resolveRail("R2");
 
         return (
             <g>
-                {candidates.map(({ id, node, side, x, y }) => {
+                {uniqueCandidates.map(({ id, node, side, x, y, rail }, idx) => {
                     const color = node.color || PALETTE.neutral;
 
                     const nx = Number(node.x);
@@ -348,18 +395,25 @@ export default function SankeyChart({
                     const nw = Number(node.width);
                     const nh = Number(node.height);
 
-                    const anchorX = side === "L" ? x + cardW : x;
-                    const anchorY = y + cardH / 2;
                     const nodeCX = nx + nw / 2;
                     const nodeCY = ny + nh / 2;
 
-                    const labelMax = isMobile ? 14 : 22;
+                    // Anchor is the card edge (so the line stops exactly at the card)
+                    const anchorX = side === "L" ? x + cardW : x;
+                    const anchorY = y + cardH / 2;
+
+                    // Keep bezier control points proportional to distance (prevents insane long curves)
+                    const dx = anchorX - nodeCX;
+                    const ctrl = clamp(Math.abs(dx) * 0.35, 30, 90) * (dx < 0 ? -1 : 1);
+
+                    const labelMax = isMobile ? 18 : 22;
                     const label = truncate(id, labelMax);
                     const value = node.displayValue ?? node.value ?? 0;
                     const iconHref = ICONS[id];
 
                     return (
-                        <g key={id}>
+                        <g key={`${id}__${rail}__${idx}`}>
+                            {/* Node highlight */}
                             <rect
                                 x={nx - 2}
                                 y={ny - 2}
@@ -373,14 +427,16 @@ export default function SankeyChart({
                                 strokeWidth={4}
                             />
 
+                            {/* Connector */}
                             <path
-                                d={`M ${nodeCX} ${nodeCY} C ${nodeCX + (side === "L" ? -40 : 40)} ${nodeCY}, ${anchorX + (side === "L" ? 40 : -40)} ${anchorY}, ${anchorX} ${anchorY}`}
+                                d={`M ${nodeCX} ${nodeCY} C ${nodeCX + ctrl} ${nodeCY}, ${anchorX - ctrl} ${anchorY}, ${anchorX} ${anchorY}`}
                                 fill="none"
                                 stroke={color}
                                 strokeOpacity={0.35}
                                 strokeWidth={1.25}
                             />
 
+                            {/* Card */}
                             <g transform={`translate(${x}, ${y})`}>
                                 <rect
                                     width={cardW}
