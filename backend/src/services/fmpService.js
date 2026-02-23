@@ -198,6 +198,13 @@ const getSankeyData = async (symbol) => {
             if (costOfRevenue <= 0 && revenueTotal > 0 && grossProfit > 0) {
                 costOfRevenue = Math.max(0, revenueTotal - grossProfit);
             }
+            const ratio = Number(incomeData.grossProfitRatio);
+            if (grossProfit <= 0 && revenueTotal > 0 && Number.isFinite(ratio) && ratio > 0) {
+                grossProfit = Math.max(0, revenueTotal * ratio);
+                if (costOfRevenue <= 0) {
+                    costOfRevenue = Math.max(0, revenueTotal - grossProfit);
+                }
+            }
 
             const output = {
                 nodes: [],
@@ -335,10 +342,12 @@ const getSankeyData = async (symbol) => {
                 incoming[link.target] = (incoming[link.target] || 0) + link.value;
                 outgoing[link.source] = (outgoing[link.source] || 0) + link.value;
             }
-            output.nodes = output.nodes.map(n => ({
-                ...n,
-                displayValue: incoming[n.id] ?? outgoing[n.id] ?? 0
-            }));
+            output.nodes = output.nodes.map(n => {
+                let dv = incoming[n.id] ?? outgoing[n.id] ?? 0;
+                if (n.id === 'Total Revenue') dv = revenueTotal;
+                if (n.id === 'Gross Profit') dv = grossProfit;
+                return { ...n, displayValue: dv };
+            });
 
             const finalData = {
                 financials: {

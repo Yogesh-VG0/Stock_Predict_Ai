@@ -220,11 +220,14 @@ export default function SankeyChart({
         ? { top: 54, right: 18, bottom: 24, left: 18 }
         : { top: 54, right: cardW + 90, bottom: 36, left: cardW + 90 };
 
-    const totalRevenueNode = useMemo(() => {
+    const totalRevenueValue = useMemo(() => {
+        const vFromLinks = enriched.links
+            .filter((l: any) => String(l.target) === "Total Revenue")
+            .reduce((acc: number, l: any) => acc + Number(l.value || 0), 0);
+        if (vFromLinks > 0) return vFromLinks;
         const n: any = enriched.nodes.find((x: any) => String(x.id) === "Total Revenue");
-        return n;
+        return Number(n?.displayValue ?? n?.value ?? 0);
     }, [enriched]);
-    const totalRevenueValue = Number(totalRevenueNode?.displayValue ?? totalRevenueNode?.value ?? 0);
 
     const CardsLayer = (layerProps: any) => {
         const { nodes, width, height: innerH } = layerProps;
@@ -282,10 +285,9 @@ export default function SankeyChart({
             const centerY = ny + nh / 2;
             const desiredY = clamp(centerY - cardH / 2, PAD, innerH - cardH - PAD);
 
-            let x = side === "L" ? nx - (cardW + 18) : nx + nw + 18;
-            if (!isMobile) {
-                x = clamp(x, -cardW - 40, width + 40);
-            }
+            const LEFT_RAIL_X = 12;
+            const RIGHT_RAIL_X = width - cardW - 12;
+            const x = side === "L" ? LEFT_RAIL_X : RIGHT_RAIL_X;
 
             candidates.push({ id, node, side, x, desiredY, y: desiredY });
         }
@@ -403,11 +405,11 @@ export default function SankeyChart({
 
     if (!isMounted) return <div style={{ height }} />;
 
-    const canvasWidth = isMobile ? 1100 : "100%";
+    const canvasWidth = isMobile ? 1100 : 1400;
     const linkColorFn = (link: any) => link.color;
 
     return (
-        <div className="sankeyWrap relative w-full rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
+        <div className="sankeyWrap relative w-full overflow-hidden rounded-2xl border border-white/5 shadow-2xl" style={{ height }}>
             <div className="absolute inset-0 rounded-2xl" style={{ background: PALETTE.background }} />
 
             {symbol && (
@@ -452,7 +454,7 @@ export default function SankeyChart({
                 initialPositionX={isMobile ? -140 : 0}
                 initialPositionY={0}
                 centerOnInit={!isMobile}
-                limitToBounds={false}
+                limitToBounds={true}
                 panning={{ excluded: [] }}
                 alignmentAnimation={{ disabled: true }}
                 wheel={{ step: 0.1 }}
@@ -478,8 +480,18 @@ export default function SankeyChart({
                         </div>
 
                         <TransformComponent
-                            wrapperStyle={{ width: "100%", height, overflow: "visible" }}
-                            contentStyle={{ width: canvasWidth, height, overflow: "visible" }}
+                            wrapperStyle={{
+                                width: "100%",
+                                height,
+                                overflow: "hidden",
+                                touchAction: "none",
+                                userSelect: "none",
+                            }}
+                            contentStyle={{
+                                width: canvasWidth,
+                                height,
+                                overflow: "visible",
+                            }}
                         >
                             <div style={{ width: canvasWidth, height, overflow: "visible" }}>
                                 <ResponsiveSankey

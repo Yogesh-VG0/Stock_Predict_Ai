@@ -181,21 +181,38 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                         </div>
                     ) : sankeyData ? (
                         <div className="space-y-6">
-                            {/* Summary Metrics */}
+                            {(() => {
+                                const links = sankeyData?.sankey?.links ?? [];
+                                const sumTo = (target: string) =>
+                                    links
+                                        .filter((l: any) => String(l.target) === target)
+                                        .reduce((acc: number, l: any) => acc + Number(l.value || 0), 0);
+                                const sumFromTo = (source: string, target: string) =>
+                                    links
+                                        .filter((l: any) => String(l.source) === source && String(l.target) === target)
+                                        .reduce((acc: number, l: any) => acc + Number(l.value || 0), 0);
+
+                                const totalRevenueFromGraph = sumTo("Total Revenue");
+                                const grossProfitFromGraph = sumFromTo("Total Revenue", "Gross Profit");
+
+                                const totalRevenue = totalRevenueFromGraph || sankeyData.financials?.revenue || 0;
+                                const grossProfit =
+                                    grossProfitFromGraph ||
+                                    sankeyData.financials?.grossProfit ||
+                                    (totalRevenue * Number(sankeyData.financials?.grossProfitMargin || 0));
+
+                                return (
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
                                     <div className="text-xs text-zinc-400 mb-1">Total Revenue</div>
                                     <div className="text-xl font-bold text-blue-400">
-                                        {formatCurrency(sankeyData.financials.revenue)}
+                                        {formatCurrency(totalRevenue)}
                                     </div>
                                 </div>
                                 <div className="bg-zinc-900 rounded-lg p-4 border border-zinc-800">
                                     <div className="text-xs text-zinc-400 mb-1">Gross Profit</div>
                                     <div className="text-xl font-bold text-emerald-400">
-                                        {formatCurrency(
-                                            sankeyData.financials.grossProfit ??
-                                            sankeyData.financials.revenue * Number(sankeyData.financials.grossProfitMargin || 0)
-                                        )}
+                                        {formatCurrency(grossProfit)}
                                     </div>
                                     <div className="text-xs text-zinc-500 mt-1">
                                         {(Number(sankeyData.financials.grossProfitMargin || 0) * 100).toFixed(1)}% Margin
@@ -217,6 +234,8 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                                     </div>
                                 </div>
                             </div>
+                                );
+                            })()}
 
                             {/* The Sankey Chart */}
                             <div className="p-3 sm:p-4 bg-black/40 rounded-xl border border-zinc-800/50">
