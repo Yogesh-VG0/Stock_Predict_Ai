@@ -1,0 +1,25 @@
+﻿2026-02-25T22:32:00.4831505Z ##[group]Run actions/setup-python@v5
+2026-02-25T22:32:00.4831905Z with:
+2026-02-25T22:32:00.4832174Z   python-version: 3.11
+2026-02-25T22:32:00.4832718Z   cache: pip
+2026-02-25T22:32:00.4833073Z   cache-dependency-path: ml_backend/requirements-prod.txt
+2026-02-25T22:32:00.4833492Z   check-latest: false
+2026-02-25T22:32:00.4833922Z   token: ***
+2026-02-25T22:32:00.4834200Z   update-environment: true
+2026-02-25T22:32:00.4834534Z   allow-prereleases: false
+2026-02-25T22:32:00.4834846Z   freethreaded: false
+2026-02-25T22:32:00.4835124Z env:
+2026-02-25T22:32:00.4835823Z   MONGODB_URI: ***
+2026-02-25T22:32:00.4836100Z   SKIP_SEC_FMP: true
+2026-02-25T22:32:00.4836374Z ##[endgroup]
+2026-02-25T22:32:00.6633867Z ##[group]Installed versions
+2026-02-25T22:32:00.6726721Z Successfully set up CPython (3.11.14)
+2026-02-25T22:32:00.6727752Z ##[endgroup]
+2026-02-25T22:32:00.7049428Z [command]/opt/hostedtoolcache/Python/3.11.14/x64/bin/pip cache dir
+2026-02-25T22:32:01.0137207Z /home/runner/.cache/pip
+2026-02-25T22:32:01.2004052Z Cache hit for: setup-python-Linux-x64-24.04-Ubuntu-python-3.11.14-pip-353a2cd458b416f651fcbd3d61aabe7d3cc8191b4835732d11dce3d4338a0e5e
+2026-02-25T22:32:02.2036119Z Received 113644540 of 113644540 (100.0%), 124.3 MBs/sec
+2026-02-25T22:32:02.2037303Z Cache Size: ~108 MB (113644540 B)
+2026-02-25T22:32:02.2066665Z [command]/usr/bin/tar -xf /home/runner/work/_temp/a7c767a3-568c-486b-9612-04c1983f46e8/cache.tzst -P -C /home/runner/work/Stock_Predict_Ai/Stock_Predict_Ai --use-compress-program unzstd
+2026-02-25T22:32:02.4116308Z Cache restored successfully
+2026-02-25T22:32:02.4359169Z Cache restored from key: setup-python-Linux-x64-24.04-Ubuntu-python-3.11.14-pip-353a2cd458b416f651fcbd3d61aabe7d3cc8191b4835732d11dce3d4338a0e5e

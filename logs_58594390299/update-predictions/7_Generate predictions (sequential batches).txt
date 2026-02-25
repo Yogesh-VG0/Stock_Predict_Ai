@@ -1,0 +1,1125 @@
+﻿2026-02-25T22:56:06.3824917Z ##[group]Run set -e
+2026-02-25T22:56:06.3825268Z [36;1mset -e[0m
+2026-02-25T22:56:06.3825498Z [36;1m[0m
+2026-02-25T22:56:06.3826015Z [36;1m# 10 batches × 10 tickers = 100 stocks[0m
+2026-02-25T22:56:06.3826478Z [36;1m# Models are already trained above; --predict-only loads them from disk.[0m
+2026-02-25T22:56:06.3826890Z [36;1mBATCHES=([0m
+2026-02-25T22:56:06.3827200Z [36;1m  "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"[0m
+2026-02-25T22:56:06.3827609Z [36;1m  "CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX"[0m
+2026-02-25T22:56:06.3827974Z [36;1m  "LOW SBUX NKE MCD DIS BKNG TGT JPM V MA"[0m
+2026-02-25T22:56:06.3828534Z [36;1m  "BAC WFC GS MS AXP BLK SCHW C COF BK"[0m
+2026-02-25T22:56:06.3828884Z [36;1m  "MET AIG USB XOM CVX COP JNJ UNH LLY PFE"[0m
+2026-02-25T22:56:06.3829238Z [36;1m  "ABBV ABT TMO DHR MRK AMGN GILD ISRG MDT BMY"[0m
+2026-02-25T22:56:06.3829601Z [36;1m  "CVS WMT COST PG KO PEP MDLZ CL MO CAT"[0m
+2026-02-25T22:56:06.3829937Z [36;1m  "HON UNP BA RTX LMT DE GE GD EMR FDX"[0m
+2026-02-25T22:56:06.3830334Z [36;1m  "UPS MMM CMCSA VZ T CHTR BRK-B ACN IBM PYPL"[0m
+2026-02-25T22:56:06.3830699Z [36;1m  "LIN NEE SO DUK AMT SPG PLTR TMUS PM AMAT"[0m
+2026-02-25T22:56:06.3831023Z [36;1m)[0m
+2026-02-25T22:56:06.3831231Z [36;1m[0m
+2026-02-25T22:56:06.3831455Z [36;1mFAILED_BATCHES=()[0m
+2026-02-25T22:56:06.3831731Z [36;1mfor idx in "${!BATCHES[@]}"; do[0m
+2026-02-25T22:56:06.3832035Z [36;1m  BATCH="${BATCHES[$idx]}"[0m
+2026-02-25T22:56:06.3832320Z [36;1m  BATCH_NUM=$((idx + 1))[0m
+2026-02-25T22:56:06.3832584Z [36;1m  echo ""[0m
+2026-02-25T22:56:06.3832904Z [36;1m  echo "===== Batch $BATCH_NUM/${#BATCHES[@]}: $BATCH ====="[0m
+2026-02-25T22:56:06.3833250Z [36;1m[0m
+2026-02-25T22:56:06.3833474Z [36;1m  SUCCESS=0[0m
+2026-02-25T22:56:06.3833730Z [36;1m  for attempt in 1 2 3; do[0m
+2026-02-25T22:56:06.3834025Z [36;1m    echo "  Attempt $attempt..."[0m
+2026-02-25T22:56:06.3834660Z [36;1m    if python -m ml_backend.scripts.run_pipeline --predict-only --tickers $BATCH 2>&1 | tee "batch_${BATCH_NUM}_attempt_${attempt}.log"; then[0m
+2026-02-25T22:56:06.3835279Z [36;1m      SUCCESS=1[0m
+2026-02-25T22:56:06.3835539Z [36;1m      break[0m
+2026-02-25T22:56:06.3836258Z [36;1m    fi[0m
+2026-02-25T22:56:06.3836541Z [36;1m    [0m
+2026-02-25T22:56:06.3836972Z [36;1m    if grep -q "No saved models found" "batch_${BATCH_NUM}_attempt_${attempt}.log" 2>/dev/null; then[0m
+2026-02-25T22:56:06.3837588Z [36;1m      echo "  *** CRITICAL: No saved models found. Failing job immediately. ***"[0m
+2026-02-25T22:56:06.3838032Z [36;1m      exit 1[0m
+2026-02-25T22:56:06.3838279Z [36;1m    fi[0m
+2026-02-25T22:56:06.3838494Z [36;1m[0m
+2026-02-25T22:56:06.3838765Z [36;1m    echo "  Attempt $attempt failed. Last error:"[0m
+2026-02-25T22:56:06.3839249Z [36;1m    tail -50 "batch_${BATCH_NUM}_attempt_${attempt}.log" || echo "  (log file not found)"[0m
+2026-02-25T22:56:06.3839723Z [36;1m    sleep $((attempt * 20))[0m
+2026-02-25T22:56:06.3840016Z [36;1m  done[0m
+2026-02-25T22:56:06.3840234Z [36;1m[0m
+2026-02-25T22:56:06.3840452Z [36;1m  if [ "$SUCCESS" -eq 0 ]; then[0m
+2026-02-25T22:56:06.3840807Z [36;1m    echo "  *** Batch $BATCH_NUM FAILED after 3 attempts ***"[0m
+2026-02-25T22:56:06.3841182Z [36;1m    FAILED_BATCHES+=("$BATCH_NUM")[0m
+2026-02-25T22:56:06.3841467Z [36;1m  fi[0m
+2026-02-25T22:56:06.3841680Z [36;1m[0m
+2026-02-25T22:56:06.3842016Z [36;1m  # Rate limit: pause between batches (API courtesy — paces Finnhub 60/min)[0m
+2026-02-25T22:56:06.3842470Z [36;1m  if [ "$BATCH_NUM" -lt "${#BATCHES[@]}" ]; then[0m
+2026-02-25T22:56:06.3842787Z [36;1m    sleep 10[0m
+2026-02-25T22:56:06.3843031Z [36;1m  fi[0m
+2026-02-25T22:56:06.3843248Z [36;1mdone[0m
+2026-02-25T22:56:06.3843451Z [36;1m[0m
+2026-02-25T22:56:06.3843656Z [36;1mecho ""[0m
+2026-02-25T22:56:06.3843920Z [36;1mecho "===== Pipeline Summary ====="[0m
+2026-02-25T22:56:06.3844245Z [36;1mecho "Total batches: ${#BATCHES[@]}"[0m
+2026-02-25T22:56:06.3844593Z [36;1mecho "Failed batches: ${#FAILED_BATCHES[@]}"[0m
+2026-02-25T22:56:06.3845186Z [36;1mif [ "${#FAILED_BATCHES[@]}" -gt 0 ]; then[0m
+2026-02-25T22:56:06.3845558Z [36;1m  echo "Failed batch numbers: ${FAILED_BATCHES[*]}"[0m
+2026-02-25T22:56:06.3846148Z [36;1m  # Fail the job if more than 30% of batches failed[0m
+2026-02-25T22:56:06.3846497Z [36;1m  if [ "${#FAILED_BATCHES[@]}" -gt 3 ]; then[0m
+2026-02-25T22:56:06.3846864Z [36;1m    echo "Too many failures — failing job."[0m
+2026-02-25T22:56:06.3847172Z [36;1m    exit 1[0m
+2026-02-25T22:56:06.3847397Z [36;1m  fi[0m
+2026-02-25T22:56:06.3847654Z [36;1m  echo "Partial success — continuing."[0m
+2026-02-25T22:56:06.3848110Z [36;1mfi[0m
+2026-02-25T22:56:06.3901439Z shell: /usr/bin/bash -e {0}
+2026-02-25T22:56:06.3901748Z env:
+2026-02-25T22:56:06.3902395Z   MONGODB_URI: ***
+2026-02-25T22:56:06.3902646Z   SKIP_SEC_FMP: true
+2026-02-25T22:56:06.3902974Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T22:56:06.3903436Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-02-25T22:56:06.3903900Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T22:56:06.3904309Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T22:56:06.3904701Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T22:56:06.3905093Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-02-25T22:56:06.3905546Z   FINNHUB_API_KEY: ***
+2026-02-25T22:56:06.3906079Z   KALEIDOSCOPE_API_KEY: ***
+2026-02-25T22:56:06.3906398Z   FRED_API_KEY: ***
+2026-02-25T22:56:06.3906686Z   FMP_API_KEY: ***
+2026-02-25T22:56:06.3906957Z   ALPHAVANTAGE_API_KEY: ***
+2026-02-25T22:56:06.3907306Z   MARKETAUX_API_KEY: ***
+2026-02-25T22:56:06.3907633Z   GOOGLE_API_KEY: ***
+2026-02-25T22:56:06.3907909Z   REDDIT_CLIENT_ID: ***
+2026-02-25T22:56:06.3908219Z   REDDIT_CLIENT_SECRET: ***
+2026-02-25T22:56:06.3908488Z   REDDIT_USER_AGENT: StockPredictAI/1.0
+2026-02-25T22:56:06.3908872Z   PYTHONPATH: /home/runner/work/Stock_Predict_Ai/Stock_Predict_Ai
+2026-02-25T22:56:06.3909289Z   GITHUB_SHA: 5eff18de0fdff25a5fe0804e46e750517338d4de
+2026-02-25T22:56:06.3909615Z   RUN_ID: 22418837073
+2026-02-25T22:56:06.3909879Z ##[endgroup]
+2026-02-25T22:56:06.3996273Z 
+2026-02-25T22:56:06.3996768Z ===== Batch 1/10: AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC =====
+2026-02-25T22:56:06.3997376Z   Attempt 1...
+2026-02-25T22:56:09.8657150Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T22:56:09.8658129Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T22:56:09.8658944Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T22:56:09.8659769Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T22:56:09.8660514Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T22:56:09.8661290Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T22:56:09.8662076Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T22:56:09.8662586Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T22:56:09.8663077Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T22:56:09.8663609Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T22:56:09.8664120Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T22:56:09.8664602Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T22:56:09.8665080Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T22:56:09.8665567Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T22:56:09.8666336Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T22:56:11.2732465Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T22:56:11.4705992Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T22:56:11.4712627Z INFO:__main__:Fetching historical data...
+2026-02-25T22:56:13.8286344Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T22:56:13.8286826Z INFO:__main__:Downloading AAPL...
+2026-02-25T22:56:14.1747194Z INFO:__main__:Downloading MSFT...
+2026-02-25T22:56:14.3263141Z INFO:__main__:Downloading NVDA...
+2026-02-25T22:56:14.5248651Z INFO:__main__:Downloading GOOGL...
+2026-02-25T22:56:14.6600785Z INFO:__main__:Downloading META...
+2026-02-25T22:56:14.7356795Z INFO:__main__:Downloading AVGO...
+2026-02-25T22:56:14.8365957Z INFO:__main__:Downloading ORCL...
+2026-02-25T22:56:14.9863663Z INFO:__main__:Downloading CRM...
+2026-02-25T22:56:15.1736900Z INFO:__main__:Downloading AMD...
+2026-02-25T22:56:15.3667149Z INFO:__main__:Downloading INTC...
+2026-02-25T22:56:15.6686180Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T22:56:15.6740242Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T22:56:15.6741432Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T22:56:16.1108065Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T22:56:16.1112443Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T22:56:16.1136400Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T22:56:27.2538764Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AAPL (upserted=0, modified=3)
+2026-02-25T22:56:27.2542740Z INFO:ml_backend.utils.mongodb:Stored prediction for AAPL-next_day: Price $274.1961241292701, Change $-0.033886857058007536, Confidence 0.499
+2026-02-25T22:56:27.2544023Z INFO:ml_backend.utils.mongodb:Stored prediction for AAPL-7_day: Price $274.23225508420404, Change $0.0022440978759163954, Confidence 0.496
+2026-02-25T22:56:27.2544896Z INFO:ml_backend.utils.mongodb:Stored prediction for AAPL-30_day: Price $269.2216824460614, Change $-5.008328540266746, Confidence 0.393
+2026-02-25T22:56:27.2545491Z INFO:__main__:Stored predictions for AAPL
+2026-02-25T22:56:28.5875940Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MSFT (upserted=0, modified=3)
+2026-02-25T22:56:28.5877157Z INFO:ml_backend.utils.mongodb:Stored prediction for MSFT-next_day: Price $400.5505035888367, Change $-0.049502514678920306, Confidence 0.499
+2026-02-25T22:56:28.5878417Z INFO:ml_backend.utils.mongodb:Stored prediction for MSFT-7_day: Price $400.603284321022, Change $0.0032782175063630348, Confidence 0.496
+2026-02-25T22:56:28.5879738Z INFO:ml_backend.utils.mongodb:Stored prediction for MSFT-30_day: Price $407.89585768465247, Change $7.295851581136844, Confidence 0.716
+2026-02-25T22:56:28.5880683Z INFO:__main__:Stored predictions for MSFT
+2026-02-25T22:56:29.9280295Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for NVDA (upserted=0, modified=3)
+2026-02-25T22:56:29.9281508Z INFO:ml_backend.utils.mongodb:Stored prediction for NVDA-next_day: Price $194.94683403786394, Change $-0.6131635207298132, Confidence 0.508
+2026-02-25T22:56:29.9282822Z INFO:ml_backend.utils.mongodb:Stored prediction for NVDA-7_day: Price $195.50230885363715, Change $-0.05768870495660394, Confidence 0.496
+2026-02-25T22:56:29.9284138Z INFO:ml_backend.utils.mongodb:Stored prediction for NVDA-30_day: Price $199.62747370890926, Change $4.067476150315514, Confidence 0.729
+2026-02-25T22:56:29.9285131Z INFO:__main__:Stored predictions for NVDA
+2026-02-25T22:56:31.1081576Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for GOOGL (upserted=0, modified=3)
+2026-02-25T22:56:31.1082808Z INFO:ml_backend.utils.mongodb:Stored prediction for GOOGL-next_day: Price $312.7045624239811, Change $-0.1954314725032873, Confidence 0.584
+2026-02-25T22:56:31.1084178Z INFO:ml_backend.utils.mongodb:Stored prediction for GOOGL-7_day: Price $313.0722188353633, Change $0.17222493887891233, Confidence 0.529
+2026-02-25T22:56:31.1085482Z INFO:ml_backend.utils.mongodb:Stored prediction for GOOGL-30_day: Price $310.1177261878684, Change $-2.7822677086159615, Confidence 0.447
+2026-02-25T22:56:31.1086675Z INFO:__main__:Stored predictions for GOOGL
+2026-02-25T22:56:32.1936239Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for META (upserted=0, modified=3)
+2026-02-25T22:56:32.1937495Z INFO:ml_backend.utils.mongodb:Stored prediction for META-next_day: Price $653.6092253609062, Change $-0.08077708050007004, Confidence 0.499
+2026-02-25T22:56:32.1938749Z INFO:ml_backend.utils.mongodb:Stored prediction for META-7_day: Price $653.6953517623675, Change $0.005349320961272497, Confidence 0.496
+2026-02-25T22:56:32.1940021Z INFO:ml_backend.utils.mongodb:Stored prediction for META-30_day: Price $664.6841791794518, Change $10.994176738045553, Confidence 0.614
+2026-02-25T22:56:32.1941439Z INFO:__main__:Stored predictions for META
+2026-02-25T22:56:33.2803661Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AVGO (upserted=0, modified=3)
+2026-02-25T22:56:33.2804812Z INFO:ml_backend.utils.mongodb:Stored prediction for AVGO-next_day: Price $332.2689337036725, Change $-0.04106385492127629, Confidence 0.499
+2026-02-25T22:56:33.2805906Z INFO:ml_backend.utils.mongodb:Stored prediction for AVGO-7_day: Price $332.2119686485783, Change $-0.09802891001544367, Confidence 0.496
+2026-02-25T22:56:33.2806807Z INFO:ml_backend.utils.mongodb:Stored prediction for AVGO-30_day: Price $339.0539819644167, Change $6.743984405822971, Confidence 0.482
+2026-02-25T22:56:33.2807388Z INFO:__main__:Stored predictions for AVGO
+2026-02-25T22:56:34.3655380Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for ORCL (upserted=0, modified=3)
+2026-02-25T22:56:34.3656965Z INFO:ml_backend.utils.mongodb:Stored prediction for ORCL-next_day: Price $147.87172448511996, Change $-0.01827490452848224, Confidence 0.499
+2026-02-25T22:56:34.3658459Z INFO:ml_backend.utils.mongodb:Stored prediction for ORCL-7_day: Price $148.6260758695256, Change $0.7360764798771697, Confidence 0.508
+2026-02-25T22:56:34.3659679Z INFO:ml_backend.utils.mongodb:Stored prediction for ORCL-30_day: Price $153.20296333376731, Change $5.312963944118877, Confidence 0.544
+2026-02-25T22:56:34.3660290Z INFO:__main__:Stored predictions for ORCL
+2026-02-25T22:56:35.4511596Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CRM (upserted=0, modified=3)
+2026-02-25T22:56:35.4512950Z INFO:ml_backend.utils.mongodb:Stored prediction for CRM-next_day: Price $191.46777075841302, Change $-0.2822292415869754, Confidence 0.501
+2026-02-25T22:56:35.4514403Z INFO:ml_backend.utils.mongodb:Stored prediction for CRM-7_day: Price $190.34591992524702, Change $-1.404080074752983, Confidence 0.431
+2026-02-25T22:56:35.4515880Z INFO:ml_backend.utils.mongodb:Stored prediction for CRM-30_day: Price $186.74719520699634, Change $-5.002804793003662, Confidence 0.323
+2026-02-25T22:56:35.4516501Z INFO:__main__:Stored predictions for CRM
+2026-02-25T22:56:36.5394594Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AMD (upserted=0, modified=3)
+2026-02-25T22:56:36.5396179Z INFO:ml_backend.utils.mongodb:Stored prediction for AMD-next_day: Price $210.83394444430968, Change $-0.02605616604188299, Confidence 0.499
+2026-02-25T22:56:36.5397626Z INFO:ml_backend.utils.mongodb:Stored prediction for AMD-7_day: Price $211.50255127829735, Change $0.642550667945784, Confidence 0.508
+2026-02-25T22:56:36.5398891Z INFO:ml_backend.utils.mongodb:Stored prediction for AMD-30_day: Price $217.96454282988176, Change $7.104542219530202, Confidence 0.540
+2026-02-25T22:56:36.5399501Z INFO:__main__:Stored predictions for AMD
+2026-02-25T22:56:37.6253109Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for INTC (upserted=0, modified=3)
+2026-02-25T22:56:37.6254332Z INFO:ml_backend.utils.mongodb:Stored prediction for INTC-next_day: Price $46.874208062858955, Change $-0.005793005256279571, Confidence 0.499
+2026-02-25T22:56:37.6255274Z INFO:ml_backend.utils.mongodb:Stored prediction for INTC-7_day: Price $47.02285782573841, Change $0.1428567576231785, Confidence 0.508
+2026-02-25T22:56:37.6256360Z INFO:ml_backend.utils.mongodb:Stored prediction for INTC-30_day: Price $48.05409020318619, Change $1.1740891350709575, Confidence 0.576
+2026-02-25T22:56:37.6256980Z INFO:__main__:Stored predictions for INTC
+2026-02-25T22:56:37.6257672Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T22:56:38.7122660Z 
+2026-02-25T22:56:38.7123379Z ========================================================
+2026-02-25T22:56:38.7123816Z   PIPELINE HEALTH SUMMARY
+2026-02-25T22:56:38.7124128Z ========================================================
+2026-02-25T22:56:38.7124451Z   MongoDB connected:        YES
+2026-02-25T22:56:38.7124744Z   Historical data fetched:  10 tickers
+2026-02-25T22:56:38.7125104Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T22:56:38.7125454Z   Backtest status:          skipped
+2026-02-25T22:56:38.7126351Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T22:56:38.7126728Z   Gemini explanations:      not run (separate script)
+2026-02-25T22:56:38.7127095Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T22:56:38.7127449Z ========================================================
+2026-02-25T22:56:38.7127659Z 
+2026-02-25T22:56:38.7127994Z   QUALITY GATE: PASSED ✓
+2026-02-25T22:56:49.0015982Z 
+2026-02-25T22:56:49.0016664Z ===== Batch 2/10: CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX =====
+2026-02-25T22:56:49.0017211Z   Attempt 1...
+2026-02-25T22:56:52.3283961Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T22:56:52.3285005Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T22:56:52.3286025Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T22:56:52.3286783Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T22:56:52.3287574Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T22:56:52.3288352Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T22:56:52.3289139Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T22:56:52.3289892Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T22:56:52.3290680Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T22:56:52.3291549Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T22:56:52.3292163Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T22:56:52.3292656Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T22:56:52.3293133Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T22:56:52.3293608Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T22:56:52.3294091Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T22:56:53.7475836Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T22:56:53.9462214Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T22:56:53.9470005Z INFO:__main__:Fetching historical data...
+2026-02-25T22:56:56.3263747Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T22:56:56.3264239Z INFO:__main__:Downloading CSCO...
+2026-02-25T22:56:56.5882508Z INFO:__main__:Downloading ADBE...
+2026-02-25T22:56:56.7166308Z INFO:__main__:Downloading QCOM...
+2026-02-25T22:56:56.8447547Z INFO:__main__:Downloading TXN...
+2026-02-25T22:56:57.0328468Z INFO:__main__:Downloading NOW...
+2026-02-25T22:56:57.1990888Z INFO:__main__:Downloading INTU...
+2026-02-25T22:56:57.2993036Z INFO:__main__:Downloading AMZN...
+2026-02-25T22:56:57.3719158Z INFO:__main__:Downloading TSLA...
+2026-02-25T22:56:57.4582756Z INFO:__main__:Downloading HD...
+2026-02-25T22:56:57.5856759Z INFO:__main__:Downloading NFLX...
+2026-02-25T22:56:57.9019991Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T22:56:57.9075841Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T22:56:57.9076906Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T22:56:58.3388218Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T22:56:58.3390657Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T22:56:58.3391261Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T22:57:08.9746534Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CSCO (upserted=0, modified=3)
+2026-02-25T22:57:08.9747489Z INFO:ml_backend.utils.mongodb:Stored prediction for CSCO-next_day: Price $79.11022581438611, Change $-0.00977693219591913, Confidence 0.499
+2026-02-25T22:57:08.9748402Z INFO:ml_backend.utils.mongodb:Stored prediction for CSCO-7_day: Price $79.48253463711528, Change $0.36253189053324775, Confidence 0.563
+2026-02-25T22:57:08.9749640Z INFO:ml_backend.utils.mongodb:Stored prediction for CSCO-30_day: Price $80.83355698940335, Change $1.713554242821317, Confidence 0.552
+2026-02-25T22:57:08.9750226Z INFO:__main__:Stored predictions for CSCO
+2026-02-25T22:57:10.0565801Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for ADBE (upserted=0, modified=3)
+2026-02-25T22:57:10.0567139Z INFO:ml_backend.utils.mongodb:Stored prediction for ADBE-next_day: Price $257.34255099089717, Change $-0.46744656769658377, Confidence 0.486
+2026-02-25T22:57:10.0568644Z INFO:ml_backend.utils.mongodb:Stored prediction for ADBE-7_day: Price $255.21486391693944, Change $-2.5951336416543143, Confidence 0.300
+2026-02-25T22:57:10.0570065Z INFO:ml_backend.utils.mongodb:Stored prediction for ADBE-30_day: Price $246.71884469146642, Change $-11.091152867127335, Confidence 0.322
+2026-02-25T22:57:10.0570838Z INFO:__main__:Stored predictions for ADBE
+2026-02-25T22:57:11.1319522Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for QCOM (upserted=0, modified=3)
+2026-02-25T22:57:11.1320435Z INFO:ml_backend.utils.mongodb:Stored prediction for QCOM-next_day: Price $145.8019882105316, Change $-0.018019113687159916, Confidence 0.499
+2026-02-25T22:57:11.1321325Z INFO:ml_backend.utils.mongodb:Stored prediction for QCOM-7_day: Price $146.05814959206143, Change $0.2381422678426759, Confidence 0.444
+2026-02-25T22:57:11.1322168Z INFO:ml_backend.utils.mongodb:Stored prediction for QCOM-30_day: Price $143.05534647522342, Change $-2.7646608489953337, Confidence 0.498
+2026-02-25T22:57:11.1322785Z INFO:__main__:Stored predictions for QCOM
+2026-02-25T22:57:12.2073779Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for TXN (upserted=0, modified=3)
+2026-02-25T22:57:12.2074990Z INFO:ml_backend.utils.mongodb:Stored prediction for TXN-next_day: Price $213.87356207564972, Change $-0.026431820834659447, Confidence 0.499
+2026-02-25T22:57:12.2076553Z INFO:ml_backend.utils.mongodb:Stored prediction for TXN-7_day: Price $213.90174429761748, Change $0.0017504011331084257, Confidence 0.496
+2026-02-25T22:57:12.2077876Z INFO:ml_backend.utils.mongodb:Stored prediction for TXN-30_day: Price $214.81827706179863, Change $0.91828316531425, Confidence 0.554
+2026-02-25T22:57:12.2078816Z INFO:__main__:Stored predictions for TXN
+2026-02-25T22:57:13.5508120Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for NOW (upserted=0, modified=3)
+2026-02-25T22:57:13.5509348Z INFO:ml_backend.utils.mongodb:Stored prediction for NOW-next_day: Price $104.21712355864965, Change $-0.012879798283947252, Confidence 0.499
+2026-02-25T22:57:13.5510673Z INFO:ml_backend.utils.mongodb:Stored prediction for NOW-7_day: Price $103.78026015042194, Change $-0.44974320651165556, Confidence 0.445
+2026-02-25T22:57:13.5511933Z INFO:ml_backend.utils.mongodb:Stored prediction for NOW-30_day: Price $107.9744773038957, Change $3.7444739469621027, Confidence 0.544
+2026-02-25T22:57:13.5512813Z INFO:__main__:Stored predictions for NOW
+2026-02-25T22:57:14.6264074Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for INTU (upserted=0, modified=3)
+2026-02-25T22:57:14.6265305Z INFO:ml_backend.utils.mongodb:Stored prediction for INTU-next_day: Price $381.1829020399293, Change $-0.04710894639885055, Confidence 0.499
+2026-02-25T22:57:14.6266872Z INFO:ml_backend.utils.mongodb:Stored prediction for INTU-7_day: Price $382.39172775333554, Change $1.1617167670074195, Confidence 0.496
+2026-02-25T22:57:14.6268125Z INFO:ml_backend.utils.mongodb:Stored prediction for INTU-30_day: Price $394.2562559793515, Change $13.026244993023397, Confidence 0.544
+2026-02-25T22:57:14.6269620Z INFO:__main__:Stored predictions for INTU
+2026-02-25T22:57:15.7029290Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AMZN (upserted=0, modified=3)
+2026-02-25T22:57:15.7030536Z INFO:ml_backend.utils.mongodb:Stored prediction for AMZN-next_day: Price $210.61397040936163, Change $-0.02602898028681011, Confidence 0.499
+2026-02-25T22:57:15.7031813Z INFO:ml_backend.utils.mongodb:Stored prediction for AMZN-7_day: Price $210.5368251244932, Change $-0.1031742651552463, Confidence 0.496
+2026-02-25T22:57:15.7033589Z INFO:ml_backend.utils.mongodb:Stored prediction for AMZN-30_day: Price $208.41983904763651, Change $-2.2201603420119227, Confidence 0.406
+2026-02-25T22:57:15.7034572Z INFO:__main__:Stored predictions for AMZN
+2026-02-25T22:57:16.7790832Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for TSLA (upserted=0, modified=3)
+2026-02-25T22:57:16.7792130Z INFO:ml_backend.utils.mongodb:Stored prediction for TSLA-next_day: Price $417.57790782289936, Change $0.1779139264149876, Confidence 0.458
+2026-02-25T22:57:16.7793081Z INFO:ml_backend.utils.mongodb:Stored prediction for TSLA-7_day: Price $417.2768640877434, Change $-0.12312980874099821, Confidence 0.496
+2026-02-25T22:57:16.7793929Z INFO:ml_backend.utils.mongodb:Stored prediction for TSLA-30_day: Price $416.81560126431975, Change $-0.5843926321646222, Confidence 0.463
+2026-02-25T22:57:16.7794508Z INFO:__main__:Stored predictions for TSLA
+2026-02-25T22:57:17.8565967Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for HD (upserted=0, modified=3)
+2026-02-25T22:57:17.8567156Z INFO:ml_backend.utils.mongodb:Stored prediction for HD-next_day: Price $375.5235977897273, Change $-0.04640953449143126, Confidence 0.499
+2026-02-25T22:57:17.8568052Z INFO:ml_backend.utils.mongodb:Stored prediction for HD-7_day: Price $375.4592170418831, Change $-0.11079028233564259, Confidence 0.496
+2026-02-25T22:57:17.8568903Z INFO:ml_backend.utils.mongodb:Stored prediction for HD-30_day: Price $371.1447602136462, Change $-4.42524711057257, Confidence 0.391
+2026-02-25T22:57:17.8569497Z INFO:__main__:Stored predictions for HD
+2026-02-25T22:57:18.9323980Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for NFLX (upserted=0, modified=3)
+2026-02-25T22:57:18.9325085Z INFO:ml_backend.utils.mongodb:Stored prediction for NFLX-next_day: Price $82.68977763283903, Change $-0.010219315403162454, Confidence 0.499
+2026-02-25T22:57:18.9326202Z INFO:ml_backend.utils.mongodb:Stored prediction for NFLX-7_day: Price $82.67560108107396, Change $-0.024395867168223617, Confidence 0.496
+2026-02-25T22:57:18.9327086Z INFO:ml_backend.utils.mongodb:Stored prediction for NFLX-30_day: Price $82.5598054039996, Change $-0.14019154424258318, Confidence 0.430
+2026-02-25T22:57:18.9327664Z INFO:__main__:Stored predictions for NFLX
+2026-02-25T22:57:18.9328011Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T22:57:20.3419223Z 
+2026-02-25T22:57:20.3419781Z ========================================================
+2026-02-25T22:57:20.3420240Z   PIPELINE HEALTH SUMMARY
+2026-02-25T22:57:20.3420545Z ========================================================
+2026-02-25T22:57:20.3420875Z   MongoDB connected:        YES
+2026-02-25T22:57:20.3421175Z   Historical data fetched:  10 tickers
+2026-02-25T22:57:20.3421526Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T22:57:20.3421876Z   Backtest status:          skipped
+2026-02-25T22:57:20.3422196Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T22:57:20.3422583Z   Gemini explanations:      not run (separate script)
+2026-02-25T22:57:20.3422968Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T22:57:20.3423297Z ========================================================
+2026-02-25T22:57:20.3423501Z 
+2026-02-25T22:57:20.3423876Z   QUALITY GATE: PASSED ✓
+2026-02-25T22:57:30.6288561Z 
+2026-02-25T22:57:30.6292862Z ===== Batch 3/10: LOW SBUX NKE MCD DIS BKNG TGT JPM V MA =====
+2026-02-25T22:57:30.6293478Z   Attempt 1...
+2026-02-25T22:57:34.0915106Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T22:57:34.0916318Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T22:57:34.0917174Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T22:57:34.0917986Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T22:57:34.0918657Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T22:57:34.0919353Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T22:57:34.0920744Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T22:57:34.0921306Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T22:57:34.0921827Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T22:57:34.0922353Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T22:57:34.0922880Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T22:57:34.0923358Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T22:57:34.0923848Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T22:57:34.0924333Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T22:57:34.0924809Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T22:57:35.5126555Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T22:57:35.7126980Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T22:57:35.7133522Z INFO:__main__:Fetching historical data...
+2026-02-25T22:57:38.0886818Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T22:57:38.0887488Z INFO:__main__:Downloading LOW...
+2026-02-25T22:57:38.4234299Z INFO:__main__:Downloading SBUX...
+2026-02-25T22:57:38.5821423Z INFO:__main__:Downloading NKE...
+2026-02-25T22:57:38.8146384Z INFO:__main__:Downloading MCD...
+2026-02-25T22:57:39.0132741Z INFO:__main__:Downloading DIS...
+2026-02-25T22:57:39.1823681Z INFO:__main__:Downloading BKNG...
+2026-02-25T22:57:39.2616713Z INFO:__main__:Downloading TGT...
+2026-02-25T22:57:39.4031507Z INFO:__main__:Downloading JPM...
+2026-02-25T22:57:39.7143755Z INFO:__main__:Downloading V...
+2026-02-25T22:57:39.8246043Z INFO:__main__:Downloading MA...
+2026-02-25T22:57:40.1381952Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T22:57:40.1436525Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T22:57:40.1437557Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T22:57:40.5790453Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T22:57:40.5792877Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T22:57:40.5793761Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T22:57:51.4486147Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for LOW (upserted=0, modified=3)
+2026-02-25T22:57:51.4487557Z INFO:ml_backend.utils.mongodb:Stored prediction for LOW-next_day: Price $262.98748738943664, Change $-0.032501624235237614, Confidence 0.499
+2026-02-25T22:57:51.4489017Z INFO:ml_backend.utils.mongodb:Stored prediction for LOW-7_day: Price $262.9424001267148, Change $-0.07758888695707356, Confidence 0.496
+2026-02-25T22:57:51.4490404Z INFO:ml_backend.utils.mongodb:Stored prediction for LOW-30_day: Price $259.9208905135065, Change $-3.0990985001653826, Confidence 0.401
+2026-02-25T22:57:51.4491368Z INFO:__main__:Stored predictions for LOW
+2026-02-25T22:57:52.9096964Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for SBUX (upserted=0, modified=3)
+2026-02-25T22:57:52.9098306Z INFO:ml_backend.utils.mongodb:Stored prediction for SBUX-next_day: Price $97.91789900411798, Change $-0.012101301057796832, Confidence 0.499
+2026-02-25T22:57:52.9099231Z INFO:ml_backend.utils.mongodb:Stored prediction for SBUX-7_day: Price $97.90111170339355, Change $-0.028888601782227852, Confidence 0.496
+2026-02-25T22:57:52.9100493Z INFO:ml_backend.utils.mongodb:Stored prediction for SBUX-30_day: Price $96.81503987930445, Change $-1.114960425871331, Confidence 0.412
+2026-02-25T22:57:52.9101084Z INFO:__main__:Stored predictions for SBUX
+2026-02-25T22:57:54.3735169Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for NKE (upserted=0, modified=3)
+2026-02-25T22:57:54.3736361Z INFO:ml_backend.utils.mongodb:Stored prediction for NKE-next_day: Price $63.392167128828575, Change $-0.007834397050331177, Confidence 0.499
+2026-02-25T22:57:54.3737667Z INFO:ml_backend.utils.mongodb:Stored prediction for NKE-7_day: Price $63.61838541344796, Change $0.21838388756905402, Confidence 0.431
+2026-02-25T22:57:54.3738528Z INFO:ml_backend.utils.mongodb:Stored prediction for NKE-30_day: Price $62.62202740511045, Change $-0.7779741207684552, Confidence 0.432
+2026-02-25T22:57:54.3739108Z INFO:__main__:Stored predictions for NKE
+2026-02-25T22:57:55.4472512Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MCD (upserted=0, modified=3)
+2026-02-25T22:57:55.4473738Z INFO:ml_backend.utils.mongodb:Stored prediction for MCD-next_day: Price $332.96885940954536, Change $-0.04115035607964046, Confidence 0.499
+2026-02-25T22:57:55.4474649Z INFO:ml_backend.utils.mongodb:Stored prediction for MCD-7_day: Price $332.9117743573575, Change $-0.09823540826749877, Confidence 0.496
+2026-02-25T22:57:55.4475526Z INFO:ml_backend.utils.mongodb:Stored prediction for MCD-30_day: Price $329.08623642172506, Change $-3.9237733438999385, Confidence 0.395
+2026-02-25T22:57:55.4476345Z INFO:__main__:Stored predictions for MCD
+2026-02-25T22:57:56.5977574Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for DIS (upserted=0, modified=3)
+2026-02-25T22:57:56.5978941Z INFO:ml_backend.utils.mongodb:Stored prediction for DIS-next_day: Price $104.89373343118875, Change $-0.1562696205690628, Confidence 0.470
+2026-02-25T22:57:56.5979913Z INFO:ml_backend.utils.mongodb:Stored prediction for DIS-7_day: Price $104.9985481671166, Change $-0.051454884641216836, Confidence 0.497
+2026-02-25T22:57:56.5980799Z INFO:ml_backend.utils.mongodb:Stored prediction for DIS-30_day: Price $105.18927118018182, Change $0.13926812842400693, Confidence 0.505
+2026-02-25T22:57:56.5981377Z INFO:__main__:Stored predictions for DIS
+2026-02-25T22:57:57.6714947Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BKNG (upserted=0, modified=3)
+2026-02-25T22:57:57.6716495Z INFO:ml_backend.utils.mongodb:Stored prediction for BKNG-next_day: Price $4162.485574224991, Change $-0.5144257750089309, Confidence 0.499
+2026-02-25T22:57:57.6717965Z INFO:ml_backend.utils.mongodb:Stored prediction for BKNG-7_day: Price $4174.419894617674, Change $11.41989461767389, Confidence 0.496
+2026-02-25T22:57:57.6719370Z INFO:ml_backend.utils.mongodb:Stored prediction for BKNG-30_day: Price $4439.870179717619, Change $276.87017971761907, Confidence 0.915
+2026-02-25T22:57:57.6719976Z INFO:__main__:Stored predictions for BKNG
+2026-02-25T22:57:58.7429508Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for TGT (upserted=0, modified=3)
+2026-02-25T22:57:58.7430777Z INFO:ml_backend.utils.mongodb:Stored prediction for TGT-next_day: Price $116.42561384219944, Change $-0.014388599206810682, Confidence 0.499
+2026-02-25T22:57:58.7431678Z INFO:ml_backend.utils.mongodb:Stored prediction for TGT-7_day: Price $116.40565353043341, Change $-0.0343489109728381, Confidence 0.496
+2026-02-25T22:57:58.7432527Z INFO:ml_backend.utils.mongodb:Stored prediction for TGT-30_day: Price $112.99606675237722, Change $-3.4439356890290327, Confidence 0.404
+2026-02-25T22:57:58.7433140Z INFO:__main__:Stored predictions for TGT
+2026-02-25T22:57:59.8206807Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for JPM (upserted=0, modified=3)
+2026-02-25T22:57:59.8208193Z INFO:ml_backend.utils.mongodb:Stored prediction for JPM-next_day: Price $303.26250873188764, Change $-0.03747906108111465, Confidence 0.499
+2026-02-25T22:57:59.8209220Z INFO:ml_backend.utils.mongodb:Stored prediction for JPM-7_day: Price $303.2105166141614, Change $-0.08947117880734368, Confidence 0.496
+2026-02-25T22:57:59.8210430Z INFO:ml_backend.utils.mongodb:Stored prediction for JPM-30_day: Price $300.86458285984025, Change $-2.4354049331284955, Confidence 0.447
+2026-02-25T22:57:59.8211009Z INFO:__main__:Stored predictions for JPM
+2026-02-25T22:58:00.8941694Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for V (upserted=0, modified=3)
+2026-02-25T22:58:00.8942573Z INFO:ml_backend.utils.mongodb:Stored prediction for V-next_day: Price $312.95131377069583, Change $-0.03867646367916677, Confidence 0.499
+2026-02-25T22:58:00.8943832Z INFO:ml_backend.utils.mongodb:Stored prediction for V-7_day: Price $312.22269575205, Change $-0.767294482324985, Confidence 0.506
+2026-02-25T22:58:00.8944654Z INFO:ml_backend.utils.mongodb:Stored prediction for V-30_day: Price $306.900662059041, Change $-6.089328175334003, Confidence 0.243
+2026-02-25T22:58:00.8945221Z INFO:__main__:Stored predictions for V
+2026-02-25T22:58:01.9672174Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MA (upserted=0, modified=3)
+2026-02-25T22:58:01.9673533Z INFO:ml_backend.utils.mongodb:Stored prediction for MA-next_day: Price $509.32706885139993, Change $-0.06294579703757108, Confidence 0.499
+2026-02-25T22:58:01.9674987Z INFO:ml_backend.utils.mongodb:Stored prediction for MA-7_day: Price $509.23974848649357, Change $-0.15026616194393227, Confidence 0.496
+2026-02-25T22:58:01.9676589Z INFO:ml_backend.utils.mongodb:Stored prediction for MA-30_day: Price $517.8656148566453, Change $8.475600208207766, Confidence 0.597
+2026-02-25T22:58:01.9677564Z INFO:__main__:Stored predictions for MA
+2026-02-25T22:58:01.9678092Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T22:58:02.6617886Z 
+2026-02-25T22:58:02.6618539Z ========================================================
+2026-02-25T22:58:02.6619131Z   PIPELINE HEALTH SUMMARY
+2026-02-25T22:58:02.6619562Z ========================================================
+2026-02-25T22:58:02.6619894Z   MongoDB connected:        YES
+2026-02-25T22:58:02.6620218Z   Historical data fetched:  10 tickers
+2026-02-25T22:58:02.6630636Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T22:58:02.6631035Z   Backtest status:          skipped
+2026-02-25T22:58:02.6631374Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T22:58:02.6631747Z   Gemini explanations:      not run (separate script)
+2026-02-25T22:58:02.6632111Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T22:58:02.6632446Z ========================================================
+2026-02-25T22:58:02.6632686Z 
+2026-02-25T22:58:02.6633024Z   QUALITY GATE: PASSED ✓
+2026-02-25T22:58:12.9368348Z 
+2026-02-25T22:58:12.9368958Z ===== Batch 4/10: BAC WFC GS MS AXP BLK SCHW C COF BK =====
+2026-02-25T22:58:12.9369444Z   Attempt 1...
+2026-02-25T22:58:16.3007053Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T22:58:16.3008073Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T22:58:16.3008956Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T22:58:16.3009713Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T22:58:16.3010394Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T22:58:16.3011091Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T22:58:16.3011811Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T22:58:16.3012511Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T22:58:16.3013263Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T22:58:16.3014011Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T22:58:16.3014796Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T22:58:16.3015295Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T22:58:16.3016292Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T22:58:16.3016782Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T22:58:16.3017247Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T22:58:17.7204834Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T22:58:17.9193479Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T22:58:17.9201635Z INFO:__main__:Fetching historical data...
+2026-02-25T22:58:20.2931706Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T22:58:20.2932646Z INFO:__main__:Downloading BAC...
+2026-02-25T22:58:20.7820677Z INFO:__main__:Downloading WFC...
+2026-02-25T22:58:20.9368085Z INFO:__main__:Downloading GS...
+2026-02-25T22:58:21.1492517Z INFO:__main__:Downloading MS...
+2026-02-25T22:58:21.2978443Z INFO:__main__:Downloading AXP...
+2026-02-25T22:58:21.5045429Z INFO:__main__:Downloading BLK...
+2026-02-25T22:58:21.6521415Z INFO:__main__:Downloading SCHW...
+2026-02-25T22:58:21.9456775Z INFO:__main__:Downloading C...
+2026-02-25T22:58:22.1837956Z INFO:__main__:Downloading COF...
+2026-02-25T22:58:22.3637038Z INFO:__main__:Downloading BK...
+2026-02-25T22:58:22.6282142Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T22:58:22.6347144Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T22:58:22.6348317Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T22:58:23.0793516Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T22:58:23.0799630Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T22:58:23.0826648Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T22:58:33.8809234Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BAC (upserted=0, modified=3)
+2026-02-25T22:58:33.8810220Z INFO:ml_backend.utils.mongodb:Stored prediction for BAC-next_day: Price $51.68361124558869, Change $-0.006387381120291025, Confidence 0.499
+2026-02-25T22:58:33.8811144Z INFO:ml_backend.utils.mongodb:Stored prediction for BAC-7_day: Price $51.6747504720904, Change $-0.015248154618582532, Confidence 0.496
+2026-02-25T22:58:33.8811993Z INFO:ml_backend.utils.mongodb:Stored prediction for BAC-30_day: Price $51.42504485821808, Change $-0.2649537684909049, Confidence 0.389
+2026-02-25T22:58:33.8812571Z INFO:__main__:Stored predictions for BAC
+2026-02-25T22:58:34.9728306Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for WFC (upserted=0, modified=3)
+2026-02-25T22:58:34.9729503Z INFO:ml_backend.utils.mongodb:Stored prediction for WFC-next_day: Price $86.74928112221684, Change $-0.010721014013626018, Confidence 0.499
+2026-02-25T22:58:34.9730811Z INFO:ml_backend.utils.mongodb:Stored prediction for WFC-7_day: Price $86.7344085985553, Change $-0.025593537675163702, Confidence 0.496
+2026-02-25T22:58:34.9732071Z INFO:ml_backend.utils.mongodb:Stored prediction for WFC-30_day: Price $88.8058179279531, Change $2.0458157917226316, Confidence 0.658
+2026-02-25T22:58:34.9732955Z INFO:__main__:Stored predictions for WFC
+2026-02-25T22:58:36.0748170Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for GS (upserted=0, modified=3)
+2026-02-25T22:58:36.0749452Z INFO:ml_backend.utils.mongodb:Stored prediction for GS-next_day: Price $922.6321271200626, Change $1.2521222372500915, Confidence 0.646
+2026-02-25T22:58:36.0750856Z INFO:ml_backend.utils.mongodb:Stored prediction for GS-7_day: Price $926.8940240854132, Change $5.514019202600707, Confidence 0.593
+2026-02-25T22:58:36.0752229Z INFO:ml_backend.utils.mongodb:Stored prediction for GS-30_day: Price $947.9627804332149, Change $26.582775550402403, Confidence 0.659
+2026-02-25T22:58:36.0753200Z INFO:__main__:Stored predictions for GS
+2026-02-25T22:58:37.1683187Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MS (upserted=0, modified=3)
+2026-02-25T22:58:37.1684338Z INFO:ml_backend.utils.mongodb:Stored prediction for MS-next_day: Price $173.70852775067274, Change $-0.02146797686631885, Confidence 0.499
+2026-02-25T22:58:37.1685523Z INFO:ml_backend.utils.mongodb:Stored prediction for MS-7_day: Price $173.6787467063141, Change $-0.05124902122497588, Confidence 0.496
+2026-02-25T22:58:37.1686683Z INFO:ml_backend.utils.mongodb:Stored prediction for MS-30_day: Price $176.4548268568291, Change $2.7248311292900382, Confidence 0.835
+2026-02-25T22:58:37.1687298Z INFO:__main__:Stored predictions for MS
+2026-02-25T22:58:38.3333615Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AXP (upserted=0, modified=3)
+2026-02-25T22:58:38.3335007Z INFO:ml_backend.utils.mongodb:Stored prediction for AXP-next_day: Price $327.0495775233665, Change $-0.04041881452411644, Confidence 0.499
+2026-02-25T22:58:38.3336985Z INFO:ml_backend.utils.mongodb:Stored prediction for AXP-7_day: Price $326.993507288348, Change $-0.09648904954264026, Confidence 0.496
+2026-02-25T22:58:38.3338421Z INFO:ml_backend.utils.mongodb:Stored prediction for AXP-30_day: Price $324.4635650068019, Change $-2.6264313310887246, Confidence 0.444
+2026-02-25T22:58:38.3339399Z INFO:__main__:Stored predictions for AXP
+2026-02-25T22:58:39.7826247Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BLK (upserted=0, modified=3)
+2026-02-25T22:58:39.7827152Z INFO:ml_backend.utils.mongodb:Stored prediction for BLK-next_day: Price $1093.6448698831684, Change $-0.13515941370656037, Confidence 0.499
+2026-02-25T22:58:39.7828046Z INFO:ml_backend.utils.mongodb:Stored prediction for BLK-7_day: Price $1093.4573725460812, Change $-0.3226567507938398, Confidence 0.496
+2026-02-25T22:58:39.7828899Z INFO:ml_backend.utils.mongodb:Stored prediction for BLK-30_day: Price $1104.2567555582336, Change $10.476726261358635, Confidence 0.608
+2026-02-25T22:58:39.7829504Z INFO:__main__:Stored predictions for BLK
+2026-02-25T22:58:40.8498639Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for SCHW (upserted=0, modified=3)
+2026-02-25T22:58:40.8499554Z INFO:ml_backend.utils.mongodb:Stored prediction for SCHW-next_day: Price $95.33821598628488, Change $-0.011782487836214273, Confidence 0.507
+2026-02-25T22:58:40.8500489Z INFO:ml_backend.utils.mongodb:Stored prediction for SCHW-7_day: Price $95.35077874878277, Change $0.0007802746616789591, Confidence 0.508
+2026-02-25T22:58:40.8501350Z INFO:ml_backend.utils.mongodb:Stored prediction for SCHW-30_day: Price $96.87719616320341, Change $1.527197689082314, Confidence 0.648
+2026-02-25T22:58:40.8501946Z INFO:__main__:Stored predictions for SCHW
+2026-02-25T22:58:41.9155456Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for C (upserted=0, modified=3)
+2026-02-25T22:58:41.9156886Z INFO:ml_backend.utils.mongodb:Stored prediction for C-next_day: Price $114.3258672383877, Change $-0.014129099502923737, Confidence 0.499
+2026-02-25T22:58:41.9158211Z INFO:ml_backend.utils.mongodb:Stored prediction for C-7_day: Price $115.1439815007183, Change $0.8039851628276722, Confidence 0.642
+2026-02-25T22:58:41.9159439Z INFO:ml_backend.utils.mongodb:Stored prediction for C-30_day: Price $117.74603590946617, Change $3.4060395715755476, Confidence 0.693
+2026-02-25T22:58:41.9160406Z INFO:__main__:Stored predictions for C
+2026-02-25T22:58:43.3937902Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for COF (upserted=0, modified=3)
+2026-02-25T22:58:43.3939230Z INFO:ml_backend.utils.mongodb:Stored prediction for COF-next_day: Price $205.76456362560307, Change $-0.025429660529738385, Confidence 0.499
+2026-02-25T22:58:43.3940760Z INFO:ml_backend.utils.mongodb:Stored prediction for COF-7_day: Price $205.72928681060657, Change $-0.06070647552624564, Confidence 0.496
+2026-02-25T22:58:43.3941896Z INFO:ml_backend.utils.mongodb:Stored prediction for COF-30_day: Price $210.36116046550157, Change $4.571167179368757, Confidence 0.589
+2026-02-25T22:58:43.3942777Z INFO:__main__:Stored predictions for COF
+2026-02-25T22:58:44.4721284Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BK (upserted=0, modified=3)
+2026-02-25T22:58:44.4722635Z INFO:ml_backend.utils.mongodb:Stored prediction for BK-next_day: Price $120.46573339346634, Change $0.15573583487258702, Confidence 0.556
+2026-02-25T22:58:44.4723948Z INFO:ml_backend.utils.mongodb:Stored prediction for BK-7_day: Price $121.12159315568786, Change $0.8115955970941116, Confidence 0.512
+2026-02-25T22:58:44.4724785Z INFO:ml_backend.utils.mongodb:Stored prediction for BK-30_day: Price $123.2346213224606, Change $2.9246237638668475, Confidence 0.688
+2026-02-25T22:58:44.4725352Z INFO:__main__:Stored predictions for BK
+2026-02-25T22:58:44.4726013Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T22:58:44.9720234Z 
+2026-02-25T22:58:44.9720849Z ========================================================
+2026-02-25T22:58:44.9721621Z   PIPELINE HEALTH SUMMARY
+2026-02-25T22:58:44.9721933Z ========================================================
+2026-02-25T22:58:44.9722268Z   MongoDB connected:        YES
+2026-02-25T22:58:44.9722558Z   Historical data fetched:  10 tickers
+2026-02-25T22:58:44.9722924Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T22:58:44.9723271Z   Backtest status:          skipped
+2026-02-25T22:58:44.9723603Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T22:58:44.9723989Z   Gemini explanations:      not run (separate script)
+2026-02-25T22:58:44.9724364Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T22:58:44.9724702Z ========================================================
+2026-02-25T22:58:44.9724915Z 
+2026-02-25T22:58:44.9725261Z   QUALITY GATE: PASSED ✓
+2026-02-25T22:58:55.2435858Z 
+2026-02-25T22:58:55.2436660Z ===== Batch 5/10: MET AIG USB XOM CVX COP JNJ UNH LLY PFE =====
+2026-02-25T22:58:55.2437485Z   Attempt 1...
+2026-02-25T22:58:58.6474827Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T22:58:58.6475944Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T22:58:58.6476804Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T22:58:58.6477571Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T22:58:58.6478322Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T22:58:58.6479202Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T22:58:58.6479744Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T22:58:58.6480248Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T22:58:58.6480739Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T22:58:58.6481275Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T22:58:58.6481803Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T22:58:58.6482284Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T22:58:58.6482753Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T22:58:58.6483225Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T22:58:58.6483682Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T22:59:00.0588427Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T22:59:00.2566568Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T22:59:00.2572950Z INFO:__main__:Fetching historical data...
+2026-02-25T22:59:02.6103400Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T22:59:02.6104054Z INFO:__main__:Downloading MET...
+2026-02-25T22:59:02.9064115Z INFO:__main__:Downloading AIG...
+2026-02-25T22:59:03.2995034Z INFO:__main__:Downloading USB...
+2026-02-25T22:59:03.4251320Z INFO:__main__:Downloading XOM...
+2026-02-25T22:59:03.5854563Z INFO:__main__:Downloading CVX...
+2026-02-25T22:59:03.7634226Z INFO:__main__:Downloading COP...
+2026-02-25T22:59:03.9431898Z INFO:__main__:Downloading JNJ...
+2026-02-25T22:59:04.1120869Z INFO:__main__:Downloading UNH...
+2026-02-25T22:59:04.3291868Z INFO:__main__:Downloading LLY...
+2026-02-25T22:59:04.4800753Z INFO:__main__:Downloading PFE...
+2026-02-25T22:59:04.7838146Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T22:59:04.7892213Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T22:59:04.7893352Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T22:59:05.2212582Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T22:59:05.2238028Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T22:59:05.2238696Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T22:59:16.2109033Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MET (upserted=0, modified=3)
+2026-02-25T22:59:16.2110693Z INFO:ml_backend.utils.mongodb:Stored prediction for MET-next_day: Price $75.25591669611727, Change $-0.05408086247648214, Confidence 0.504
+2026-02-25T22:59:16.2112089Z INFO:ml_backend.utils.mongodb:Stored prediction for MET-7_day: Price $75.020217313091, Change $-0.2897802455027545, Confidence 0.392
+2026-02-25T22:59:16.2113479Z INFO:ml_backend.utils.mongodb:Stored prediction for MET-30_day: Price $74.70528161085264, Change $-0.6047159477411128, Confidence 0.447
+2026-02-25T22:59:16.2114453Z INFO:__main__:Stored predictions for MET
+2026-02-25T22:59:17.2982171Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AIG (upserted=0, modified=3)
+2026-02-25T22:59:17.2983145Z INFO:ml_backend.utils.mongodb:Stored prediction for AIG-next_day: Price $80.14009731577755, Change $-0.009904210101353783, Confidence 0.499
+2026-02-25T22:59:17.2984062Z INFO:ml_backend.utils.mongodb:Stored prediction for AIG-7_day: Price $80.12635788787512, Change $-0.0236436380037901, Confidence 0.496
+2026-02-25T22:59:17.2984960Z INFO:ml_backend.utils.mongodb:Stored prediction for AIG-30_day: Price $78.87091019251417, Change $-1.2790913333647325, Confidence 0.397
+2026-02-25T22:59:17.2985554Z INFO:__main__:Stored predictions for AIG
+2026-02-25T22:59:18.3851097Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for USB (upserted=0, modified=3)
+2026-02-25T22:59:18.3852297Z INFO:ml_backend.utils.mongodb:Stored prediction for USB-next_day: Price $56.04307308661693, Change $-0.00692615044361844, Confidence 0.499
+2026-02-25T22:59:18.3853624Z INFO:ml_backend.utils.mongodb:Stored prediction for USB-7_day: Price $56.033464915577774, Change $-0.016534321482772896, Confidence 0.496
+2026-02-25T22:59:18.3854905Z INFO:ml_backend.utils.mongodb:Stored prediction for USB-30_day: Price $55.37632855489562, Change $-0.673670682164925, Confidence 0.422
+2026-02-25T22:59:18.3856119Z INFO:__main__:Stored predictions for USB
+2026-02-25T22:59:19.4713486Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for XOM (upserted=0, modified=3)
+2026-02-25T22:59:19.4714739Z INFO:ml_backend.utils.mongodb:Stored prediction for XOM-next_day: Price $149.02495947249838, Change $-0.03503808609536918, Confidence 0.499
+2026-02-25T22:59:19.4716398Z INFO:ml_backend.utils.mongodb:Stored prediction for XOM-7_day: Price $148.90674832413734, Change $-0.15324923445641048, Confidence 0.496
+2026-02-25T22:59:19.4717684Z INFO:ml_backend.utils.mongodb:Stored prediction for XOM-30_day: Price $144.91664320266383, Change $-4.143354355929915, Confidence 0.363
+2026-02-25T22:59:19.4718637Z INFO:__main__:Stored predictions for XOM
+2026-02-25T22:59:20.6254569Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CVX (upserted=0, modified=3)
+2026-02-25T22:59:20.6256152Z INFO:ml_backend.utils.mongodb:Stored prediction for CVX-next_day: Price $184.17669841398785, Change $-0.043302806715274755, Confidence 0.499
+2026-02-25T22:59:20.6257630Z INFO:ml_backend.utils.mongodb:Stored prediction for CVX-7_day: Price $183.96258710767793, Change $-0.2574141130251917, Confidence 0.496
+2026-02-25T22:59:20.6259334Z INFO:ml_backend.utils.mongodb:Stored prediction for CVX-30_day: Price $180.1072747402126, Change $-4.112726480490522, Confidence 0.354
+2026-02-25T22:59:20.6260258Z INFO:__main__:Stored predictions for CVX
+2026-02-25T22:59:22.0724016Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for COP (upserted=0, modified=3)
+2026-02-25T22:59:22.0725265Z INFO:ml_backend.utils.mongodb:Stored prediction for COP-next_day: Price $109.98414315334216, Change $-0.0258589828883089, Confidence 0.499
+2026-02-25T22:59:22.0726733Z INFO:ml_backend.utils.mongodb:Stored prediction for COP-7_day: Price $109.85628306698635, Change $-0.1537190692441186, Confidence 0.496
+2026-02-25T22:59:22.0727587Z INFO:ml_backend.utils.mongodb:Stored prediction for COP-30_day: Price $107.43223171850381, Change $-2.5777704177266543, Confidence 0.359
+2026-02-25T22:59:22.0728161Z INFO:__main__:Stored predictions for COP
+2026-02-25T22:59:23.3256092Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for JNJ (upserted=0, modified=3)
+2026-02-25T22:59:23.3257858Z INFO:ml_backend.utils.mongodb:Stored prediction for JNJ-next_day: Price $245.11236843833657, Change $-0.05762973060873833, Confidence 0.499
+2026-02-25T22:59:23.3258755Z INFO:ml_backend.utils.mongodb:Stored prediction for JNJ-7_day: Price $248.12426468951296, Change $2.954266520567643, Confidence 0.331
+2026-02-25T22:59:23.3259612Z INFO:ml_backend.utils.mongodb:Stored prediction for JNJ-30_day: Price $246.27676274113688, Change $1.1067645721915653, Confidence 0.755
+2026-02-25T22:59:23.3260230Z INFO:__main__:Stored predictions for JNJ
+2026-02-25T22:59:24.3894404Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for UNH (upserted=0, modified=3)
+2026-02-25T22:59:24.3895836Z INFO:ml_backend.utils.mongodb:Stored prediction for UNH-next_day: Price $284.13320807004544, Change $-0.06680413698580878, Confidence 0.499
+2026-02-25T22:59:24.3896738Z INFO:ml_backend.utils.mongodb:Stored prediction for UNH-7_day: Price $284.116175375074, Change $-0.08383683195722824, Confidence 0.496
+2026-02-25T22:59:24.3897630Z INFO:ml_backend.utils.mongodb:Stored prediction for UNH-30_day: Price $261.2896817359784, Change $-22.910330471052873, Confidence 0.289
+2026-02-25T22:59:24.3898204Z INFO:__main__:Stored predictions for UNH
+2026-02-25T22:59:25.4556417Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for LLY (upserted=0, modified=3)
+2026-02-25T22:59:25.4557370Z INFO:ml_backend.utils.mongodb:Stored prediction for LLY-next_day: Price $1028.5881189879483, Change $-0.24183706673920824, Confidence 0.499
+2026-02-25T22:59:25.4558243Z INFO:ml_backend.utils.mongodb:Stored prediction for LLY-7_day: Price $1033.4357375902357, Change $4.6057815355482035, Confidence 0.497
+2026-02-25T22:59:25.4559068Z INFO:ml_backend.utils.mongodb:Stored prediction for LLY-30_day: Price $1018.8263568219476, Change $-10.00359923273993, Confidence 0.511
+2026-02-25T22:59:25.4559647Z INFO:__main__:Stored predictions for LLY
+2026-02-25T22:59:26.5229246Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for PFE (upserted=0, modified=3)
+2026-02-25T22:59:26.5230689Z INFO:ml_backend.utils.mongodb:Stored prediction for PFE-next_day: Price $27.08363236932467, Change $-0.006367783263222293, Confidence 0.499
+2026-02-25T22:59:26.5231995Z INFO:ml_backend.utils.mongodb:Stored prediction for PFE-7_day: Price $27.08200880954439, Change $-0.00799134304349991, Confidence 0.496
+2026-02-25T22:59:26.5232908Z INFO:ml_backend.utils.mongodb:Stored prediction for PFE-30_day: Price $26.72043092400354, Change $-0.36956922858434993, Confidence 0.409
+2026-02-25T22:59:26.5233514Z INFO:__main__:Stored predictions for PFE
+2026-02-25T22:59:26.5233858Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T22:59:27.2644370Z 
+2026-02-25T22:59:27.2644994Z ========================================================
+2026-02-25T22:59:27.2645417Z   PIPELINE HEALTH SUMMARY
+2026-02-25T22:59:27.2645872Z ========================================================
+2026-02-25T22:59:27.2646204Z   MongoDB connected:        YES
+2026-02-25T22:59:27.2646531Z   Historical data fetched:  10 tickers
+2026-02-25T22:59:27.2646879Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T22:59:27.2647230Z   Backtest status:          skipped
+2026-02-25T22:59:27.2647548Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T22:59:27.2647917Z   Gemini explanations:      not run (separate script)
+2026-02-25T22:59:27.2648279Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T22:59:27.2648935Z ========================================================
+2026-02-25T22:59:27.2649138Z 
+2026-02-25T22:59:27.2649485Z   QUALITY GATE: PASSED ✓
+2026-02-25T22:59:37.6213650Z 
+2026-02-25T22:59:37.6214499Z ===== Batch 6/10: ABBV ABT TMO DHR MRK AMGN GILD ISRG MDT BMY =====
+2026-02-25T22:59:37.6215230Z   Attempt 1...
+2026-02-25T22:59:41.0013211Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T22:59:41.0014199Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T22:59:41.0015564Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T22:59:41.0016531Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T22:59:41.0017206Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T22:59:41.0017908Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T22:59:41.0018623Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T22:59:41.0019389Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T22:59:41.0020100Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T22:59:41.0020889Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T22:59:41.0021651Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T22:59:41.0022352Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T22:59:41.0023064Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T22:59:41.0023699Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T22:59:41.0024207Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T22:59:42.4220354Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T22:59:42.6210740Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T22:59:42.6217693Z INFO:__main__:Fetching historical data...
+2026-02-25T22:59:45.0058020Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T22:59:45.0058694Z INFO:__main__:Downloading ABBV...
+2026-02-25T22:59:45.1825976Z INFO:__main__:Downloading ABT...
+2026-02-25T22:59:45.4398803Z INFO:__main__:Downloading TMO...
+2026-02-25T22:59:45.6329485Z INFO:__main__:Downloading DHR...
+2026-02-25T22:59:45.7663270Z INFO:__main__:Downloading MRK...
+2026-02-25T22:59:46.0061352Z INFO:__main__:Downloading AMGN...
+2026-02-25T22:59:46.1944400Z INFO:__main__:Downloading GILD...
+2026-02-25T22:59:46.3418658Z INFO:__main__:Downloading ISRG...
+2026-02-25T22:59:46.4791539Z INFO:__main__:Downloading MDT...
+2026-02-25T22:59:46.6305135Z INFO:__main__:Downloading BMY...
+2026-02-25T22:59:47.0102350Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T22:59:47.0156594Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T22:59:47.0157391Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T22:59:47.4508008Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T22:59:47.4516643Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T22:59:47.4520981Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T22:59:58.1887579Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for ABBV (upserted=0, modified=3)
+2026-02-25T22:59:58.1888797Z INFO:ml_backend.utils.mongodb:Stored prediction for ABBV-next_day: Price $226.8666582886097, Change $-0.05333988033561354, Confidence 0.499
+2026-02-25T22:59:58.1890080Z INFO:ml_backend.utils.mongodb:Stored prediction for ABBV-7_day: Price $226.01078214956559, Change $-0.909216019379727, Confidence 0.474
+2026-02-25T22:59:58.1891359Z INFO:ml_backend.utils.mongodb:Stored prediction for ABBV-30_day: Price $223.6011035461889, Change $-3.318894622756403, Confidence 0.391
+2026-02-25T22:59:58.1892233Z INFO:__main__:Stored predictions for ABBV
+2026-02-25T22:59:59.2852353Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for ABT (upserted=0, modified=3)
+2026-02-25T22:59:59.2853525Z INFO:ml_backend.utils.mongodb:Stored prediction for ABT-next_day: Price $114.5114470135744, Change $-0.2485551226560716, Confidence 0.479
+2026-02-25T22:59:59.2854396Z INFO:ml_backend.utils.mongodb:Stored prediction for ABT-7_day: Price $114.06830617452445, Change $-0.6916959617060172, Confidence 0.363
+2026-02-25T22:59:59.2855285Z INFO:ml_backend.utils.mongodb:Stored prediction for ABT-30_day: Price $109.78423961091157, Change $-4.975762525318899, Confidence 0.105
+2026-02-25T22:59:59.2856482Z INFO:__main__:Stored predictions for ABT
+2026-02-25T23:00:00.3800686Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for TMO (upserted=0, modified=3)
+2026-02-25T23:00:00.3801995Z INFO:ml_backend.utils.mongodb:Stored prediction for TMO-next_day: Price $513.3232065792636, Change $-0.35678609651768056, Confidence 0.465
+2026-02-25T23:00:00.3803433Z INFO:ml_backend.utils.mongodb:Stored prediction for TMO-7_day: Price $513.428385403075, Change $-0.25160727270622374, Confidence 0.496
+2026-02-25T23:00:00.3804883Z INFO:ml_backend.utils.mongodb:Stored prediction for TMO-30_day: Price $505.2576171127839, Change $-8.422375562997331, Confidence 0.393
+2026-02-25T23:00:00.3805515Z INFO:__main__:Stored predictions for TMO
+2026-02-25T23:00:01.4873387Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for DHR (upserted=0, modified=3)
+2026-02-25T23:00:01.4874752Z INFO:ml_backend.utils.mongodb:Stored prediction for DHR-next_day: Price $209.29596976897858, Change $-0.22403450348235765, Confidence 0.461
+2026-02-25T23:00:01.4876460Z INFO:ml_backend.utils.mongodb:Stored prediction for DHR-7_day: Price $209.4173785957672, Change $-0.10262567669374789, Confidence 0.496
+2026-02-25T23:00:01.4877635Z INFO:ml_backend.utils.mongodb:Stored prediction for DHR-30_day: Price $217.92069188408811, Change $8.400687611627177, Confidence 0.488
+2026-02-25T23:00:01.4878246Z INFO:__main__:Stored predictions for DHR
+2026-02-25T23:00:02.6559840Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MRK (upserted=0, modified=3)
+2026-02-25T23:00:02.6560962Z INFO:ml_backend.utils.mongodb:Stored prediction for MRK-next_day: Price $122.4312136017044, Change $-0.028785482768256543, Confidence 0.499
+2026-02-25T23:00:02.6561850Z INFO:ml_backend.utils.mongodb:Stored prediction for MRK-7_day: Price $122.42387432049043, Change $-0.036124763982229524, Confidence 0.496
+2026-02-25T23:00:02.6562711Z INFO:ml_backend.utils.mongodb:Stored prediction for MRK-30_day: Price $121.47161721723151, Change $-0.9883818672411451, Confidence 0.406
+2026-02-25T23:00:02.6563324Z INFO:__main__:Stored predictions for MRK
+2026-02-25T23:00:03.7509752Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AMGN (upserted=0, modified=3)
+2026-02-25T23:00:03.7510770Z INFO:ml_backend.utils.mongodb:Stored prediction for AMGN-next_day: Price $384.23964585457406, Change $-0.09034071769156071, Confidence 0.499
+2026-02-25T23:00:03.7511713Z INFO:ml_backend.utils.mongodb:Stored prediction for AMGN-7_day: Price $386.44111869647384, Change $2.1111321242082113, Confidence 0.490
+2026-02-25T23:00:03.7512682Z INFO:ml_backend.utils.mongodb:Stored prediction for AMGN-30_day: Price $383.12482985844616, Change $-1.2051567138194628, Confidence 0.416
+2026-02-25T23:00:03.7513347Z INFO:__main__:Stored predictions for AMGN
+2026-02-25T23:00:04.8440211Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for GILD (upserted=0, modified=3)
+2026-02-25T23:00:04.8441594Z INFO:ml_backend.utils.mongodb:Stored prediction for GILD-next_day: Price $147.08541304862655, Change $-0.03458206856095103, Confidence 0.499
+2026-02-25T23:00:04.8443085Z INFO:ml_backend.utils.mongodb:Stored prediction for GILD-7_day: Price $147.68482542497688, Change $0.5648303077893786, Confidence 0.538
+2026-02-25T23:00:04.8444278Z INFO:ml_backend.utils.mongodb:Stored prediction for GILD-30_day: Price $149.01825263507993, Change $1.8982575178924321, Confidence 0.426
+2026-02-25T23:00:04.8444870Z INFO:__main__:Stored predictions for GILD
+2026-02-25T23:00:05.9423584Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for ISRG (upserted=0, modified=3)
+2026-02-25T23:00:05.9424468Z INFO:ml_backend.utils.mongodb:Stored prediction for ISRG-next_day: Price $506.47636691025, Change $0.30635348251564665, Confidence 0.551
+2026-02-25T23:00:05.9425345Z INFO:ml_backend.utils.mongodb:Stored prediction for ISRG-7_day: Price $506.52968602831584, Change $0.35967260058146167, Confidence 0.419
+2026-02-25T23:00:05.9426484Z INFO:ml_backend.utils.mongodb:Stored prediction for ISRG-30_day: Price $497.40150822336756, Change $-8.768505204366818, Confidence 0.429
+2026-02-25T23:00:05.9427487Z INFO:__main__:Stored predictions for ISRG
+2026-02-25T23:00:07.0426561Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MDT (upserted=0, modified=3)
+2026-02-25T23:00:07.0427481Z INFO:ml_backend.utils.mongodb:Stored prediction for MDT-next_day: Price $96.62728294859429, Change $-0.022718577284621233, Confidence 0.499
+2026-02-25T23:00:07.0428368Z INFO:ml_backend.utils.mongodb:Stored prediction for MDT-7_day: Price $96.69365663612909, Change $0.0436551102501852, Confidence 0.572
+2026-02-25T23:00:07.0429254Z INFO:ml_backend.utils.mongodb:Stored prediction for MDT-30_day: Price $96.21254708923571, Change $-0.4374544366431934, Confidence 0.518
+2026-02-25T23:00:07.0429835Z INFO:__main__:Stored predictions for MDT
+2026-02-25T23:00:08.1381372Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BMY (upserted=0, modified=3)
+2026-02-25T23:00:08.1382588Z INFO:ml_backend.utils.mongodb:Stored prediction for BMY-next_day: Price $61.28938484658648, Change $-0.010614390474067648, Confidence 0.499
+2026-02-25T23:00:08.1383920Z INFO:ml_backend.utils.mongodb:Stored prediction for BMY-7_day: Price $61.281916205694344, Change $-0.018083031366202817, Confidence 0.496
+2026-02-25T23:00:08.1385158Z INFO:ml_backend.utils.mongodb:Stored prediction for BMY-30_day: Price $60.805243331779074, Change $-0.4947559052814725, Confidence 0.406
+2026-02-25T23:00:08.1386379Z INFO:__main__:Stored predictions for BMY
+2026-02-25T23:00:08.1386870Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T23:00:09.6084513Z 
+2026-02-25T23:00:09.6085130Z ========================================================
+2026-02-25T23:00:09.6085929Z   PIPELINE HEALTH SUMMARY
+2026-02-25T23:00:09.6086330Z ========================================================
+2026-02-25T23:00:09.6086661Z   MongoDB connected:        YES
+2026-02-25T23:00:09.6086954Z   Historical data fetched:  10 tickers
+2026-02-25T23:00:09.6087320Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T23:00:09.6087703Z   Backtest status:          skipped
+2026-02-25T23:00:09.6088031Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T23:00:09.6088400Z   Gemini explanations:      not run (separate script)
+2026-02-25T23:00:09.6088770Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T23:00:09.6089114Z ========================================================
+2026-02-25T23:00:09.6089328Z 
+2026-02-25T23:00:09.6089667Z   QUALITY GATE: PASSED ✓
+2026-02-25T23:00:19.8863455Z 
+2026-02-25T23:00:19.8864356Z ===== Batch 7/10: CVS WMT COST PG KO PEP MDLZ CL MO CAT =====
+2026-02-25T23:00:19.8865193Z   Attempt 1...
+2026-02-25T23:00:23.5843554Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T23:00:23.5844541Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T23:00:23.5845370Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T23:00:23.5846356Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T23:00:23.5847159Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T23:00:23.5847727Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T23:00:23.5848231Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T23:00:23.5848703Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T23:00:23.5849190Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T23:00:23.5849976Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T23:00:23.5850475Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T23:00:23.5852870Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T23:00:23.5853658Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T23:00:23.5854299Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T23:00:23.5854944Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T23:00:24.9952070Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T23:00:25.1928219Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T23:00:25.1935327Z INFO:__main__:Fetching historical data...
+2026-02-25T23:00:27.5512721Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T23:00:27.5513232Z INFO:__main__:Downloading CVS...
+2026-02-25T23:00:27.8136604Z INFO:__main__:Downloading WMT...
+2026-02-25T23:00:28.0975059Z INFO:__main__:Downloading COST...
+2026-02-25T23:00:28.2032676Z INFO:__main__:Downloading PG...
+2026-02-25T23:00:28.4945012Z INFO:__main__:Downloading KO...
+2026-02-25T23:00:28.6813625Z INFO:__main__:Downloading PEP...
+2026-02-25T23:00:28.8394177Z INFO:__main__:Downloading MDLZ...
+2026-02-25T23:00:29.0632274Z INFO:__main__:Downloading CL...
+2026-02-25T23:00:29.2487858Z INFO:__main__:Downloading MO...
+2026-02-25T23:00:29.5396018Z INFO:__main__:Downloading CAT...
+2026-02-25T23:00:30.0019047Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T23:00:30.0076203Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T23:00:30.0081222Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T23:00:30.4425153Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T23:00:30.4431484Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T23:00:30.4467045Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T23:00:41.1585918Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CVS (upserted=0, modified=3)
+2026-02-25T23:00:41.1587141Z INFO:ml_backend.utils.mongodb:Stored prediction for CVS-next_day: Price $76.40913550899815, Change $0.21913306759189766, Confidence 0.480
+2026-02-25T23:00:41.1588428Z INFO:ml_backend.utils.mongodb:Stored prediction for CVS-7_day: Price $76.16752697287303, Change $-0.022475468533215803, Confidence 0.496
+2026-02-25T23:00:41.1589724Z INFO:ml_backend.utils.mongodb:Stored prediction for CVS-30_day: Price $75.25345512079356, Change $-0.9365473206126893, Confidence 0.452
+2026-02-25T23:00:41.1590683Z INFO:__main__:Stored predictions for CVS
+2026-02-25T23:00:42.2546432Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for WMT (upserted=0, modified=3)
+2026-02-25T23:00:42.2547783Z INFO:ml_backend.utils.mongodb:Stored prediction for WMT-next_day: Price $125.77455184681136, Change $0.02455184681136302, Confidence 0.497
+2026-02-25T23:00:42.2548732Z INFO:ml_backend.utils.mongodb:Stored prediction for WMT-7_day: Price $124.71310346259989, Change $-1.0368965374001107, Confidence 0.523
+2026-02-25T23:00:42.2549616Z INFO:ml_backend.utils.mongodb:Stored prediction for WMT-30_day: Price $122.76466454466919, Change $-2.9853354553308122, Confidence 0.385
+2026-02-25T23:00:42.2550206Z INFO:__main__:Stored predictions for WMT
+2026-02-25T23:00:43.3589294Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for COST (upserted=0, modified=3)
+2026-02-25T23:00:43.3590563Z INFO:ml_backend.utils.mongodb:Stored prediction for COST-next_day: Price $994.5261811903046, Change $-0.23382857532044454, Confidence 0.499
+2026-02-25T23:00:43.3591863Z INFO:ml_backend.utils.mongodb:Stored prediction for COST-7_day: Price $993.3700126757868, Change $-1.3899970898381753, Confidence 0.496
+2026-02-25T23:00:43.3593139Z INFO:ml_backend.utils.mongodb:Stored prediction for COST-30_day: Price $973.2805687407725, Change $-21.479441024852463, Confidence 0.392
+2026-02-25T23:00:43.3594649Z INFO:__main__:Stored predictions for COST
+2026-02-25T23:00:44.4538295Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for PG (upserted=0, modified=3)
+2026-02-25T23:00:44.4539509Z INFO:ml_backend.utils.mongodb:Stored prediction for PG-next_day: Price $163.3617076233407, Change $-0.028291766307745547, Confidence 0.498
+2026-02-25T23:00:44.4540817Z INFO:ml_backend.utils.mongodb:Stored prediction for PG-7_day: Price $163.16169143453294, Change $-0.22830795511549695, Confidence 0.496
+2026-02-25T23:00:44.4542473Z INFO:ml_backend.utils.mongodb:Stored prediction for PG-30_day: Price $160.94717827707242, Change $-2.442821112576013, Confidence 0.387
+2026-02-25T23:00:44.4543426Z INFO:__main__:Stored predictions for PG
+2026-02-25T23:00:45.6156863Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for KO (upserted=0, modified=3)
+2026-02-25T23:00:45.6157728Z INFO:ml_backend.utils.mongodb:Stored prediction for KO-next_day: Price $80.45108591896528, Change $-0.018915301737848722, Confidence 0.499
+2026-02-25T23:00:45.6158651Z INFO:ml_backend.utils.mongodb:Stored prediction for KO-7_day: Price $80.35755895682242, Change $-0.11244226388070899, Confidence 0.496
+2026-02-25T23:00:45.6159481Z INFO:ml_backend.utils.mongodb:Stored prediction for KO-30_day: Price $79.2669054458989, Change $-1.2030957748042255, Confidence 0.387
+2026-02-25T23:00:45.6160047Z INFO:__main__:Stored predictions for KO
+2026-02-25T23:00:46.7085238Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for PEP (upserted=0, modified=3)
+2026-02-25T23:00:46.7086690Z INFO:ml_backend.utils.mongodb:Stored prediction for PEP-next_day: Price $169.1407055679761, Change $-0.02929260096919961, Confidence 0.499
+2026-02-25T23:00:46.7087598Z INFO:ml_backend.utils.mongodb:Stored prediction for PEP-7_day: Price $169.50177760738273, Change $0.3317794384374224, Confidence 0.423
+2026-02-25T23:00:46.7088444Z INFO:ml_backend.utils.mongodb:Stored prediction for PEP-30_day: Price $166.64076110005942, Change $-2.529237068885891, Confidence 0.403
+2026-02-25T23:00:46.7089081Z INFO:__main__:Stored predictions for PEP
+2026-02-25T23:00:47.8012600Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MDLZ (upserted=0, modified=3)
+2026-02-25T23:00:47.8013732Z INFO:ml_backend.utils.mongodb:Stored prediction for MDLZ-next_day: Price $60.231164633577606, Change $0.11116570169284046, Confidence 0.492
+2026-02-25T23:00:47.8014628Z INFO:ml_backend.utils.mongodb:Stored prediction for MDLZ-7_day: Price $60.53202885117526, Change $0.4120299192904966, Confidence 0.565
+2026-02-25T23:00:47.8015510Z INFO:ml_backend.utils.mongodb:Stored prediction for MDLZ-30_day: Price $58.888534788438996, Change $-1.2314641434457698, Confidence 0.403
+2026-02-25T23:00:47.8016416Z INFO:__main__:Stored predictions for MDLZ
+2026-02-25T23:00:48.8999527Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CL (upserted=0, modified=3)
+2026-02-25T23:00:48.9000826Z INFO:ml_backend.utils.mongodb:Stored prediction for CL-next_day: Price $96.647274891244, Change $-0.0227232777013171, Confidence 0.499
+2026-02-25T23:00:48.9001742Z INFO:ml_backend.utils.mongodb:Stored prediction for CL-7_day: Price $96.53491934107691, Change $-0.13507882786839787, Confidence 0.496
+2026-02-25T23:00:48.9002567Z INFO:ml_backend.utils.mongodb:Stored prediction for CL-30_day: Price $95.11687134462858, Change $-1.5531268243167347, Confidence 0.397
+2026-02-25T23:00:48.9003137Z INFO:__main__:Stored predictions for CL
+2026-02-25T23:00:49.9940119Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MO (upserted=0, modified=3)
+2026-02-25T23:00:49.9941289Z INFO:ml_backend.utils.mongodb:Stored prediction for MO-next_day: Price $69.7229559761058, Change $0.022959027863606707, Confidence 0.416
+2026-02-25T23:00:49.9942180Z INFO:ml_backend.utils.mongodb:Stored prediction for MO-7_day: Price $69.60260381626193, Change $-0.09739313198025457, Confidence 0.496
+2026-02-25T23:00:49.9943022Z INFO:ml_backend.utils.mongodb:Stored prediction for MO-30_day: Price $68.38669715333805, Change $-1.3132997949041396, Confidence 0.303
+2026-02-25T23:00:49.9943947Z INFO:__main__:Stored predictions for MO
+2026-02-25T23:00:51.1204016Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CAT (upserted=0, modified=3)
+2026-02-25T23:00:51.1205162Z INFO:ml_backend.utils.mongodb:Stored prediction for CAT-next_day: Price $767.1266140254288, Change $0.5166286738663075, Confidence 0.525
+2026-02-25T23:00:51.1206320Z INFO:ml_backend.utils.mongodb:Stored prediction for CAT-7_day: Price $765.8218302777267, Change $-0.7881550738358101, Confidence 0.496
+2026-02-25T23:00:51.1207549Z INFO:ml_backend.utils.mongodb:Stored prediction for CAT-30_day: Price $805.2608094672087, Change $38.650824115646174, Confidence 0.869
+2026-02-25T23:00:51.1208147Z INFO:__main__:Stored predictions for CAT
+2026-02-25T23:00:51.1208492Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T23:00:52.3356315Z 
+2026-02-25T23:00:52.3356929Z ========================================================
+2026-02-25T23:00:52.3357562Z   PIPELINE HEALTH SUMMARY
+2026-02-25T23:00:52.3357911Z ========================================================
+2026-02-25T23:00:52.3358242Z   MongoDB connected:        YES
+2026-02-25T23:00:52.3358540Z   Historical data fetched:  10 tickers
+2026-02-25T23:00:52.3358890Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T23:00:52.3359235Z   Backtest status:          skipped
+2026-02-25T23:00:52.3359556Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T23:00:52.3359927Z   Gemini explanations:      not run (separate script)
+2026-02-25T23:00:52.3360308Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T23:00:52.3360636Z ========================================================
+2026-02-25T23:00:52.3360839Z 
+2026-02-25T23:00:52.3361168Z   QUALITY GATE: PASSED ✓
+2026-02-25T23:01:02.5914708Z 
+2026-02-25T23:01:02.5915389Z ===== Batch 8/10: HON UNP BA RTX LMT DE GE GD EMR FDX =====
+2026-02-25T23:01:02.5916323Z   Attempt 1...
+2026-02-25T23:01:05.9190984Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T23:01:05.9191993Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T23:01:05.9192876Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T23:01:05.9193645Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T23:01:05.9194391Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T23:01:05.9195054Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T23:01:05.9195541Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T23:01:05.9196249Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T23:01:05.9196749Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T23:01:05.9197317Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T23:01:05.9197809Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T23:01:05.9198286Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T23:01:05.9198740Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T23:01:05.9199208Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T23:01:05.9199663Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T23:01:07.3351270Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T23:01:07.5326588Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T23:01:07.5334544Z INFO:__main__:Fetching historical data...
+2026-02-25T23:01:09.8748198Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T23:01:09.8748855Z INFO:__main__:Downloading HON...
+2026-02-25T23:01:10.2522434Z INFO:__main__:Downloading UNP...
+2026-02-25T23:01:10.4028765Z INFO:__main__:Downloading BA...
+2026-02-25T23:01:10.5825308Z INFO:__main__:Downloading RTX...
+2026-02-25T23:01:10.7530725Z INFO:__main__:Downloading LMT...
+2026-02-25T23:01:10.9135121Z INFO:__main__:Downloading DE...
+2026-02-25T23:01:11.0737266Z INFO:__main__:Downloading GE...
+2026-02-25T23:01:11.2826040Z INFO:__main__:Downloading GD...
+2026-02-25T23:01:11.5113323Z INFO:__main__:Downloading EMR...
+2026-02-25T23:01:11.7213093Z INFO:__main__:Downloading FDX...
+2026-02-25T23:01:11.9984274Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T23:01:12.0047009Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T23:01:12.0048056Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T23:01:12.4321452Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T23:01:12.4324874Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T23:01:12.4327593Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T23:01:29.6990720Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for HON (upserted=0, modified=3)
+2026-02-25T23:01:29.6992009Z INFO:ml_backend.utils.mongodb:Stored prediction for HON-next_day: Price $242.14306534697852, Change $-0.05693160126367047, Confidence 0.499
+2026-02-25T23:01:29.6993306Z INFO:ml_backend.utils.mongodb:Stored prediction for HON-7_day: Price $241.86156628394943, Change $-0.33843066429275837, Confidence 0.496
+2026-02-25T23:01:29.6994508Z INFO:ml_backend.utils.mongodb:Stored prediction for HON-30_day: Price $238.1957067514396, Change $-4.0042901968026, Confidence 0.397
+2026-02-25T23:01:29.6995088Z INFO:__main__:Stored predictions for HON
+2026-02-25T23:01:30.7634616Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for UNP (upserted=0, modified=3)
+2026-02-25T23:01:30.7635968Z INFO:ml_backend.utils.mongodb:Stored prediction for UNP-next_day: Price $264.1878853186479, Change $-0.06211468135211362, Confidence 0.499
+2026-02-25T23:01:30.7636837Z INFO:ml_backend.utils.mongodb:Stored prediction for UNP-7_day: Price $263.8807584468778, Change $-0.3692415531222082, Confidence 0.496
+2026-02-25T23:01:30.7637719Z INFO:ml_backend.utils.mongodb:Stored prediction for UNP-30_day: Price $257.3700208125074, Change $-6.879979187492609, Confidence 0.355
+2026-02-25T23:01:30.7638291Z INFO:__main__:Stored predictions for UNP
+2026-02-25T23:01:32.2197017Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BA (upserted=0, modified=3)
+2026-02-25T23:01:32.2198370Z INFO:ml_backend.utils.mongodb:Stored prediction for BA-next_day: Price $230.51591492261076, Change $0.15591431225919905, Confidence 0.528
+2026-02-25T23:01:32.2199783Z INFO:ml_backend.utils.mongodb:Stored prediction for BA-7_day: Price $231.40939682498055, Change $1.0493962146289846, Confidence 0.613
+2026-02-25T23:01:32.2201099Z INFO:ml_backend.utils.mongodb:Stored prediction for BA-30_day: Price $234.83379862387875, Change $4.473798013527187, Confidence 0.595
+2026-02-25T23:01:32.2201686Z INFO:__main__:Stored predictions for BA
+2026-02-25T23:01:33.2857465Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for RTX (upserted=0, modified=3)
+2026-02-25T23:01:33.2858747Z INFO:ml_backend.utils.mongodb:Stored prediction for RTX-next_day: Price $195.9339286131171, Change $-0.04606711442195888, Confidence 0.499
+2026-02-25T23:01:33.2859669Z INFO:ml_backend.utils.mongodb:Stored prediction for RTX-7_day: Price $196.75080285780268, Change $0.7708071302636199, Confidence 0.597
+2026-02-25T23:01:33.2868738Z INFO:ml_backend.utils.mongodb:Stored prediction for RTX-30_day: Price $199.54361912197905, Change $3.563623394439986, Confidence 0.697
+2026-02-25T23:01:33.2869395Z INFO:__main__:Stored predictions for RTX
+2026-02-25T23:01:34.4110233Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for LMT (upserted=0, modified=3)
+2026-02-25T23:01:34.4111282Z INFO:ml_backend.utils.mongodb:Stored prediction for LMT-next_day: Price $647.347798462912, Change $-0.1522015370879899, Confidence 0.499
+2026-02-25T23:01:34.4112180Z INFO:ml_backend.utils.mongodb:Stored prediction for LMT-7_day: Price $646.5952359294356, Change $-0.9047640705643971, Confidence 0.496
+2026-02-25T23:01:34.4113413Z INFO:ml_backend.utils.mongodb:Stored prediction for LMT-30_day: Price $635.302715568834, Change $-12.197284431166054, Confidence 0.392
+2026-02-25T23:01:34.4114011Z INFO:__main__:Stored predictions for LMT
+2026-02-25T23:01:35.4817020Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for DE (upserted=0, modified=3)
+2026-02-25T23:01:35.4818082Z INFO:ml_backend.utils.mongodb:Stored prediction for DE-next_day: Price $623.5020042753727, Change $-0.10798107618984432, Confidence 0.499
+2026-02-25T23:01:35.4818971Z INFO:ml_backend.utils.mongodb:Stored prediction for DE-7_day: Price $620.9980963957489, Change $-2.6118889558135834, Confidence 0.454
+2026-02-25T23:01:35.4820172Z INFO:ml_backend.utils.mongodb:Stored prediction for DE-30_day: Price $629.8778181166109, Change $6.267832765048411, Confidence 0.512
+2026-02-25T23:01:35.4820745Z INFO:__main__:Stored predictions for DE
+2026-02-25T23:01:36.5438276Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for GE (upserted=0, modified=3)
+2026-02-25T23:01:36.5439616Z INFO:ml_backend.utils.mongodb:Stored prediction for GE-next_day: Price $343.44598260500715, Change $0.5559679565696456, Confidence 0.687
+2026-02-25T23:01:36.5440478Z INFO:ml_backend.utils.mongodb:Stored prediction for GE-7_day: Price $346.07935797884335, Change $3.1893433304058476, Confidence 0.657
+2026-02-25T23:01:36.5441285Z INFO:ml_backend.utils.mongodb:Stored prediction for GE-30_day: Price $354.15742652883597, Change $11.26741188039847, Confidence 0.862
+2026-02-25T23:01:36.5441863Z INFO:__main__:Stored predictions for GE
+2026-02-25T23:01:37.6072242Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for GD (upserted=0, modified=3)
+2026-02-25T23:01:37.6073849Z INFO:ml_backend.utils.mongodb:Stored prediction for GD-next_day: Price $343.0593560574477, Change $-0.080658590989799, Confidence 0.499
+2026-02-25T23:01:37.6075237Z INFO:ml_backend.utils.mongodb:Stored prediction for GD-7_day: Price $342.6605385767358, Change $-0.47947607170169704, Confidence 0.496
+2026-02-25T23:01:37.6076909Z INFO:ml_backend.utils.mongodb:Stored prediction for GD-30_day: Price $344.61415137372757, Change $1.474136725290066, Confidence 0.575
+2026-02-25T23:01:37.6077806Z INFO:__main__:Stored predictions for GD
+2026-02-25T23:01:38.6724128Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for EMR (upserted=0, modified=3)
+2026-02-25T23:01:38.6725347Z INFO:ml_backend.utils.mongodb:Stored prediction for EMR-next_day: Price $148.5610772041476, Change $0.1210747627413582, Confidence 0.544
+2026-02-25T23:01:38.6726394Z INFO:ml_backend.utils.mongodb:Stored prediction for EMR-7_day: Price $149.16240875087448, Change $0.7224063094682265, Confidence 0.573
+2026-02-25T23:01:38.6727276Z INFO:ml_backend.utils.mongodb:Stored prediction for EMR-30_day: Price $150.95841764594925, Change $2.518415204543004, Confidence 0.595
+2026-02-25T23:01:38.6727852Z INFO:__main__:Stored predictions for EMR
+2026-02-25T23:01:39.7393395Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for FDX (upserted=0, modified=3)
+2026-02-25T23:01:39.7394805Z INFO:ml_backend.utils.mongodb:Stored prediction for FDX-next_day: Price $382.5000646228063, Change $-0.08993171508433306, Confidence 0.499
+2026-02-25T23:01:39.7396431Z INFO:ml_backend.utils.mongodb:Stored prediction for FDX-7_day: Price $382.05539605612404, Change $-0.5346002817665862, Confidence 0.496
+2026-02-25T23:01:39.7397835Z INFO:ml_backend.utils.mongodb:Stored prediction for FDX-30_day: Price $375.5571268586322, Change $-7.032869479258409, Confidence 0.385
+2026-02-25T23:01:39.7398562Z INFO:__main__:Stored predictions for FDX
+2026-02-25T23:01:39.7398908Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T23:01:40.1420653Z 
+2026-02-25T23:01:40.1421289Z ========================================================
+2026-02-25T23:01:40.1421843Z   PIPELINE HEALTH SUMMARY
+2026-02-25T23:01:40.1422256Z ========================================================
+2026-02-25T23:01:40.1422703Z   MongoDB connected:        YES
+2026-02-25T23:01:40.1423118Z   Historical data fetched:  10 tickers
+2026-02-25T23:01:40.1424025Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T23:01:40.1424526Z   Backtest status:          skipped
+2026-02-25T23:01:40.1424981Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T23:01:40.1425522Z   Gemini explanations:      not run (separate script)
+2026-02-25T23:01:40.1426321Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T23:01:40.1426801Z ========================================================
+2026-02-25T23:01:40.1427124Z 
+2026-02-25T23:01:40.1427522Z   QUALITY GATE: PASSED ✓
+2026-02-25T23:01:50.3889061Z 
+2026-02-25T23:01:50.3890237Z ===== Batch 9/10: UPS MMM CMCSA VZ T CHTR BRK-B ACN IBM PYPL =====
+2026-02-25T23:01:50.3891062Z   Attempt 1...
+2026-02-25T23:01:53.8192501Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T23:01:53.8193554Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T23:01:53.8194397Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T23:01:53.8195277Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T23:01:53.8196235Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T23:01:53.8197071Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T23:01:53.8197913Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T23:01:53.8198709Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T23:01:53.8199537Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T23:01:53.8200412Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T23:01:53.8201079Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T23:01:53.8201665Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T23:01:53.8202397Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T23:01:53.8202905Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T23:01:53.8203376Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T23:01:55.2440330Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T23:01:55.4414872Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T23:01:55.4422188Z INFO:__main__:Fetching historical data...
+2026-02-25T23:01:57.7794824Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T23:01:57.7795502Z INFO:__main__:Downloading UPS...
+2026-02-25T23:01:57.9655124Z INFO:__main__:Downloading MMM...
+2026-02-25T23:01:58.4928411Z INFO:__main__:Downloading CMCSA...
+2026-02-25T23:01:58.6367229Z INFO:__main__:Downloading VZ...
+2026-02-25T23:01:58.7847864Z INFO:__main__:Downloading T...
+2026-02-25T23:01:58.9225289Z INFO:__main__:Downloading CHTR...
+2026-02-25T23:01:58.9890180Z INFO:__main__:Downloading BRK-B...
+2026-02-25T23:01:59.0958294Z INFO:__main__:Downloading ACN...
+2026-02-25T23:01:59.2104283Z INFO:__main__:Downloading IBM...
+2026-02-25T23:01:59.3681075Z INFO:__main__:Downloading PYPL...
+2026-02-25T23:01:59.6205196Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T23:01:59.6268469Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T23:01:59.6269517Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T23:02:00.0547625Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T23:02:00.0553441Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T23:02:00.0559113Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T23:02:11.6863027Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for UPS (upserted=0, modified=3)
+2026-02-25T23:02:11.6864262Z INFO:ml_backend.utils.mongodb:Stored prediction for UPS-next_day: Price $113.82323686058407, Change $-0.026761613537019002, Confidence 0.499
+2026-02-25T23:02:11.6865551Z INFO:ml_backend.utils.mongodb:Stored prediction for UPS-7_day: Price $113.69091370492697, Change $-0.1590847691941235, Confidence 0.496
+2026-02-25T23:02:11.6867528Z INFO:ml_backend.utils.mongodb:Stored prediction for UPS-30_day: Price $110.55328298712479, Change $-3.2967154869963053, Confidence 0.373
+2026-02-25T23:02:11.6868474Z INFO:__main__:Stored predictions for UPS
+2026-02-25T23:02:12.7521225Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for MMM (upserted=0, modified=3)
+2026-02-25T23:02:12.7522512Z INFO:ml_backend.utils.mongodb:Stored prediction for MMM-next_day: Price $165.50108140748003, Change $-0.038911878652783116, Confidence 0.499
+2026-02-25T23:02:12.7523755Z INFO:ml_backend.utils.mongodb:Stored prediction for MMM-7_day: Price $165.30868110363588, Change $-0.23131218249693575, Confidence 0.496
+2026-02-25T23:02:12.7524630Z INFO:ml_backend.utils.mongodb:Stored prediction for MMM-30_day: Price $161.509384041288, Change $-4.030609244844811, Confidence 0.381
+2026-02-25T23:02:12.7525202Z INFO:__main__:Stored predictions for MMM
+2026-02-25T23:02:13.8197801Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CMCSA (upserted=0, modified=3)
+2026-02-25T23:02:13.8199237Z INFO:ml_backend.utils.mongodb:Stored prediction for CMCSA-next_day: Price $30.786196166528185, Change $-0.0038047489991583916, Confidence 0.499
+2026-02-25T23:02:13.8200857Z INFO:ml_backend.utils.mongodb:Stored prediction for CMCSA-7_day: Price $30.780918100531412, Change $-0.009082814995931443, Confidence 0.496
+2026-02-25T23:02:13.8202514Z INFO:ml_backend.utils.mongodb:Stored prediction for CMCSA-30_day: Price $30.42721006447746, Change $-0.3627908510498834, Confidence 0.406
+2026-02-25T23:02:13.8203395Z INFO:__main__:Stored predictions for CMCSA
+2026-02-25T23:02:14.9125570Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for VZ (upserted=0, modified=3)
+2026-02-25T23:02:14.9126969Z INFO:ml_backend.utils.mongodb:Stored prediction for VZ-next_day: Price $49.22391614548682, Change $-0.006083396749509973, Confidence 0.499
+2026-02-25T23:02:14.9128232Z INFO:ml_backend.utils.mongodb:Stored prediction for VZ-7_day: Price $49.20588603558478, Change $-0.024113506651545435, Confidence 0.497
+2026-02-25T23:02:14.9129534Z INFO:ml_backend.utils.mongodb:Stored prediction for VZ-30_day: Price $48.94292023720158, Change $-0.28707930503475154, Confidence 0.356
+2026-02-25T23:02:14.9130401Z INFO:__main__:Stored predictions for VZ
+2026-02-25T23:02:16.0500041Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for T (upserted=0, modified=3)
+2026-02-25T23:02:16.0500975Z INFO:ml_backend.utils.mongodb:Stored prediction for T-next_day: Price $27.86655691735465, Change $-0.003443921878748313, Confidence 0.499
+2026-02-25T23:02:16.0501882Z INFO:ml_backend.utils.mongodb:Stored prediction for T-7_day: Price $27.856349743217468, Change $-0.01365109601593062, Confidence 0.496
+2026-02-25T23:02:16.0502722Z INFO:ml_backend.utils.mongodb:Stored prediction for T-30_day: Price $27.519847932225392, Change $-0.35015290700800605, Confidence 0.412
+2026-02-25T23:02:16.0503309Z INFO:__main__:Stored predictions for T
+2026-02-25T23:02:17.1139406Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for CHTR (upserted=0, modified=3)
+2026-02-25T23:02:17.1140640Z INFO:ml_backend.utils.mongodb:Stored prediction for CHTR-next_day: Price $225.72210386290936, Change $-0.027896137090635875, Confidence 0.499
+2026-02-25T23:02:17.1141946Z INFO:ml_backend.utils.mongodb:Stored prediction for CHTR-7_day: Price $225.6394246561608, Change $-0.11057534383920142, Confidence 0.497
+2026-02-25T23:02:17.1143221Z INFO:ml_backend.utils.mongodb:Stored prediction for CHTR-30_day: Price $226.33126163927133, Change $0.5812616392713323, Confidence 0.412
+2026-02-25T23:02:17.1144185Z INFO:__main__:Stored predictions for CHTR
+2026-02-25T23:02:18.1786411Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for BRK-B (upserted=0, modified=3)
+2026-02-25T23:02:18.1787661Z INFO:ml_backend.utils.mongodb:Stored prediction for BRK-B-next_day: Price $493.75291352687805, Change $-0.23707670749695353, Confidence 0.502
+2026-02-25T23:02:18.1789006Z INFO:ml_backend.utils.mongodb:Stored prediction for BRK-B-7_day: Price $492.02160001220483, Change $-1.9683902221701715, Confidence 0.213
+2026-02-25T23:02:18.1790798Z INFO:ml_backend.utils.mongodb:Stored prediction for BRK-B-30_day: Price $482.80045640650735, Change $-11.189533827867649, Confidence 0.215
+2026-02-25T23:02:18.1791786Z INFO:__main__:Stored predictions for BRK-B
+2026-02-25T23:02:19.2456114Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for ACN (upserted=0, modified=3)
+2026-02-25T23:02:19.2457365Z INFO:ml_backend.utils.mongodb:Stored prediction for ACN-next_day: Price $191.16694634674235, Change $-0.33305365325765024, Confidence 0.607
+2026-02-25T23:02:19.2459069Z INFO:ml_backend.utils.mongodb:Stored prediction for ACN-7_day: Price $192.02532063879042, Change $0.5253206387904186, Confidence 0.496
+2026-02-25T23:02:19.2460335Z INFO:ml_backend.utils.mongodb:Stored prediction for ACN-30_day: Price $191.59078074816077, Change $0.09078074816076764, Confidence 0.458
+2026-02-25T23:02:19.2461259Z INFO:__main__:Stored predictions for ACN
+2026-02-25T23:02:20.3149119Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for IBM (upserted=0, modified=3)
+2026-02-25T23:02:20.3150499Z INFO:ml_backend.utils.mongodb:Stored prediction for IBM-next_day: Price $237.51064024862575, Change $-0.029353037507064528, Confidence 0.499
+2026-02-25T23:02:20.3151936Z INFO:ml_backend.utils.mongodb:Stored prediction for IBM-7_day: Price $238.26384551466379, Change $0.7238522285309728, Confidence 0.496
+2026-02-25T23:02:20.3153316Z INFO:ml_backend.utils.mongodb:Stored prediction for IBM-30_day: Price $245.65649529021366, Change $8.116502004080843, Confidence 0.544
+2026-02-25T23:02:20.3153930Z INFO:__main__:Stored predictions for IBM
+2026-02-25T23:02:21.3887458Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for PYPL (upserted=0, modified=3)
+2026-02-25T23:02:21.3888825Z INFO:ml_backend.utils.mongodb:Stored prediction for PYPL-next_day: Price $47.28067000770421, Change $-0.03932968712000928, Confidence 0.384
+2026-02-25T23:02:21.3890324Z INFO:ml_backend.utils.mongodb:Stored prediction for PYPL-7_day: Price $47.55552027733085, Change $0.23552058250663066, Confidence 0.508
+2026-02-25T23:02:21.3891747Z INFO:ml_backend.utils.mongodb:Stored prediction for PYPL-30_day: Price $48.5735571745939, Change $1.2535574797696825, Confidence 0.544
+2026-02-25T23:02:21.3892568Z INFO:__main__:Stored predictions for PYPL
+2026-02-25T23:02:21.3892910Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T23:02:22.5718202Z 
+2026-02-25T23:02:22.5718802Z ========================================================
+2026-02-25T23:02:22.5719387Z   PIPELINE HEALTH SUMMARY
+2026-02-25T23:02:22.5719796Z ========================================================
+2026-02-25T23:02:22.5720234Z   MongoDB connected:        YES
+2026-02-25T23:02:22.5720658Z   Historical data fetched:  10 tickers
+2026-02-25T23:02:22.5721140Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T23:02:22.5721653Z   Backtest status:          skipped
+2026-02-25T23:02:22.5722100Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T23:02:22.5722654Z   Gemini explanations:      not run (separate script)
+2026-02-25T23:02:22.5723181Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T23:02:22.5723648Z ========================================================
+2026-02-25T23:02:22.5723955Z 
+2026-02-25T23:02:22.5724334Z   QUALITY GATE: PASSED ✓
+2026-02-25T23:02:32.7524325Z 
+2026-02-25T23:02:32.7525120Z ===== Batch 10/10: LIN NEE SO DUK AMT SPG PLTR TMUS PM AMAT =====
+2026-02-25T23:02:32.7525871Z   Attempt 1...
+2026-02-25T23:02:36.0474208Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T23:02:36.0475244Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T23:02:36.0476342Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T23:02:36.0477177Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T23:02:36.0477870Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T23:02:36.0478907Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T23:02:36.0479616Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T23:02:36.0480349Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T23:02:36.0481070Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T23:02:36.0481856Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T23:02:36.0482609Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T23:02:36.0483572Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T23:02:36.0484139Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T23:02:36.0484624Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T23:02:36.0485080Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T23:02:37.4681678Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T23:02:37.6670821Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T23:02:37.6678060Z INFO:__main__:Fetching historical data...
+2026-02-25T23:02:40.0106327Z INFO:__main__:Fetching 10 tickers from yfinance...
+2026-02-25T23:02:40.0106989Z INFO:__main__:Downloading LIN...
+2026-02-25T23:02:40.2414479Z INFO:__main__:Downloading NEE...
+2026-02-25T23:02:40.3780538Z INFO:__main__:Downloading SO...
+2026-02-25T23:02:40.5505837Z INFO:__main__:Downloading DUK...
+2026-02-25T23:02:40.7079970Z INFO:__main__:Downloading AMT...
+2026-02-25T23:02:40.8099450Z INFO:__main__:Downloading SPG...
+2026-02-25T23:02:41.0594668Z INFO:__main__:Downloading PLTR...
+2026-02-25T23:02:41.1963575Z INFO:__main__:Downloading TMUS...
+2026-02-25T23:02:41.2919108Z INFO:__main__:Downloading PM...
+2026-02-25T23:02:41.4522782Z INFO:__main__:Downloading AMAT...
+2026-02-25T23:02:41.7994180Z INFO:__main__:Predict-only mode: loading saved models...
+2026-02-25T23:02:41.8076345Z INFO:ml_backend.models.predictor:Loaded 3 pooled models
+2026-02-25T23:02:41.8077215Z INFO:ml_backend.models.predictor:Loaded feature shortlists for 3 horizons
+2026-02-25T23:02:42.2324620Z INFO:ml_backend.models.predictor:Loaded 300 models + 300 sign classifiers
+2026-02-25T23:02:42.2325480Z INFO:__main__:Loaded 3 pooled + 300 per-ticker models.
+2026-02-25T23:02:42.2326239Z INFO:__main__:Generating and storing live predictions...
+2026-02-25T23:02:52.8850024Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for LIN (upserted=0, modified=3)
+2026-02-25T23:02:52.8851270Z INFO:ml_backend.utils.mongodb:Stored prediction for LIN-next_day: Price $508.18197961405053, Change $-0.0880093996213418, Confidence 0.499
+2026-02-25T23:02:52.8852572Z INFO:ml_backend.utils.mongodb:Stored prediction for LIN-7_day: Price $507.55977368671324, Change $-0.7102153269586324, Confidence 0.496
+2026-02-25T23:02:52.8853827Z INFO:ml_backend.utils.mongodb:Stored prediction for LIN-30_day: Price $495.5556338758497, Change $-12.714355137822167, Confidence 0.361
+2026-02-25T23:02:52.8854764Z INFO:__main__:Stored predictions for LIN
+2026-02-25T23:02:53.9559085Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for NEE (upserted=0, modified=3)
+2026-02-25T23:02:53.9560293Z INFO:ml_backend.utils.mongodb:Stored prediction for NEE-next_day: Price $95.09353185509818, Change $-0.01646875525338487, Confidence 0.499
+2026-02-25T23:02:53.9561611Z INFO:ml_backend.utils.mongodb:Stored prediction for NEE-7_day: Price $95.02827954203028, Change $-0.08172106832128634, Confidence 0.496
+2026-02-25T23:02:53.9563009Z INFO:ml_backend.utils.mongodb:Stored prediction for NEE-30_day: Price $94.52022065465788, Change $-0.589779955693686, Confidence 0.407
+2026-02-25T23:02:53.9563962Z INFO:__main__:Stored predictions for NEE
+2026-02-25T23:02:55.0301348Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for SO (upserted=0, modified=3)
+2026-02-25T23:02:55.0302225Z INFO:ml_backend.utils.mongodb:Stored prediction for SO-next_day: Price $95.7415378094648, Change $-0.17846035948051053, Confidence 0.471
+2026-02-25T23:02:55.0303438Z INFO:ml_backend.utils.mongodb:Stored prediction for SO-7_day: Price $95.72477472732386, Change $-0.1952234416214509, Confidence 0.308
+2026-02-25T23:02:55.0304246Z INFO:ml_backend.utils.mongodb:Stored prediction for SO-30_day: Price $97.16802539350977, Change $1.2480272245644528, Confidence 0.359
+2026-02-25T23:02:55.0304802Z INFO:__main__:Stored predictions for SO
+2026-02-25T23:02:56.1087896Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for DUK (upserted=0, modified=3)
+2026-02-25T23:02:56.1089368Z INFO:ml_backend.utils.mongodb:Stored prediction for DUK-next_day: Price $128.71640798199658, Change $-0.21358469378466793, Confidence 0.527
+2026-02-25T23:02:56.1090265Z INFO:ml_backend.utils.mongodb:Stored prediction for DUK-7_day: Price $128.81921256146617, Change $-0.11078011431507662, Confidence 0.496
+2026-02-25T23:02:56.1091100Z INFO:ml_backend.utils.mongodb:Stored prediction for DUK-30_day: Price $128.42867904992735, Change $-0.5013136258538964, Confidence 0.358
+2026-02-25T23:02:56.1091698Z INFO:__main__:Stored predictions for DUK
+2026-02-25T23:02:57.2256706Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AMT (upserted=0, modified=3)
+2026-02-25T23:02:57.2257923Z INFO:ml_backend.utils.mongodb:Stored prediction for AMT-next_day: Price $182.43710192701778, Change $-0.04289380052128422, Confidence 0.499
+2026-02-25T23:02:57.2259200Z INFO:ml_backend.utils.mongodb:Stored prediction for AMT-7_day: Price $182.3232040116057, Change $-0.15679171593336605, Confidence 0.496
+2026-02-25T23:02:57.2260496Z INFO:ml_backend.utils.mongodb:Stored prediction for AMT-30_day: Price $180.79651518232893, Change $-1.6834805452101307, Confidence 0.396
+2026-02-25T23:02:57.2261389Z INFO:__main__:Stored predictions for AMT
+2026-02-25T23:02:58.2911724Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for SPG (upserted=0, modified=3)
+2026-02-25T23:02:58.2913085Z INFO:ml_backend.utils.mongodb:Stored prediction for SPG-next_day: Price $200.942760724399, Change $-0.04724476876506856, Confidence 0.499
+2026-02-25T23:02:58.2914560Z INFO:ml_backend.utils.mongodb:Stored prediction for SPG-7_day: Price $200.81730947943893, Change $-0.17269601372512966, Confidence 0.496
+2026-02-25T23:02:58.2916069Z INFO:ml_backend.utils.mongodb:Stored prediction for SPG-30_day: Price $198.70167810194383, Change $-2.2883273912202355, Confidence 0.412
+2026-02-25T23:02:58.2916669Z INFO:__main__:Stored predictions for SPG
+2026-02-25T23:02:59.3689776Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for PLTR (upserted=0, modified=3)
+2026-02-25T23:02:59.3691104Z INFO:ml_backend.utils.mongodb:Stored prediction for PLTR-next_day: Price $134.17342045822, Change $-0.016581983186256366, Confidence 0.499
+2026-02-25T23:02:59.3692009Z INFO:ml_backend.utils.mongodb:Stored prediction for PLTR-7_day: Price $134.85789144701465, Change $0.6678890056084015, Confidence 0.508
+2026-02-25T23:02:59.3692887Z INFO:ml_backend.utils.mongodb:Stored prediction for PLTR-30_day: Price $139.78600639340564, Change $5.596003951999393, Confidence 0.544
+2026-02-25T23:02:59.3693508Z INFO:__main__:Stored predictions for PLTR
+2026-02-25T23:03:00.4349491Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for TMUS (upserted=0, modified=3)
+2026-02-25T23:03:00.4350708Z INFO:ml_backend.utils.mongodb:Stored prediction for TMUS-next_day: Price $218.6329836424487, Change $-0.027020019660682237, Confidence 0.499
+2026-02-25T23:03:00.4352007Z INFO:ml_backend.utils.mongodb:Stored prediction for TMUS-7_day: Price $218.52756589639193, Change $-0.13243776571744093, Confidence 0.566
+2026-02-25T23:03:00.4353324Z INFO:ml_backend.utils.mongodb:Stored prediction for TMUS-30_day: Price $214.71037307245172, Change $-3.9496305896576587, Confidence 0.404
+2026-02-25T23:03:00.4354302Z INFO:__main__:Stored predictions for TMUS
+2026-02-25T23:03:01.5007302Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for PM (upserted=0, modified=3)
+2026-02-25T23:03:01.5008164Z INFO:ml_backend.utils.mongodb:Stored prediction for PM-next_day: Price $189.91361353679423, Change $0.11361048503641769, Confidence 0.514
+2026-02-25T23:03:01.5009402Z INFO:ml_backend.utils.mongodb:Stored prediction for PM-7_day: Price $189.53479189599838, Change $-0.265211155759431, Confidence 0.496
+2026-02-25T23:03:01.5010249Z INFO:ml_backend.utils.mongodb:Stored prediction for PM-30_day: Price $187.0375275051022, Change $-2.7624755466556223, Confidence 0.387
+2026-02-25T23:03:01.5010830Z INFO:__main__:Stored predictions for PM
+2026-02-25T23:03:02.5716047Z INFO:ml_backend.utils.mongodb:Upserted 3 predictions for AMAT (upserted=0, modified=3)
+2026-02-25T23:03:02.5717861Z INFO:ml_backend.utils.mongodb:Stored prediction for AMAT-next_day: Price $394.90120786734366, Change $-0.048804339687592346, Confidence 0.499
+2026-02-25T23:03:02.5718816Z INFO:ml_backend.utils.mongodb:Stored prediction for AMAT-7_day: Price $396.1535377377827, Change $1.203525530751449, Confidence 0.496
+2026-02-25T23:03:02.5719659Z INFO:ml_backend.utils.mongodb:Stored prediction for AMAT-30_day: Price $403.31304755618714, Change $8.363035349155894, Confidence 0.511
+2026-02-25T23:03:02.5720258Z INFO:__main__:Stored predictions for AMAT
+2026-02-25T23:03:02.5720597Z INFO:__main__:Pipeline completed successfully.
+2026-02-25T23:03:03.8681887Z 
+2026-02-25T23:03:03.8682436Z ========================================================
+2026-02-25T23:03:03.8682858Z   PIPELINE HEALTH SUMMARY
+2026-02-25T23:03:03.8683183Z ========================================================
+2026-02-25T23:03:03.8683533Z   MongoDB connected:        YES
+2026-02-25T23:03:03.8683852Z   Historical data fetched:  10 tickers
+2026-02-25T23:03:03.8684205Z   Training status:          loaded from disk (303 tickers)
+2026-02-25T23:03:03.8684555Z   Backtest status:          skipped
+2026-02-25T23:03:03.8684881Z   Predictions stored:       10 tickers x 4 horizons
+2026-02-25T23:03:03.8685255Z   Gemini explanations:      not run (separate script)
+2026-02-25T23:03:03.8685826Z   Evaluation samples found: 0 (expected 0 early)
+2026-02-25T23:03:03.8686183Z ========================================================
+2026-02-25T23:03:03.8686393Z 
+2026-02-25T23:03:03.8686722Z   QUALITY GATE: PASSED ✓
+2026-02-25T23:03:04.0671251Z 
+2026-02-25T23:03:04.0671795Z ===== Pipeline Summary =====
+2026-02-25T23:03:04.0672154Z Total batches: 10
+2026-02-25T23:03:04.0672409Z Failed batches: 0

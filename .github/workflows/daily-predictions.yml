@@ -12,7 +12,7 @@ concurrency:
 
 env:
   MONGODB_URI: ${{ secrets.MONGODB_URI }}
-  SKIP_SEC_FMP: "true"
+  SKIP_SEC_FMP: "true"  # WARNING: SEC and FMP data sources disabled — features may be degraded
 
 jobs:
   update-predictions:
@@ -50,7 +50,9 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running sentiment cron ====="
-          python -m ml_backend.sentiment_cron || echo "Sentiment cron failed (non-fatal)"
+          python -m ml_backend.sentiment_cron || {
+            echo "::warning::Sentiment cron failed — predictions will use stale sentiment data"
+          }
 
       - name: Train pooled model on all 100 tickers
         env:
@@ -71,6 +73,9 @@ jobs:
         run: |
           set -e
           echo "===== Training pooled model on ALL 100 tickers ====="
+          if [ "$SKIP_SEC_FMP" = "true" ]; then
+            echo "::warning::SKIP_SEC_FMP=true — SEC and FMP data sources are disabled for this run"
+          fi
           # Train on the full S&P 100 cross-section so the pooled model
           # sees all tickers.  --no-predict skips storing predictions
           # (handled in the batch loop below).
@@ -259,7 +264,9 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Generating AI explanations (Groq preferred, Gemini fallback) ====="
-          python -m ml_backend.scripts.generate_explanations || echo "Explanation generation failed (non-fatal)"
+          python -m ml_backend.scripts.generate_explanations || {
+            echo "::warning::AI explanation generation failed — predictions will lack AI commentary"
+          }
 
       - name: Evaluate stored predictions (last 60 days)
         env:

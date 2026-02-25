@@ -322,9 +322,9 @@ INITIAL_BACKOFF = 10     # Start at 10s (was 60s — caused multi-minute stalls)
 MAX_BACKOFF = 30         # Cap at 30s (was 300s — caused 2h timeout)
 BASE_BACKOFF = 2         # Exponential base
 
-# Global rate limiter: track last API call time per model to prevent hammering
+# Global rate limiter: track last API call time (GLOBAL, not per-model) to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
-_MIN_CALL_INTERVAL = 4.0  # Minimum seconds between API calls per model (Groq free: ~30 RPM)
+_MIN_CALL_INTERVAL = 6.0  # Minimum seconds between ANY API call (≈10 RPM, well under Groq's 30 RPM free limit)
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
@@ -383,16 +383,17 @@ def _exponential_backoff(attempt: int) -> float:
 
 
 def _rate_limit_wait(model: str):
-    """Wait if needed to respect minimum call interval per model, with jitter."""
+    """Wait if needed to respect minimum call interval GLOBALLY (across all models)."""
     import time
     import random
-    last_call = _last_api_call_time.get(model, 0)
+    # Use a single global key so calls to ANY model are spaced out
+    last_call = _last_api_call_time.get("__global__", 0)
     elapsed = time.time() - last_call
     if elapsed < _MIN_CALL_INTERVAL:
-        jitter = random.uniform(-0.5, 0.5)
+        jitter = random.uniform(0.0, 1.0)
         sleep_time = max(0.1, _MIN_CALL_INTERVAL - elapsed + jitter)
         time.sleep(sleep_time)
-    _last_api_call_time[model] = time.time()
+    _last_api_call_time["__global__"] = time.time()
 
 
 def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]]:
@@ -447,9 +448,9 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
         if is_rate_limit:
             # Parse Retry-After hint and sleep proactively before returning
             retry_after = _parse_retry_after(error_str)
-            if retry_after > 0:
-                logger.info("Groq 429 for %s — sleeping %ds (Retry-After hint)", ticker, retry_after)
-                time.sleep(retry_after)
+            sleep_secs = max(retry_after, 15)  # At least 15s on any 429
+            logger.info("Groq 429 for %s — sleeping %ds (Retry-After=%ds)", ticker, sleep_secs, retry_after)
+            time.sleep(sleep_secs)
             return (f"AI explanation unavailable: Groq API rate limited ({model})", "rate_limit")
         elif is_quota:
             return (f"AI explanation unavailable: Groq API quota exceeded ({model})", "quota_exceeded")
