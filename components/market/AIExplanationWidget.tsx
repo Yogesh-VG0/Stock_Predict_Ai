@@ -104,7 +104,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
   const [explanation, setExplanation] = useState<AIExplanation | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
-  const [isExpanded, setIsExpanded] = useState(false)
+  const [isExpanded, setIsExpanded] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -529,69 +529,112 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
                         </div>
                       )}
 
-                      {/* Key Drivers — Table Layout */}
-                      {parsed.keyDrivers.length > 0 && (
-                        <div className="rounded-lg border border-zinc-700/40 overflow-hidden">
-                          {/* Table header */}
-                          <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60 border-b border-zinc-700/30">
-                            <Zap className="h-3 w-3 text-amber-400" />
-                            <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Key Drivers</span>
-                            <span className="ml-auto text-[10px] text-zinc-500">{bullishDrivers.length} bullish · {bearishDrivers.length} bearish</span>
-                          </div>
+                      {/* Key Drivers — Side-by-Side Comparison */}
+                      {parsed.keyDrivers.length > 0 && (() => {
+                        const maxRows = Math.max(bullishDrivers.length, bearishDrivers.length)
+                        return (
+                          <div className="rounded-lg border border-zinc-700/40 overflow-hidden">
+                            {/* Header */}
+                            <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60 border-b border-zinc-700/30">
+                              <Zap className="h-3 w-3 text-amber-400" />
+                              <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Key Drivers</span>
+                              <span className="ml-auto text-[10px] text-zinc-500">{bullishDrivers.length} bullish · {bearishDrivers.length} bearish</span>
+                            </div>
 
-                          {/* Desktop table (hidden on mobile) */}
-                          <div className="hidden md:block">
-                            <table className="w-full text-xs">
-                              <tbody>
-                                {parsed.keyDrivers.map((item, i) => (
-                                  <tr key={i} className={cn(
-                                    "border-b border-zinc-800/40 last:border-b-0 transition-colors hover:bg-zinc-800/30",
-                                    item.type === 'bullish' ? 'bg-emerald-500/[0.03]' : 'bg-red-500/[0.03]'
-                                  )}>
-                                    <td className="w-6 px-3 py-2 text-center">
-                                      <span className={item.type === 'bullish' ? 'text-emerald-500 font-bold' : 'text-red-500 font-bold'}>
-                                        {item.type === 'bullish' ? '+' : '−'}
-                                      </span>
-                                    </td>
-                                    <td className="py-2 pr-2 text-zinc-300 leading-snug">{item.text}</td>
-                                    <td className="w-20 px-3 py-2 text-right">
-                                      <span className={cn(
-                                        "inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full",
-                                        item.type === 'bullish'
-                                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
-                                          : 'bg-red-500/15 text-red-400 border border-red-500/20'
-                                      )}>
-                                        {item.type === 'bullish' ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
-                                        {item.type === 'bullish' ? 'Bull' : 'Bear'}
-                                      </span>
-                                    </td>
+                            {/* Desktop: Side-by-side comparison table */}
+                            <div className="hidden md:block">
+                              <table className="w-full text-xs table-fixed">
+                                <thead>
+                                  <tr className="border-b border-zinc-700/40">
+                                    <th className="w-1/2 px-3 py-2 text-left">
+                                      <div className="flex items-center gap-1.5">
+                                        <TrendingUp className="h-3 w-3 text-emerald-400" />
+                                        <span className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">Bullish</span>
+                                      </div>
+                                    </th>
+                                    <th className="w-1/2 px-3 py-2 text-left border-l border-zinc-700/30">
+                                      <div className="flex items-center gap-1.5">
+                                        <TrendingDown className="h-3 w-3 text-red-400" />
+                                        <span className="text-[10px] text-red-400 uppercase tracking-wider font-semibold">Bearish</span>
+                                      </div>
+                                    </th>
                                   </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
+                                </thead>
+                                <tbody>
+                                  {Array.from({ length: maxRows }).map((_, i) => (
+                                    <tr key={i} className="border-b border-zinc-800/30 last:border-b-0">
+                                      {/* Bullish cell */}
+                                      <td className={cn(
+                                        "px-3 py-2.5 align-top",
+                                        bullishDrivers[i] ? "bg-emerald-500/[0.04]" : ""
+                                      )}>
+                                        {bullishDrivers[i] ? (
+                                          <div className="flex items-start gap-2">
+                                            <span className="text-emerald-500 font-bold mt-px shrink-0">+</span>
+                                            <span className="text-zinc-300 leading-snug">{bullishDrivers[i].text}</span>
+                                          </div>
+                                        ) : (
+                                          <span className="text-zinc-700 italic text-[10px]">—</span>
+                                        )}
+                                      </td>
+                                      {/* Bearish cell */}
+                                      <td className={cn(
+                                        "px-3 py-2.5 align-top border-l border-zinc-700/30",
+                                        bearishDrivers[i] ? "bg-red-500/[0.04]" : ""
+                                      )}>
+                                        {bearishDrivers[i] ? (
+                                          <div className="flex items-start gap-2">
+                                            <span className="text-red-500 font-bold mt-px shrink-0">−</span>
+                                            <span className="text-zinc-300 leading-snug">{bearishDrivers[i].text}</span>
+                                          </div>
+                                        ) : (
+                                          <span className="text-zinc-700 italic text-[10px]">—</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
 
-                          {/* Mobile stacked list (hidden on desktop) */}
-                          <div className="md:hidden divide-y divide-zinc-800/40">
-                            {parsed.keyDrivers.map((item, i) => (
-                              <div key={i} className={cn(
-                                "flex items-start gap-2 px-3 py-2",
-                                item.type === 'bullish' ? 'bg-emerald-500/[0.03]' : 'bg-red-500/[0.03]'
-                              )}>
-                                <span className={cn(
-                                  "mt-0.5 shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded-full border",
-                                  item.type === 'bullish'
-                                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
-                                    : 'bg-red-500/15 text-red-400 border-red-500/20'
-                                )}>
-                                  {item.type === 'bullish' ? '▲' : '▼'}
-                                </span>
-                                <span className="text-[11px] text-zinc-300 leading-snug">{item.text}</span>
-                              </div>
-                            ))}
+                            {/* Mobile: Stacked sections */}
+                            <div className="md:hidden">
+                              {bullishDrivers.length > 0 && (
+                                <div className="border-b border-zinc-700/30">
+                                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/[0.06]">
+                                    <TrendingUp className="h-3 w-3 text-emerald-400" />
+                                    <span className="text-[10px] text-emerald-400 uppercase tracking-wider font-semibold">Bullish</span>
+                                  </div>
+                                  <div className="divide-y divide-zinc-800/30">
+                                    {bullishDrivers.map((item, i) => (
+                                      <div key={i} className="flex items-start gap-2 px-3 py-2 bg-emerald-500/[0.03]">
+                                        <span className="text-emerald-500 font-bold mt-px shrink-0">+</span>
+                                        <span className="text-[11px] text-zinc-300 leading-snug">{item.text}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {bearishDrivers.length > 0 && (
+                                <div>
+                                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-500/[0.06]">
+                                    <TrendingDown className="h-3 w-3 text-red-400" />
+                                    <span className="text-[10px] text-red-400 uppercase tracking-wider font-semibold">Bearish</span>
+                                  </div>
+                                  <div className="divide-y divide-zinc-800/30">
+                                    {bearishDrivers.map((item, i) => (
+                                      <div key={i} className="flex items-start gap-2 px-3 py-2 bg-red-500/[0.03]">
+                                        <span className="text-red-500 font-bold mt-px shrink-0">−</span>
+                                        <span className="text-[11px] text-zinc-300 leading-snug">{item.text}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      )}
+                        )
+                      })()}
 
                       {/* News Impact */}
                       {(parsed.newsImpact || (recentNews && recentNews.length > 0)) && (
