@@ -1,0 +1,35 @@
+﻿2026-02-25T23:32:11.1881297Z ##[group]Run actions/upload-artifact@v4
+2026-02-25T23:32:11.1881630Z with:
+2026-02-25T23:32:11.1881866Z   name: pipeline-logs-22418837073
+2026-02-25T23:32:11.1882363Z   path: ml_backend/**/*.log
+**/*.log
+batch_*_attempt_*.log
+eval_report.txt
+drift_report.txt
+retention_report.txt
+
+2026-02-25T23:32:11.1882880Z   if-no-files-found: ignore
+2026-02-25T23:32:11.1883153Z   compression-level: 6
+2026-02-25T23:32:11.1883404Z   overwrite: false
+2026-02-25T23:32:11.1883660Z   include-hidden-files: false
+2026-02-25T23:32:11.1883918Z env:
+2026-02-25T23:32:11.1884432Z   MONGODB_URI: ***
+2026-02-25T23:32:11.1884692Z   SKIP_SEC_FMP: true
+2026-02-25T23:32:11.1885022Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:11.1885476Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-02-25T23:32:11.1886069Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:11.1886475Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:11.1886898Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:11.1887331Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-02-25T23:32:11.1887672Z ##[endgroup]
+2026-02-25T23:32:11.5455448Z With the provided path, there will be 14 files uploaded
+2026-02-25T23:32:11.5462774Z Artifact name is valid!
+2026-02-25T23:32:11.5463867Z Root directory input is valid!
+2026-02-25T23:32:11.6619406Z Beginning upload of artifact content to blob storage
+2026-02-25T23:32:11.8886577Z Uploaded bytes 21492
+2026-02-25T23:32:11.9444436Z Finished uploading artifact content to blob storage!
+2026-02-25T23:32:11.9447031Z SHA256 digest of uploaded artifact zip is 94faec0d7e43b105d108e31ad7e92c562f38f5ddbb6faab4da6d0a27fbf36667
+2026-02-25T23:32:11.9449237Z Finalizing artifact upload
+2026-02-25T23:32:12.1148038Z Artifact pipeline-logs-22418837073.zip successfully finalized. Artifact ID 5663607372
+2026-02-25T23:32:12.1149282Z Artifact pipeline-logs-22418837073 has been successfully uploaded! Final size is 21492 bytes. Artifact ID is 5663607372
+2026-02-25T23:32:12.1156505Z Artifact download URL: https://github.com/Yogesh-VG0/Stock_Predict_Ai/actions/runs/22418837073/artifacts/5663607372

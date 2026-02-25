@@ -1,0 +1,53 @@
+﻿2026-02-25T23:32:05.5817933Z ##[group]Run echo "===== Running data retention cleanup ====="
+2026-02-25T23:32:05.5818442Z [36;1mecho "===== Running data retention cleanup ====="[0m
+2026-02-25T23:32:05.5818854Z [36;1mpython -m ml_backend.scripts.data_retention \[0m
+2026-02-25T23:32:05.5819320Z [36;1m  | tee retention_report.txt || echo "Retention cleanup failed (non-fatal)"[0m
+2026-02-25T23:32:05.5871619Z shell: /usr/bin/bash -e {0}
+2026-02-25T23:32:05.5871905Z env:
+2026-02-25T23:32:05.5872408Z   MONGODB_URI: ***
+2026-02-25T23:32:05.5872660Z   SKIP_SEC_FMP: true
+2026-02-25T23:32:05.5872984Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:05.5873452Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-02-25T23:32:05.5873944Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:05.5874357Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:05.5874767Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:32:05.5875206Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-02-25T23:32:05.5875799Z   PYTHONPATH: /home/runner/work/Stock_Predict_Ai/Stock_Predict_Ai
+2026-02-25T23:32:05.5876255Z ##[endgroup]
+2026-02-25T23:32:05.5960265Z ===== Running data retention cleanup =====
+2026-02-25T23:32:05.6403416Z 23:32:05 INFO Starting data retention cleanup (LIVE)
+2026-02-25T23:32:08.0445537Z 23:32:08 INFO   sentiment: no documents older than 12 months — skipping
+2026-02-25T23:32:08.2372279Z 23:32:08 INFO   stock_predictions: no documents older than 12 months — skipping
+2026-02-25T23:32:08.4297323Z 23:32:08 INFO   prediction_explanations: no documents older than 12 months — skipping
+2026-02-25T23:32:08.6224932Z 23:32:08 INFO   feature_importance: no documents older than 12 months — skipping
+2026-02-25T23:32:08.8149228Z 23:32:08 INFO   insider_transactions: no documents older than 18 months — skipping
+2026-02-25T23:32:09.0067544Z 23:32:09 INFO   model_evaluations: no documents older than 12 months — skipping
+2026-02-25T23:32:09.1985350Z 23:32:09 INFO   drift_reports: no documents older than 12 months — skipping
+2026-02-25T23:32:09.3910098Z 23:32:09 INFO   short_interest_data: no documents older than 12 months — skipping
+2026-02-25T23:32:09.5828661Z 23:32:09 INFO   economic_events: no documents older than 12 months — skipping
+2026-02-25T23:32:09.7747877Z 23:32:09 INFO   sec_filings: no documents older than 18 months — skipping
+2026-02-25T23:32:09.9666845Z 23:32:09 INFO   finnhub_basic_financials: no documents older than 6 months — skipping
+2026-02-25T23:32:10.1583178Z 23:32:10 INFO   finnhub_recommendation_trends: no documents older than 12 months — skipping
+2026-02-25T23:32:10.3501577Z 23:32:10 INFO   finnhub_company_peers: no documents older than 6 months — skipping
+2026-02-25T23:32:10.5419727Z 23:32:10 INFO   alpha_vantage_data: no documents older than 12 months — skipping
+2026-02-25T23:32:11.1459150Z 
+2026-02-25T23:32:11.1459753Z ==================================================
+2026-02-25T23:32:11.1460329Z Data Retention Cleanup Complete (LIVE)
+2026-02-25T23:32:11.1460855Z ==================================================
+2026-02-25T23:32:11.1461302Z   alpha_vantage_data: nothing to clean
+2026-02-25T23:32:11.1461716Z   drift_reports: nothing to clean
+2026-02-25T23:32:11.1462124Z   economic_events: nothing to clean
+2026-02-25T23:32:11.1462538Z   feature_importance: nothing to clean
+2026-02-25T23:32:11.1462970Z   finnhub_basic_financials: nothing to clean
+2026-02-25T23:32:11.1463421Z   finnhub_company_peers: nothing to clean
+2026-02-25T23:32:11.1463889Z   finnhub_recommendation_trends: nothing to clean
+2026-02-25T23:32:11.1464370Z   insider_transactions: nothing to clean
+2026-02-25T23:32:11.1464812Z   model_evaluations: nothing to clean
+2026-02-25T23:32:11.1465268Z   prediction_explanations: nothing to clean
+2026-02-25T23:32:11.1465924Z   sec_filings: nothing to clean
+2026-02-25T23:32:11.1466314Z   sentiment: nothing to clean
+2026-02-25T23:32:11.1466704Z   short_interest_data: nothing to clean
+2026-02-25T23:32:11.1467117Z   stock_predictions: nothing to clean
+2026-02-25T23:32:11.1467737Z 
+2026-02-25T23:32:11.1467880Z Total: 0 documents cleaned up
+2026-02-25T23:32:11.1468254Z ==================================================

@@ -1,0 +1,170 @@
+﻿2026-02-25T23:31:03.3514085Z ##[group]Run echo "===== Running evaluate_models --stored ====="
+2026-02-25T23:31:03.3514878Z [36;1mecho "===== Running evaluate_models --stored ====="[0m
+2026-02-25T23:31:03.3516008Z [36;1mpython -m ml_backend.scripts.evaluate_models --stored --days 60 \[0m
+2026-02-25T23:31:03.3516832Z [36;1m  | tee eval_report.txt || echo "Evaluation failed (non-fatal)"[0m
+2026-02-25T23:31:03.3592646Z shell: /usr/bin/bash -e {0}
+2026-02-25T23:31:03.3593088Z env:
+2026-02-25T23:31:03.3593848Z   MONGODB_URI: ***
+2026-02-25T23:31:03.3594223Z   SKIP_SEC_FMP: true
+2026-02-25T23:31:03.3594721Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:31:03.3595457Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-02-25T23:31:03.3596483Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:31:03.3597145Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:31:03.3597787Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:31:03.3598481Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-02-25T23:31:03.3599191Z   PYTHONPATH: /home/runner/work/Stock_Predict_Ai/Stock_Predict_Ai
+2026-02-25T23:31:03.3599781Z ##[endgroup]
+2026-02-25T23:31:03.3698109Z ===== Running evaluate_models --stored =====
+2026-02-25T23:31:07.1656627Z INFO:ml_backend.utils.mongodb:Connected to MongoDB database: stock_predictor
+2026-02-25T23:31:07.1657644Z INFO:ml_backend.utils.mongodb:Initialized collection: stock_predictions
+2026-02-25T23:31:07.1658539Z INFO:ml_backend.utils.mongodb:Initialized collection: historical_data
+2026-02-25T23:31:07.1659357Z INFO:ml_backend.utils.mongodb:Initialized collection: sentiment_data
+2026-02-25T23:31:07.1660450Z INFO:ml_backend.utils.mongodb:Initialized collection: model_versions
+2026-02-25T23:31:07.1661163Z INFO:ml_backend.utils.mongodb:Initialized collection: prediction_metrics
+2026-02-25T23:31:07.1661884Z INFO:ml_backend.utils.mongodb:Initialized collection: economic_events
+2026-02-25T23:31:07.1662586Z INFO:ml_backend.utils.mongodb:Initialized collection: sec_filings
+2026-02-25T23:31:07.1663377Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_sentiment
+2026-02-25T23:31:07.1664176Z INFO:ml_backend.utils.mongodb:Initialized collection: seeking_alpha_comments
+2026-02-25T23:31:07.1664898Z INFO:ml_backend.utils.mongodb:Initialized collection: short_interest_data
+2026-02-25T23:31:07.1665391Z INFO:ml_backend.utils.mongodb:Initialized collection: macro_data_raw
+2026-02-25T23:31:07.1666236Z INFO:ml_backend.utils.mongodb:Initialized collection: llm_explanations
+2026-02-25T23:31:07.1666745Z INFO:ml_backend.utils.mongodb:Initialized collection: feature_importance
+2026-02-25T23:31:07.1667222Z INFO:ml_backend.utils.mongodb:Initialized collection: api_cache
+2026-02-25T23:31:08.5784748Z INFO:ml_backend.utils.mongodb:Created indexes on collections
+2026-02-25T23:31:08.7873577Z INFO:ml_backend.utils.mongodb:Set up schema validation for historical_data collection
+2026-02-25T23:31:08.7874445Z INFO:__main__:Evaluating stored predictions (last 60 days)...
+2026-02-25T23:31:08.7875467Z INFO:ml_backend.utils.mongodb:get_prediction_history: AAPL/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:08.9832733Z INFO:ml_backend.utils.mongodb:get_prediction_history: AAPL/next_day returned 1 docs
+2026-02-25T23:31:09.1789557Z INFO:ml_backend.utils.mongodb:get_prediction_history: MSFT/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:09.3745849Z INFO:ml_backend.utils.mongodb:get_prediction_history: MSFT/next_day returned 1 docs
+2026-02-25T23:31:09.5702556Z INFO:ml_backend.utils.mongodb:get_prediction_history: NVDA/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:09.7654901Z INFO:ml_backend.utils.mongodb:get_prediction_history: NVDA/next_day returned 1 docs
+2026-02-25T23:31:09.9609634Z INFO:ml_backend.utils.mongodb:get_prediction_history: AMZN/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:10.1562085Z INFO:ml_backend.utils.mongodb:get_prediction_history: AMZN/next_day returned 1 docs
+2026-02-25T23:31:10.3517116Z INFO:ml_backend.utils.mongodb:get_prediction_history: GOOGL/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:10.5472202Z INFO:ml_backend.utils.mongodb:get_prediction_history: GOOGL/next_day returned 1 docs
+2026-02-25T23:31:10.7437131Z INFO:ml_backend.utils.mongodb:get_prediction_history: META/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:10.9390272Z INFO:ml_backend.utils.mongodb:get_prediction_history: META/next_day returned 1 docs
+2026-02-25T23:31:11.1346796Z INFO:ml_backend.utils.mongodb:get_prediction_history: JPM/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:11.3307410Z INFO:ml_backend.utils.mongodb:get_prediction_history: JPM/next_day returned 1 docs
+2026-02-25T23:31:11.5263706Z INFO:ml_backend.utils.mongodb:get_prediction_history: V/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:11.7217533Z INFO:ml_backend.utils.mongodb:get_prediction_history: V/next_day returned 1 docs
+2026-02-25T23:31:11.9174800Z INFO:ml_backend.utils.mongodb:get_prediction_history: GS/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:12.1127804Z INFO:ml_backend.utils.mongodb:get_prediction_history: GS/next_day returned 1 docs
+2026-02-25T23:31:12.3083925Z INFO:ml_backend.utils.mongodb:get_prediction_history: XOM/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:12.5037923Z INFO:ml_backend.utils.mongodb:get_prediction_history: XOM/next_day returned 1 docs
+2026-02-25T23:31:12.6993404Z INFO:ml_backend.utils.mongodb:get_prediction_history: CVX/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:12.8947351Z INFO:ml_backend.utils.mongodb:get_prediction_history: CVX/next_day returned 1 docs
+2026-02-25T23:31:13.0905078Z INFO:ml_backend.utils.mongodb:get_prediction_history: JNJ/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:13.2859437Z INFO:ml_backend.utils.mongodb:get_prediction_history: JNJ/next_day returned 1 docs
+2026-02-25T23:31:13.4814490Z INFO:ml_backend.utils.mongodb:get_prediction_history: UNH/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:13.6768729Z INFO:ml_backend.utils.mongodb:get_prediction_history: UNH/next_day returned 1 docs
+2026-02-25T23:31:13.8724791Z INFO:ml_backend.utils.mongodb:get_prediction_history: LLY/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:14.0679322Z INFO:ml_backend.utils.mongodb:get_prediction_history: LLY/next_day returned 1 docs
+2026-02-25T23:31:14.2637344Z INFO:ml_backend.utils.mongodb:get_prediction_history: WMT/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:14.4592027Z INFO:ml_backend.utils.mongodb:get_prediction_history: WMT/next_day returned 1 docs
+2026-02-25T23:31:14.6620344Z INFO:ml_backend.utils.mongodb:get_prediction_history: KO/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:14.8575476Z INFO:ml_backend.utils.mongodb:get_prediction_history: KO/next_day returned 1 docs
+2026-02-25T23:31:15.0532879Z INFO:ml_backend.utils.mongodb:get_prediction_history: CAT/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:15.2486062Z INFO:ml_backend.utils.mongodb:get_prediction_history: CAT/next_day returned 1 docs
+2026-02-25T23:31:15.4441821Z INFO:ml_backend.utils.mongodb:get_prediction_history: HON/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:15.6394125Z INFO:ml_backend.utils.mongodb:get_prediction_history: HON/next_day returned 1 docs
+2026-02-25T23:31:15.8349674Z INFO:ml_backend.utils.mongodb:get_prediction_history: CMCSA/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:16.0301908Z INFO:ml_backend.utils.mongodb:get_prediction_history: CMCSA/next_day returned 1 docs
+2026-02-25T23:31:16.2257301Z INFO:ml_backend.utils.mongodb:get_prediction_history: T/next_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:16.4209812Z INFO:ml_backend.utils.mongodb:get_prediction_history: T/next_day returned 1 docs
+2026-02-25T23:31:16.6164476Z INFO:ml_backend.utils.mongodb:get_prediction_history: AAPL/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:16.8118372Z INFO:ml_backend.utils.mongodb:get_prediction_history: AAPL/7_day returned 1 docs
+2026-02-25T23:31:17.0077245Z INFO:ml_backend.utils.mongodb:get_prediction_history: MSFT/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:17.2033174Z INFO:ml_backend.utils.mongodb:get_prediction_history: MSFT/7_day returned 1 docs
+2026-02-25T23:31:17.3991092Z INFO:ml_backend.utils.mongodb:get_prediction_history: NVDA/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:17.5946383Z INFO:ml_backend.utils.mongodb:get_prediction_history: NVDA/7_day returned 1 docs
+2026-02-25T23:31:17.7904305Z INFO:ml_backend.utils.mongodb:get_prediction_history: AMZN/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:17.9975446Z INFO:ml_backend.utils.mongodb:get_prediction_history: AMZN/7_day returned 1 docs
+2026-02-25T23:31:18.1932321Z INFO:ml_backend.utils.mongodb:get_prediction_history: GOOGL/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:18.3889154Z INFO:ml_backend.utils.mongodb:get_prediction_history: GOOGL/7_day returned 1 docs
+2026-02-25T23:31:18.5846838Z INFO:ml_backend.utils.mongodb:get_prediction_history: META/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:18.7801325Z INFO:ml_backend.utils.mongodb:get_prediction_history: META/7_day returned 1 docs
+2026-02-25T23:31:18.9757681Z INFO:ml_backend.utils.mongodb:get_prediction_history: JPM/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:19.1710915Z INFO:ml_backend.utils.mongodb:get_prediction_history: JPM/7_day returned 1 docs
+2026-02-25T23:31:19.3667046Z INFO:ml_backend.utils.mongodb:get_prediction_history: V/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:19.5621874Z INFO:ml_backend.utils.mongodb:get_prediction_history: V/7_day returned 1 docs
+2026-02-25T23:31:19.7582739Z INFO:ml_backend.utils.mongodb:get_prediction_history: GS/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:19.9536996Z INFO:ml_backend.utils.mongodb:get_prediction_history: GS/7_day returned 1 docs
+2026-02-25T23:31:20.1493618Z INFO:ml_backend.utils.mongodb:get_prediction_history: XOM/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:20.3448929Z INFO:ml_backend.utils.mongodb:get_prediction_history: XOM/7_day returned 1 docs
+2026-02-25T23:31:20.5404911Z INFO:ml_backend.utils.mongodb:get_prediction_history: CVX/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:20.7359903Z INFO:ml_backend.utils.mongodb:get_prediction_history: CVX/7_day returned 1 docs
+2026-02-25T23:31:20.9315281Z INFO:ml_backend.utils.mongodb:get_prediction_history: JNJ/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:21.1267285Z INFO:ml_backend.utils.mongodb:get_prediction_history: JNJ/7_day returned 1 docs
+2026-02-25T23:31:21.3223538Z INFO:ml_backend.utils.mongodb:get_prediction_history: UNH/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:21.5176699Z INFO:ml_backend.utils.mongodb:get_prediction_history: UNH/7_day returned 1 docs
+2026-02-25T23:31:21.7131607Z INFO:ml_backend.utils.mongodb:get_prediction_history: LLY/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:21.9083615Z INFO:ml_backend.utils.mongodb:get_prediction_history: LLY/7_day returned 1 docs
+2026-02-25T23:31:22.1039218Z INFO:ml_backend.utils.mongodb:get_prediction_history: WMT/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:22.2991588Z INFO:ml_backend.utils.mongodb:get_prediction_history: WMT/7_day returned 1 docs
+2026-02-25T23:31:22.5091156Z INFO:ml_backend.utils.mongodb:get_prediction_history: KO/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:22.7046928Z INFO:ml_backend.utils.mongodb:get_prediction_history: KO/7_day returned 1 docs
+2026-02-25T23:31:22.9004553Z INFO:ml_backend.utils.mongodb:get_prediction_history: CAT/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:23.0956952Z INFO:ml_backend.utils.mongodb:get_prediction_history: CAT/7_day returned 1 docs
+2026-02-25T23:31:23.2911255Z INFO:ml_backend.utils.mongodb:get_prediction_history: HON/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:23.4864610Z INFO:ml_backend.utils.mongodb:get_prediction_history: HON/7_day returned 1 docs
+2026-02-25T23:31:23.6820150Z INFO:ml_backend.utils.mongodb:get_prediction_history: CMCSA/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:23.8774261Z INFO:ml_backend.utils.mongodb:get_prediction_history: CMCSA/7_day returned 1 docs
+2026-02-25T23:31:24.0729969Z INFO:ml_backend.utils.mongodb:get_prediction_history: T/7_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:24.2684746Z INFO:ml_backend.utils.mongodb:get_prediction_history: T/7_day returned 1 docs
+2026-02-25T23:31:24.4641212Z INFO:ml_backend.utils.mongodb:get_prediction_history: AAPL/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:24.6595101Z INFO:ml_backend.utils.mongodb:get_prediction_history: AAPL/30_day returned 1 docs
+2026-02-25T23:31:24.8552534Z INFO:ml_backend.utils.mongodb:get_prediction_history: MSFT/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:25.0506606Z INFO:ml_backend.utils.mongodb:get_prediction_history: MSFT/30_day returned 1 docs
+2026-02-25T23:31:25.2462372Z INFO:ml_backend.utils.mongodb:get_prediction_history: NVDA/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:25.4416918Z INFO:ml_backend.utils.mongodb:get_prediction_history: NVDA/30_day returned 1 docs
+2026-02-25T23:31:25.6372277Z INFO:ml_backend.utils.mongodb:get_prediction_history: AMZN/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:25.8326436Z INFO:ml_backend.utils.mongodb:get_prediction_history: AMZN/30_day returned 1 docs
+2026-02-25T23:31:26.0282471Z INFO:ml_backend.utils.mongodb:get_prediction_history: GOOGL/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:26.2236615Z INFO:ml_backend.utils.mongodb:get_prediction_history: GOOGL/30_day returned 1 docs
+2026-02-25T23:31:26.4193042Z INFO:ml_backend.utils.mongodb:get_prediction_history: META/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:26.6151089Z INFO:ml_backend.utils.mongodb:get_prediction_history: META/30_day returned 1 docs
+2026-02-25T23:31:26.8106906Z INFO:ml_backend.utils.mongodb:get_prediction_history: JPM/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:27.0059751Z INFO:ml_backend.utils.mongodb:get_prediction_history: JPM/30_day returned 1 docs
+2026-02-25T23:31:27.2014759Z INFO:ml_backend.utils.mongodb:get_prediction_history: V/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:27.3968244Z INFO:ml_backend.utils.mongodb:get_prediction_history: V/30_day returned 1 docs
+2026-02-25T23:31:27.5923484Z INFO:ml_backend.utils.mongodb:get_prediction_history: GS/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:27.7877816Z INFO:ml_backend.utils.mongodb:get_prediction_history: GS/30_day returned 1 docs
+2026-02-25T23:31:27.9836647Z INFO:ml_backend.utils.mongodb:get_prediction_history: XOM/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:28.1790443Z INFO:ml_backend.utils.mongodb:get_prediction_history: XOM/30_day returned 1 docs
+2026-02-25T23:31:28.3748647Z INFO:ml_backend.utils.mongodb:get_prediction_history: CVX/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:28.5703246Z INFO:ml_backend.utils.mongodb:get_prediction_history: CVX/30_day returned 1 docs
+2026-02-25T23:31:28.7659550Z INFO:ml_backend.utils.mongodb:get_prediction_history: JNJ/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:28.9614354Z INFO:ml_backend.utils.mongodb:get_prediction_history: JNJ/30_day returned 1 docs
+2026-02-25T23:31:29.1570130Z INFO:ml_backend.utils.mongodb:get_prediction_history: UNH/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:29.3525212Z INFO:ml_backend.utils.mongodb:get_prediction_history: UNH/30_day returned 1 docs
+2026-02-25T23:31:29.5482465Z INFO:ml_backend.utils.mongodb:get_prediction_history: LLY/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:29.7435281Z INFO:ml_backend.utils.mongodb:get_prediction_history: LLY/30_day returned 1 docs
+2026-02-25T23:31:29.9391750Z INFO:ml_backend.utils.mongodb:get_prediction_history: WMT/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:30.1344586Z INFO:ml_backend.utils.mongodb:get_prediction_history: WMT/30_day returned 1 docs
+2026-02-25T23:31:30.3300426Z INFO:ml_backend.utils.mongodb:get_prediction_history: KO/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:30.5254422Z INFO:ml_backend.utils.mongodb:get_prediction_history: KO/30_day returned 1 docs
+2026-02-25T23:31:30.7210335Z INFO:ml_backend.utils.mongodb:get_prediction_history: CAT/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:30.9164677Z INFO:ml_backend.utils.mongodb:get_prediction_history: CAT/30_day returned 1 docs
+2026-02-25T23:31:31.1121375Z INFO:ml_backend.utils.mongodb:get_prediction_history: HON/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:31.3075856Z INFO:ml_backend.utils.mongodb:get_prediction_history: HON/30_day returned 1 docs
+2026-02-25T23:31:31.5034733Z INFO:ml_backend.utils.mongodb:get_prediction_history: CMCSA/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:31.6986988Z INFO:ml_backend.utils.mongodb:get_prediction_history: CMCSA/30_day returned 1 docs
+2026-02-25T23:31:31.8941391Z INFO:ml_backend.utils.mongodb:get_prediction_history: T/30_day range=[2025-11-27T23:31:08.787309, unbounded] limit=90
+2026-02-25T23:31:32.0896425Z INFO:ml_backend.utils.mongodb:get_prediction_history: T/30_day returned 1 docs
+2026-02-25T23:31:33.7333159Z 
+2026-02-25T23:31:33.7333700Z ======================================================================
+2026-02-25T23:31:33.7334505Z   Stored Predictions (last 60d)
+2026-02-25T23:31:33.7334955Z ======================================================================
+2026-02-25T23:31:33.7335290Z 
+2026-02-25T23:31:33.7335463Z   --- next_day (n=0) ---
+2026-02-25T23:31:33.7336059Z     No samples.
+2026-02-25T23:31:33.7336248Z 
+2026-02-25T23:31:33.7336372Z   --- 7_day (n=0) ---
+2026-02-25T23:31:33.7336698Z     No samples.
+2026-02-25T23:31:33.7336860Z 
+2026-02-25T23:31:33.7336983Z   --- 30_day (n=0) ---
+2026-02-25T23:31:33.7337300Z     No samples.
+2026-02-25T23:31:33.7337473Z 
+2026-02-25T23:31:33.7337592Z Done.

@@ -504,7 +504,7 @@ class StockPredictor:
             mean_ret = float(np.mean(y_all))
             std_ret = float(np.std(y_all)) if len(y_all) > 1 else 0.0
             # Compute threshold from last fold's validation predictions
-            val_pred_all = model.predict(X_all[val_start:val_end]) if val_start < val_end else model.predict(X_all[-100:])
+            val_pred_all = model.predict(pd.DataFrame(X_all[val_start:val_end], columns=active_cols)) if val_start < val_end else model.predict(pd.DataFrame(X_all[-100:], columns=active_cols))
             pred_mean = float(np.mean(val_pred_all))
             pred_std = float(np.std(val_pred_all)) if len(val_pred_all) > 1 else 0.0
             threshold = pred_mean + TRADE_SIGMA_MULT * pred_std if pred_std > 0 else float(TRADE_MIN_ALPHA)
@@ -834,7 +834,7 @@ class StockPredictor:
             }
             if test_mask.any():
                 y_test = y[test_mask]
-                test_pred = model.predict(X[test_mask])
+                test_pred = model.predict(pd.DataFrame(X[test_mask], columns=active_cols))
                 test_rmse = float(np.sqrt(np.mean((y_test - test_pred) ** 2)))
                 test_mae = float(np.mean(np.abs(y_test - test_pred)))
                 # Conformal: absolute residual quantiles for calibrated intervals
@@ -895,7 +895,7 @@ class StockPredictor:
                 )
             else:
                 # Conformal from val residuals when no holdout
-                val_pred = model.predict(X_val)
+                val_pred = model.predict(pd.DataFrame(X_val, columns=active_cols))
                 abs_resid_val = np.abs(y_val - val_pred)
                 meta_out.update({
                     "n_test": 0,

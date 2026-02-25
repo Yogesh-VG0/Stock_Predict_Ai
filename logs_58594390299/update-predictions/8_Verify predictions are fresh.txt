@@ -1,0 +1,65 @@
+﻿2026-02-25T23:03:04.0705269Z ##[group]Run python - << 'PY'
+2026-02-25T23:03:04.0705924Z [36;1mpython - << 'PY'[0m
+2026-02-25T23:03:04.0706193Z [36;1mimport os[0m
+2026-02-25T23:03:04.0706480Z [36;1mfrom datetime import datetime, timedelta[0m
+2026-02-25T23:03:04.0706856Z [36;1mfrom pymongo import MongoClient[0m
+2026-02-25T23:03:04.0707143Z [36;1m[0m
+2026-02-25T23:03:04.0707372Z [36;1muri = os.getenv("MONGODB_URI")[0m
+2026-02-25T23:03:04.0707660Z [36;1mif not uri:[0m
+2026-02-25T23:03:04.0707942Z [36;1m  raise SystemExit("Missing MONGODB_URI")[0m
+2026-02-25T23:03:04.0708251Z [36;1m[0m
+2026-02-25T23:03:04.0708620Z [36;1mclient = MongoClient(uri, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000)[0m
+2026-02-25T23:03:04.0709102Z [36;1mclient.admin.command("ping")[0m
+2026-02-25T23:03:04.0709422Z [36;1mdb = client["stock_predictor"][0m
+2026-02-25T23:03:04.0709734Z [36;1mcol = db["stock_predictions"][0m
+2026-02-25T23:03:04.0710009Z [36;1m[0m
+2026-02-25T23:03:04.0710300Z [36;1m# Use naive UTC (matches MongoDB's naive datetime storage)[0m
+2026-02-25T23:03:04.0710706Z [36;1mnow = datetime.utcnow()[0m
+2026-02-25T23:03:04.0711017Z [36;1mcutoff = now - timedelta(hours=3)[0m
+2026-02-25T23:03:04.0711310Z [36;1m[0m
+2026-02-25T23:03:04.0711563Z [36;1mhorizons = ["next_day", "7_day", "30_day"][0m
+2026-02-25T23:03:04.0711867Z [36;1m[0m
+2026-02-25T23:03:04.0712179Z [36;1m# Check a representative sample (canary tickers from each batch)[0m
+2026-02-25T23:03:04.0712677Z [36;1mcanary = ["AAPL", "AMZN", "JPM", "XOM", "WMT", "CAT", "CMCSA", "PLTR"][0m
+2026-02-25T23:03:04.0713057Z [36;1mmissing = [][0m
+2026-02-25T23:03:04.0713301Z [36;1mstale = [][0m
+2026-02-25T23:03:04.0713537Z [36;1m[0m
+2026-02-25T23:03:04.0713755Z [36;1mfor t in canary:[0m
+2026-02-25T23:03:04.0714025Z [36;1m  for w in horizons:[0m
+2026-02-25T23:03:04.0714331Z [36;1m    q = {"ticker": t, "window": {"$eq": w}}[0m
+2026-02-25T23:03:04.0714713Z [36;1m    doc = col.find_one(q, sort=[("timestamp", -1)])[0m
+2026-02-25T23:03:04.0715063Z [36;1m    if not doc:[0m
+2026-02-25T23:03:04.0715336Z [36;1m      missing.append((t, w))[0m
+2026-02-25T23:03:04.0715800Z [36;1m      continue[0m
+2026-02-25T23:03:04.0716193Z [36;1m    ts = doc.get("timestamp")[0m
+2026-02-25T23:03:04.0716710Z [36;1m    if not ts or ts < cutoff:[0m
+2026-02-25T23:03:04.0717004Z [36;1m      stale.append((t, w, ts))[0m
+2026-02-25T23:03:04.0717281Z [36;1m[0m
+2026-02-25T23:03:04.0717549Z [36;1m# Also check total doc count to ensure scale[0m
+2026-02-25T23:03:04.0717954Z [36;1mtotal = col.count_documents({"timestamp": {"$gte": cutoff}})[0m
+2026-02-25T23:03:04.0718377Z [36;1mprint(f"Fresh docs in last 3h: {total}")[0m
+2026-02-25T23:03:04.0718815Z [36;1mprint(f"Canary check: {len(canary)} tickers x {len(horizons)} horizons")[0m
+2026-02-25T23:03:04.0719219Z [36;1mif missing:[0m
+2026-02-25T23:03:04.0719480Z [36;1m  print("Missing:", missing)[0m
+2026-02-25T23:03:04.0719754Z [36;1mif stale:[0m
+2026-02-25T23:03:04.0720002Z [36;1m  print("Stale:", stale)[0m
+2026-02-25T23:03:04.0720275Z [36;1m[0m
+2026-02-25T23:03:04.0720563Z [36;1massert not missing, f"Missing predictions: {missing}"[0m
+2026-02-25T23:03:04.0720977Z [36;1massert not stale, f"Stale predictions: {stale}"[0m
+2026-02-25T23:03:04.0721402Z [36;1massert total >= 200, f"Expected >= 200 fresh docs, got {total}"[0m
+2026-02-25T23:03:04.0721789Z [36;1mprint("Freshness verified")[0m
+2026-02-25T23:03:04.0722064Z [36;1mPY[0m
+2026-02-25T23:03:04.0775326Z shell: /usr/bin/bash -e {0}
+2026-02-25T23:03:04.0775715Z env:
+2026-02-25T23:03:04.0776268Z   MONGODB_URI: ***
+2026-02-25T23:03:04.0776551Z   SKIP_SEC_FMP: true
+2026-02-25T23:03:04.0776877Z   pythonLocation: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:03:04.0777346Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib/pkgconfig
+2026-02-25T23:03:04.0777790Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:03:04.0778197Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:03:04.0778587Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.14/x64
+2026-02-25T23:03:04.0779201Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.14/x64/lib
+2026-02-25T23:03:04.0779545Z ##[endgroup]
+2026-02-25T23:03:11.3546975Z Fresh docs in last 3h: 300
+2026-02-25T23:03:11.3547407Z Canary check: 8 tickers x 3 horizons
+2026-02-25T23:03:11.3547715Z Freshness verified
