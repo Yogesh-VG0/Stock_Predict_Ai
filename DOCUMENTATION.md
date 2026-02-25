@@ -1,6 +1,6 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-02-21
+> **Last updated**: 2026-02-24
 
 ---
 
@@ -45,8 +45,9 @@ StockPredict AI is a **full-stack stock market prediction and analysis platform*
 - **Predicts** stock prices for 100 S&P 100 stocks across 3 time horizons (1 day, 1 week, 1 month) using machine learning (LightGBM)
 - **Analyzes** market sentiment from 10+ news/social sources using NLP models (FinBERT, RoBERTa, VADER)
 - **Explains** predictions in plain English using Google Gemini AI
-- **Displays** real-time stock prices, TradingView charts, technical indicators, and news
+- **Displays** real-time stock prices, TradingView charts, technical indicators, Sankey financial flow charts, and news
 - **Manages** user watchlists with real-time price alerts
+- **Visualizes** income statement flows as interactive Sankey diagrams showing revenue breakdown, expenses, and profit paths
 
 The system runs a **daily automated pipeline** via GitHub Actions that fetches fresh data, trains models, generates predictions, and stores everything in MongoDB.
 
@@ -309,6 +310,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | TradingView chart | `TradingViewAdvancedChart` | None (direct embed) | TradingView CDN | TradingView widget API |
 | Fundamentals page | `FundamentalsPage` | None (iframe embed) | Jika.io CDN | Jika.io widgets |
 | Predictions overview | `PredictionsPage` | `GET /api/stock/batch/available` | MongoDB `prediction_explanations` | None |
+| Sankey financial flow chart | `SankeyView` + `SankeyChart` | `GET /api/stock/:symbol/sankey` | FMP API (income statement, product segmentation), Redis cache | FMP `/income-statement/`, `/revenue-product-segmentation/` |
 
 ---
 
@@ -319,7 +321,8 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **Frontend** | Next.js 14 + React 18 | UI framework |
 | **Routing** | React Router DOM (inside Next.js shell) | Page navigation (see [Why We Did This](#why-we-use-react-router-inside-nextjs)) |
 | **Styling** | Tailwind CSS + Shadcn/UI | Component styling |
-| **Charts** | TradingView Widgets (external) | Stock charts |
+| **Charts** | TradingView Widgets (external) + ECharts (Sankey) | Stock charts + Financial flow visualization |
+| **Sankey Chart** | Apache ECharts | Interactive income statement flow visualization showing revenue sources → expenses → profits |
 | **Animations** | Framer Motion | UI animations |
 | **Node Backend** | Express.js | API gateway |
 | **ML Backend** | FastAPI (Python) | ML serving |
@@ -343,7 +346,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **Finnhub** | Stock data, news, insider trades, WebSocket prices | Node backend + ML backend | `/quote`, `/stock/profile2`, `/search`, `/news`, `/stock/insider-transactions`, `/recommendation`, `/stock/insider-sentiment`, `/stock/metric`, `/stock/peers`, WebSocket | `FINNHUB_API_KEY` | 60 calls/min free tier; `_finnhub_get_with_retry()` — 3 attempts with exponential backoff + jitter on 429/5xx/timeout; honors `Retry-After` header on 429; 1s between HTTP requests | `insider_transactions`, `finnhub_basic_financials`, `finnhub_company_peers`, `finnhub_insider_sentiment` (MongoDB); prices in-memory (60s) |
 | **Yahoo Finance** | Historical OHLCV data, RSS news | ML backend (yfinance) + Node backend (RSS) | yfinance library, RSS feeds | None (free) | 1.5-2.5s delay between requests | `historical_data` (MongoDB); RSS returned to frontend only |
 | **FRED** | Macro economic indicators (GDP, CPI, unemployment, etc.) | ML backend | fredapi library (13 indicators) | `FRED_API_KEY` | `fetch_fred_series()` — 2 attempts with exponential backoff + jitter on transient failures; explicit warning when `FRED_API_KEY` not set | `macro_data_raw` / `macro_data` (MongoDB) |
-| **FMP** | Earnings, dividends, analyst estimates, ratings, SEC filings (backup) | ML backend | `/dividend/`, `/earnings/`, `/analyst-estimates/`, `/ratings-snapshot/`, `/price-target-summary/`, `/price-target-consensus/`, `/grades-consensus/`, `/sec_filings/` | `FMP_API_KEY` | Cooldown tracking, 403/429 handling | `alpha_vantage_data` (MongoDB, multiple endpoints) |
+| **FMP** | Income statements, product segmentation, Sankey data, earnings, dividends, analyst estimates, ratings, SEC filings | Node backend + ML backend | `/income-statement/`, `/revenue-product-segmentation/`, `/dividend/`, `/earnings/`, `/analyst-estimates/`, `/ratings-snapshot/`, `/price-target-summary/`, `/price-target-consensus/`, `/grades-consensus/`, `/sec_filings/` | `FMP_API_KEY` | Stable API endpoint, 250 calls/day limit; in-memory cache (12hr), Redis cache (14 days for Sankey); negative caching for unavailable data | `income_statement` (raw), `revenue_product_segmentation`, Sankey data (`sankey:v1:{symbol}:ttm`) in Redis + MongoDB |
 | **Marketaux** | Financial news articles | Node backend + ML backend | `/v1/news/all` | `MARKETAUX_API_KEY` | Per-plan limits | ML: within `sentiment` collection; Node: returned to frontend only |
 | **TickerTick** | News aggregation | Node backend | `/feed` | None (free) | 10 req/min (enforced in code) | Not stored (returned to frontend only) |
 | **RapidAPI** | Fear & Greed Index | Node backend | `/v1/fgi` | `RAPIDAPI_KEY` | Per-plan limits | Not stored (returned to frontend only) |
@@ -479,6 +482,37 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
 - **Fields used**: `item.title`, `item.link`, `item.pubDate`, `item.contentSnippet` or `item.content`, `item.guid`
 - **Stored**: NOT stored — returned to frontend only (VADER sentiment applied inline)
 - **Used by**: Stock detail page (news tab), news page (RSS filter)
+
+#### FMP — Income Statement (for Sankey Chart)
+
+- **Endpoint**: `GET https://financialmodelingprep.com/stable/income-statement?symbol={ticker}&period=annual&limit=1`
+- **Runs in**: Node backend (`fmpService.js`)
+- **Fields used**: `revenue`, `costOfRevenue`, `grossProfit`, `grossProfitRatio`, `operatingExpenses`, `researchAndDevelopmentExpenses`, `sellingGeneralAndAdministrativeExpenses`, `operatingIncome`, `totalOtherIncomeExpensesNet`, `incomeBeforeTax`, `incomeTaxExpense`, `netIncome`, `period`, `fiscalYear`, `date`
+- **Stored**: In-memory cache (`fmp_raw_income_{symbol}`) with 12hr TTL; Sankey data cached in Redis (`sankey:v1:{symbol}:ttm`) with 14-day TTL
+- **Used by**: Sankey financial flow chart (`SankeyView`, `SankeyChart` components), income statement visualization
+
+#### FMP — Product Segmentation (Revenue Breakdown)
+
+- **Endpoint**: `GET https://financialmodelingprep.com/stable/revenue-product-segmentation?symbol={ticker}&structure=flat&period=annual`
+- **Runs in**: Node backend (`fmpService.js`)
+- **Fields used**: `data` object containing segment name → revenue mapping (e.g., `{ "iPhone": 150000000, "Services": 25000000 }`)
+- **Stored**: In-memory cache (`fmp_raw_prod_seg_{symbol}`) with negative caching (7 days for unavailable data)
+- **Used by**: Sankey chart — revenue segments are displayed as source nodes flowing into "Total Revenue"
+- **Note**: Only available for premium FMP subscriptions; falls back to simple "Sales/Operations" node for free tier symbols
+
+#### FMP — Sankey Data Generation
+
+- **How it works**: The `fmpService.js` combines income statement and product segmentation data to generate Sankey chart data:
+  1. Fetches latest annual income statement from `/income-statement` endpoint
+  2. Fetches product segmentation (if available) from `/revenue-product-segmentation`
+  3. Builds node-link structure: Revenue Sources → Total Revenue → Cost of Revenue / Gross Profit → Operating Expenses / Operating Income → Income Before Tax → Taxes / Net Income
+  4. Supports product segmentation breakdown when available (e.g., iPhone, Services, etc.)
+- **Caching Strategy**:
+  - In-memory cache: 12 hours (respects 250 calls/day FMP limit)
+  - Redis cache: 14 days (TTL = 1,209,600 seconds)
+  - Negative caching: 7 days for symbols without segmentation data
+- **Cross-instance Locking**: Uses Redis SET NX to prevent stampedes when multiple instances request the same symbol simultaneously
+- **Supported Symbols**: Uses FMP free tier allowlist (~90 symbols including AAPL, TSLA, MSFT, GOOGL, AMZN, etc.)
 
 #### FRED — Macro Economic Indicators
 
@@ -1416,6 +1450,7 @@ Removing React Router and using the App Router as the sole routing system yields
 | `/methodology` | `app/methodology/page.tsx` | Technical breakdown of the pipeline |
 | `/news` | `app/news/page.tsx` | `views/news.tsx` |
 | `/predictions` | `app/predictions/page.tsx` | `views/predictions.tsx` |
+| `/sankey` | `app/sankey/page.tsx` | `views/sankey-view.tsx` (Income statement Sankey flow visualization) |
 | `/stocks/[symbol]` | `app/stocks/[symbol]/page.tsx` | `views/stock-detail.tsx` |
 | `/watchlist` | `app/watchlist/page.tsx` | `views/watchlist.tsx` |
 
@@ -1426,6 +1461,8 @@ Removing React Router and using the App Router as the sole routing system yields
 | `AIExplanationWidget` | Displays Gemini-generated AI market intelligence (the EXPLAINER output) |
 | `EnhancedQuickPredictionWidget` | Quick stock price prediction lookup (the PREDICTOR output) |
 | `MarketSentimentBanner` | Fear & Greed Index banner |
+| `SankeyChart` | Apache ECharts-based financial flow visualization; displays income statement as interactive Sankey diagram (revenue → expenses → profit) |
+| `SankeyView` | Parent view component for Sankey page; handles symbol search, data fetching, and summary cards |
 | `TechnicalIndicators` | RSI, MACD, SMA, EMA gauges |
 | `NotificationWidget` | Notification bell (polls every 30s) |
 | `SearchWidget` | Stock search with debounced results |
@@ -1472,6 +1509,7 @@ Removing React Router and using the App Router as the sole routing system yields
 /api/stock/:symbol/predictions   GET  → ML predictions (from LightGBM predictor)
 /api/stock/:symbol/explanation   GET  → Stored AI explanation (from Gemini explainer)
 /api/stock/:symbol/indicators    GET  → Technical indicators
+/api/stock/:symbol/sankey        GET  → Sankey financial flow data (from FMP income statement)
 
 /api/watchlist/:userId          GET     → Get user's watchlist
 /api/watchlist/:userId/add      POST    → Add stock to watchlist
@@ -1490,6 +1528,7 @@ Removing React Router and using the App Router as the sole routing system yields
 |---------|---------|
 | `websocketService` | Finnhub WebSocket for real-time prices |
 | `aggregateNewsService` | Merges news from Finnhub, Marketaux, TickerTick, RSS |
+| `fmpService` | FMP API integration for income statements, product segmentation, and Sankey data generation |
 | `massiveService` | Technical indicators (RSI, MACD, SMA, EMA) with fallback calculation |
 | `marketService` | Market status, holidays, Fear & Greed Index |
 | `notificationService` | Market session alerts, price alerts, cleanup |
@@ -1877,6 +1916,7 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 | `app/methodology/page.tsx` | Route `/methodology` | `MethodologyPage`, `metadata` |
 | `app/news/page.tsx` | Route `/news` | `Page` |
 | `app/predictions/page.tsx` | Route `/predictions` | `Page` |
+| `app/sankey/page.tsx` | Route `/sankey` | `Page` |
 | `app/stocks/[symbol]/page.tsx` | Route `/stocks/[symbol]` | `Page` |
 | `app/watchlist/page.tsx` | Route `/watchlist` | `Page` |
 | `views/fundamentals.tsx` | View: Financial fundamentals (Jika.io) | `FundamentalsPage` |
@@ -1884,6 +1924,7 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 | `views/landing.tsx` | View: Landing page info | `LandingPage` |
 | `views/news.tsx` | View: Aggregated market news | `NewsPage` |
 | `views/predictions.tsx` | View: Predictions overview | `Predictions` |
+| `views/sankey-view.tsx` | View: Income statement Sankey flow chart | `SankeyView` |
 | `views/stock-detail.tsx` | View: Stock details, chart, AI features | `StockDetail` |
 | `views/watchlist.tsx` | View: User's realtime watchlist | `WatchlistPage` |
 | `components/disclaimer/disclaimer-modal.tsx` | Compliance disclaimer modal | `DisclaimerModal` |
@@ -1893,6 +1934,7 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 | `components/market/AIExplanationWidget.tsx` | Gemini-generated intelligence | `AIExplanationWidget` |
 | `components/market/market-sentiment-banner.tsx` | Fear & Greed display | `MarketSentimentBanner` |
 | `components/market/NotificationWidget.tsx` | Realtime alerts | `NotificationWidget` |
+| `components/market/SankeyChart.tsx` | ECharts-based financial flow Sankey diagram | `SankeyChart` |
 | `components/market/SearchWidget.tsx` | Stock lookup | `SearchWidget` |
 | `components/market/StockLogo.tsx` | Dynamic company logo | `StockLogo` |
 | `components/market/TechnicalIndicators.tsx` | RSI/MACD display | `TechnicalIndicators` |
@@ -1920,6 +1962,7 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 | `backend/src/controllers/stockController.js` | Stock data & ML proxy logic | `searchStocks`, `getAIAnalysis`, `getPredictions` |
 | `backend/src/controllers/watchlistController.js` | Watchlist read/write logic | `getWatchlist`, `addToWatchlist`, `getRealtimeUpdates` |
 | `backend/src/routes/*.js` | Express Router mapping to Controllers | Routers mapping directly to related controllers |
+| `backend/src/services/fmpService.js` | FMP API integration (income statements, product segmentation, Sankey data) | `getIncomeStatementLatest`, `getProductSegmentation`, `getSankeyData` |
 | `backend/src/schemas/Notification.js` | Mongoose Schema for notifications | Notification Schema |
 | `backend/scripts/test_api.js` | Development API smoke testing | Dev-only test suite |
 | `backend/scripts/verify_db.js` | CLI script to check DB integrity | `verifyData` |

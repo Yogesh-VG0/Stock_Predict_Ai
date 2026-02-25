@@ -303,7 +303,7 @@ class MinimalFeatureEngineer:
                                 "insider_buy_ratio_30d", "insider_buy_value_30d",
                                 "insider_sell_value_30d", "insider_net_value_30d",
                                 "insider_activity_z_90d", "insider_net_value_z_90d",
-                                "insider_cluster_buying"):
+                                "insider_cluster_buying", "insider_available"):
                         df[_ic] = 0.0
     
                 # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
@@ -339,7 +339,21 @@ class MinimalFeatureEngineer:
                     logger.error("Missing core columns: %s (df has: %s)", missing, list(df.columns[:15]))
                     return None, {}
                 df_clean = df.dropna(subset=core).copy()
-                cols_to_fill = [c for c in self.feature_columns if c in df_clean.columns]
+                # Fill NaN with 0 for most features, but PRESERVE NaN for
+                # sentiment/insider score columns so LightGBM uses its native
+                # missing-value handling (left vs right branch per split).
+                _nan_preserve = {
+                    "sent_mean_1d", "sent_mean_7d", "sent_mean_30d",
+                    "sent_momentum", "sent_std_7d",
+                    "analyst_sentiment_7d", "analyst_rating_7d",
+                    "insider_net_shares_30d", "insider_net_shares_90d",
+                    "insider_buy_ratio_30d",
+                    "insider_buy_value_30d", "insider_sell_value_30d",
+                    "insider_net_value_30d",
+                    "insider_activity_z_90d", "insider_net_value_z_90d",
+                }
+                cols_to_fill = [c for c in self.feature_columns
+                                if c in df_clean.columns and c not in _nan_preserve]
                 df_clean[cols_to_fill] = df_clean[cols_to_fill].fillna(0)
     
                 # Ensure we have feature columns
@@ -350,10 +364,16 @@ class MinimalFeatureEngineer:
     
                 feature_df = df_clean[available].copy()
                 for col in feature_df.columns:
-                    feature_df[col] = pd.to_numeric(feature_df[col], errors="coerce").fillna(0)
+                    if col in _nan_preserve:
+                        feature_df[col] = pd.to_numeric(feature_df[col], errors="coerce")
+                    else:
+                        feature_df[col] = pd.to_numeric(feature_df[col], errors="coerce").fillna(0)
     
-                # Replace inf
-                feature_df = feature_df.replace([np.inf, -np.inf], 0)
+                # Replace inf (but keep NaN for _nan_preserve cols)
+                feature_df = feature_df.replace([np.inf, -np.inf], np.nan)
+                for col in feature_df.columns:
+                    if col not in _nan_preserve:
+                        feature_df[col] = feature_df[col].fillna(0)
     
                 self.feature_columns = available
                 features = feature_df.values.astype(np.float32)
@@ -749,13 +769,17 @@ class MinimalFeatureEngineer:
 
         Delegates to sentiment_features.make_sentiment_features which handles
         MongoDB querying, rolling window computation, and shift(1) for
-        point-in-time safety.  Falls back to neutral zeros if unavailable.
+        point-in-time safety.  Score columns use NaN when missing so
+        LightGBM treats absent sentiment as unknown, not neutral.
         """
+        _NAN = float("nan")
         _sent_defaults = {
-            "sent_mean_1d": 0.0, "sent_mean_7d": 0.0, "sent_mean_30d": 0.0,
-            "sent_momentum": 0.0, "sent_std_7d": 0.0,
+            "sent_mean_1d": _NAN, "sent_mean_7d": _NAN, "sent_mean_30d": _NAN,
+            "sent_momentum": _NAN, "sent_std_7d": _NAN,
             "news_count_1d": 0.0, "news_count_7d": 0.0,
             "news_spike_1d": 0.0,
+            "analyst_sentiment_7d": _NAN, "analyst_rating_7d": _NAN,
+            "sent_available": 0.0, "sent_source_count": 0.0,
         }
         try:
             from .sentiment_features import make_sentiment_features
@@ -775,16 +799,19 @@ class MinimalFeatureEngineer:
 
         Delegates to insider_features.make_insider_features which handles
         MongoDB querying, rolling window computation, and shift(1) for
-        point-in-time safety.  Falls back to neutral defaults if unavailable.
+        point-in-time safety.  Score-based columns are left as NaN when data
+        is absent so LightGBM treats missing as unknown, not neutral.
         """
+        _NAN = float("nan")
         _insider_defaults = {
-            "insider_net_shares_30d": 0.0, "insider_net_shares_90d": 0.0,
+            "insider_net_shares_30d": _NAN, "insider_net_shares_90d": _NAN,
             "insider_buy_count_30d": 0.0, "insider_sell_count_30d": 0.0,
-            "insider_buy_ratio_30d": 0.5,
-            "insider_buy_value_30d": 0.0, "insider_sell_value_30d": 0.0,
-            "insider_net_value_30d": 0.0,
-            "insider_activity_z_90d": 0.0, "insider_net_value_z_90d": 0.0,
+            "insider_buy_ratio_30d": _NAN,
+            "insider_buy_value_30d": _NAN, "insider_sell_value_30d": _NAN,
+            "insider_net_value_30d": _NAN,
+            "insider_activity_z_90d": _NAN, "insider_net_value_z_90d": _NAN,
             "insider_cluster_buying": 0.0,
+            "insider_available": 0.0,
         }
         try:
             from .insider_features import make_insider_features

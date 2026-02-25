@@ -20,7 +20,7 @@ import traceback
 import random
 import sys
 import platform
-import pickle
+# pickle removed — security risk (arbitrary code execution on deserialization)
 import hashlib
 from pathlib import Path
 import numpy as np
@@ -198,25 +198,30 @@ class SessionManager:
         
     def save_session(self, driver, session_name: str):
         """Save current session state"""
-        session_path = self.session_dir / f"{session_name}.pkl"
+        session_path = self.session_dir / f"{session_name}.json"
         session_data = {
             'cookies': driver.get_cookies(),
             'local_storage': driver.execute_script("return Object.assign({}, window.localStorage);"),
             'session_storage': driver.execute_script("return Object.assign({}, window.sessionStorage);"),
             'timestamp': datetime.now().isoformat()
         }
-        with open(session_path, 'wb') as f:
-            pickle.dump(session_data, f)
+        with open(session_path, 'w', encoding='utf-8') as f:
+            json.dump(session_data, f, default=str)
             
     def load_session(self, driver, session_name: str) -> bool:
         """Load saved session state"""
-        session_path = self.session_dir / f"{session_name}.pkl"
+        # Try JSON first, fall back to legacy .pkl (read-only, no pickle)
+        session_path = self.session_dir / f"{session_name}.json"
         if not session_path.exists():
+            # Check for legacy .pkl file but do NOT unpickle it (security)
+            legacy_path = self.session_dir / f"{session_name}.pkl"
+            if legacy_path.exists():
+                logger.warning("Legacy .pkl session file found — delete and re-save as JSON")
             return False
             
         try:
-            with open(session_path, 'rb') as f:
-                session_data = pickle.load(f)
+            with open(session_path, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
                 
             # Load cookies
             for cookie in session_data['cookies']:

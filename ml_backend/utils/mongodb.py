@@ -12,6 +12,8 @@ from pymongo.errors import (
 )
 import time
 import random
+import json
+import gzip
 from typing import Dict, List, Optional, Any
 import logging
 from datetime import datetime, timedelta
@@ -603,9 +605,12 @@ class MongoDBClient:
                     "fmp_analyst": float(doc.get("fmp_analyst_sentiment", 0.0) or 0.0),
                     "fmp_rating": float(doc.get("fmp_ratings_sentiment", 0.0) or 0.0),
                     "fmp_price_target": float(doc.get("fmp_price_target_sentiment", 0.0) or 0.0),
+                    # Source count (stored by get_combined_sentiment after blending)
+                    "sentiment_source_count": int(doc.get("sentiment_source_count", 0) or 0),
                 })
             _cols = ["date", "composite_sentiment", "news_count",
-                     "fmp_analyst", "fmp_rating", "fmp_price_target"]
+                     "fmp_analyst", "fmp_rating", "fmp_price_target",
+                     "sentiment_source_count"]
             if not rows:
                 return pd.DataFrame(columns=_cols)
             df = pd.DataFrame(rows)
@@ -614,7 +619,8 @@ class MongoDBClient:
         except Exception as e:
             logger.error("Error getting sentiment timeseries for %s: %s", ticker, e)
             return pd.DataFrame(columns=["date", "composite_sentiment", "news_count",
-                                         "fmp_analyst", "fmp_rating", "fmp_price_target"])
+                                         "fmp_analyst", "fmp_rating", "fmp_price_target",
+                                         "sentiment_source_count"])
 
 
     def get_historical_data(self, ticker: str, start_date: datetime, end_date: datetime) -> pd.DataFrame:
@@ -1014,8 +1020,7 @@ class MongoDBClient:
             # Store with compression for large sentiment objects
             if len(str(sentiment)) > 10000:  # If sentiment data is large
                 import gzip
-                import pickle
-                compressed_data = gzip.compress(pickle.dumps(sentiment))
+                compressed_data = gzip.compress(json.dumps(sentiment, default=str).encode('utf-8'))
                 sentiment['_compressed'] = True
                 sentiment['_data'] = compressed_data
             
@@ -1050,8 +1055,7 @@ class MongoDBClient:
                     # Decompress if needed
                     if cached.get('_compressed'):
                         import gzip
-                        import pickle
-                        return pickle.loads(gzip.decompress(cached['_data']))
+                        return json.loads(gzip.decompress(cached['_data']).decode('utf-8'))
                     return cached.get('data')
                 else:
                     # Remove expired data
@@ -1077,9 +1081,8 @@ class MongoDBClient:
             # Compress large data
             if len(str(data)) > 5000:
                 import gzip
-                import pickle
                 cache_doc['_compressed'] = True
-                cache_doc['_data'] = gzip.compress(pickle.dumps(data))
+                cache_doc['_data'] = gzip.compress(json.dumps(data, default=str).encode('utf-8'))
             else:
                 cache_doc['data'] = data
             

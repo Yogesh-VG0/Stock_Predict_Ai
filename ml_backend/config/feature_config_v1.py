@@ -92,11 +92,13 @@ FEATURE_PRUNING = {
         "sent_momentum",                           # sentiment regime change
         "news_count_7d",                           # news flow intensity
         "news_spike_1d",                           # unusual coverage burst detector
+        "sent_available",                          # missingness indicator (0=no data, 1=data)
         # Insider (v4) — direct transaction features
         "insider_net_value_30d",                   # dollar flow direction
         "insider_buy_ratio_30d",                   # buy/sell balance
         "insider_cluster_buying",                  # cluster-buying alpha signal
         "insider_activity_z_90d",                  # abnormal activity detector
+        "insider_available",                       # missingness indicator (0=no insider data)
         # Technical (v4)
         "rsi_divergence",                          # bullish/bearish RSI divergence
         # FMP analyst features (v1.5) — fundamental signals from analyst consensus

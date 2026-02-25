@@ -67,12 +67,14 @@ setup_error_handling(app)
 _cors_origins = os.getenv("CORS_ORIGINS", "*")
 if _cors_origins != "*":
     _cors_origins = [o.strip() for o in _cors_origins.split(",") if o.strip()]
+    _allow_creds = True   # Explicit origins: safe to allow credentials
 else:
     _cors_origins = ["*"]
+    _allow_creds = False  # Wildcard + credentials is invalid per browser spec
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -2356,10 +2358,10 @@ async def call_google_gemini_api(prompt: str, ticker: str) -> str:
         error_str = str(e).lower()
         # Check for quota/rate limit errors
         if "quota" in error_str or "429" in error_str or "rate limit" in error_str:
-            logger.error(f"{GEMINI_MODEL} quota/rate limit exceeded for {ticker}: {e}")
+            logger.error(f"{GEMINI_MODEL} quota/rate limit exceeded for {ticker}: {repr(e)}")
             return f"AI explanation unavailable: Gemini API quota exceeded ({GEMINI_MODEL} free tier limit reached). Please try again later or upgrade to paid tier."
-        logger.error(f"Error calling {GEMINI_MODEL} for {ticker}: {e}")
-        return f"AI explanation unavailable: {str(e)}"
+        logger.error(f"Error calling {GEMINI_MODEL} for {ticker}: {repr(e)}")
+        return "AI explanation unavailable: An internal error occurred. Check server logs."
 
 def calculate_comprehensive_technicals(df: pd.DataFrame) -> Dict:
     """Calculate comprehensive technical indicators"""

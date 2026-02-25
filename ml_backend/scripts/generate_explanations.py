@@ -321,7 +321,7 @@ BASE_BACKOFF = 2   # Exponential base
 
 # Global rate limiter: track last API call time per model to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
-_MIN_CALL_INTERVAL = 2.5  # Minimum seconds between API calls per model
+_MIN_CALL_INTERVAL = 4.0  # Minimum seconds between API calls per model (Groq free: ~30 RPM)
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
@@ -372,18 +372,22 @@ def _parse_retry_after(error_str: str) -> int:
 
 
 def _exponential_backoff(attempt: int) -> float:
-    """Calculate exponential backoff delay in seconds."""
+    """Calculate exponential backoff delay in seconds with jitter."""
+    import random
     delay = INITIAL_BACKOFF * (BASE_BACKOFF ** (attempt - 1))
-    return min(delay, MAX_BACKOFF)
+    jittered = delay * random.uniform(0.8, 1.2)
+    return min(jittered, MAX_BACKOFF)
 
 
 def _rate_limit_wait(model: str):
-    """Wait if needed to respect minimum call interval per model."""
+    """Wait if needed to respect minimum call interval per model, with jitter."""
     import time
+    import random
     last_call = _last_api_call_time.get(model, 0)
     elapsed = time.time() - last_call
     if elapsed < _MIN_CALL_INTERVAL:
-        sleep_time = _MIN_CALL_INTERVAL - elapsed
+        jitter = random.uniform(-0.5, 0.5)
+        sleep_time = max(0.1, _MIN_CALL_INTERVAL - elapsed + jitter)
         time.sleep(sleep_time)
     _last_api_call_time[model] = time.time()
 
@@ -437,10 +441,15 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
         is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
         is_quota = "quota" in error_str or "limit" in error_str
         
-        if is_quota:
-            return (f"AI explanation unavailable: Groq API quota exceeded ({model})", "quota_exceeded")
-        elif is_rate_limit:
+        if is_rate_limit:
+            # Parse Retry-After hint and sleep proactively before returning
+            retry_after = _parse_retry_after(error_str)
+            if retry_after > 0:
+                logger.info("Groq 429 for %s — sleeping %ds (Retry-After hint)", ticker, retry_after)
+                time.sleep(retry_after)
             return (f"AI explanation unavailable: Groq API rate limited ({model})", "rate_limit")
+        elif is_quota:
+            return (f"AI explanation unavailable: Groq API quota exceeded ({model})", "quota_exceeded")
         else:
             logger.error("Groq API error for %s (%s): %s", ticker, model, e)
             return (f"AI explanation unavailable: Groq API error: {str(e)[:100]}", "api_error")
@@ -1357,6 +1366,7 @@ def generate_explanations(
             hist = mongo.get_historical_data(ticker, start_dt, end_dt)
             technicals = calculate_technicals(hist) if hist is not None and not hist.empty else {}
             if not technicals:
+                logger.debug("  MongoDB historical data empty for %s — using yfinance", ticker)
                 try:
                     import yfinance as yf
                     yf_data = yf.download(ticker, start=start_dt.strftime("%Y-%m-%d"), end=end_dt.strftime("%Y-%m-%d"), progress=False)
@@ -1365,7 +1375,7 @@ def generate_explanations(
                             yf_data.columns = yf_data.columns.get_level_values(0)
                         technicals = calculate_technicals(yf_data)
                         if technicals:
-                            logger.info("  Got technicals from yfinance fallback for %s", ticker)
+                            logger.info("  Computed technicals via yfinance for %s", ticker)
                 except Exception as yf_err:
                     logger.warning("  yfinance fallback failed for %s: %s", ticker, yf_err)
         except Exception as e:
