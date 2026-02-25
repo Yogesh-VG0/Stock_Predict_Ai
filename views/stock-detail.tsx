@@ -501,14 +501,15 @@ export default function StockDetail({ }: StockDetailProps) {
 
       {/* Main Content Grid - Top Row (Company, Predictions, News) */}
       {/* Slightly taller side cards for visual balance, without forcing full-height stretch */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
         {/* Left Column - Company Profile (TradingView Widget) */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.3 }}
+          className="h-full"
         >
-          <Card className="flex flex-col overflow-hidden">
+          <Card className="flex flex-col overflow-hidden h-full">
             <CardHeader className="pb-0">
               <CardTitle className="flex items-center gap-2">
                 <Info className="h-5 w-5 text-blue-500" />
@@ -533,8 +534,9 @@ export default function StockDetail({ }: StockDetailProps) {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4 }}
+            className="h-full"
           >
-            <Card className="flex flex-col">
+            <Card className="flex flex-col h-full">
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2">
                   <TrendingUp className="h-5 w-5 text-emerald-500" />
@@ -544,7 +546,7 @@ export default function StockDetail({ }: StockDetailProps) {
                       💾 Real Data
                     </span>
                   )}
-                  <span className="text-xs text-zinc-500 font-normal ml-1">(alpha vs SPY)</span>
+
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1">
@@ -555,7 +557,7 @@ export default function StockDetail({ }: StockDetailProps) {
                     <p className="text-xs text-zinc-500 mt-1">Predictions are generated daily by the ML pipeline.</p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 gap-4">
+                  <div className="grid grid-cols-1 gap-4 flex-1">
                     {/* 1 Day Prediction */}
                     {(() => {
                       const prediction = predictionData['1_day'] || predictionData.next_day
@@ -684,8 +686,9 @@ export default function StockDetail({ }: StockDetailProps) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
+          className="h-full"
         >
-          <Card className="flex flex-col md:min-h-[280px]">
+          <Card className="flex flex-col h-full">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Newspaper className="h-5 w-5 text-amber-500" />
