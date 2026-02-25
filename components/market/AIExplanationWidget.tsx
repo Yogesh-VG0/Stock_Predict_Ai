@@ -237,6 +237,8 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
       [/(?:#{1,4}\s*)?(?:\*\*)?\s*SUMMARY\s*(?:\*\*)?:\s*/i, 'summary'],
       [/(?:#{1,4}\s*)?(?:\*\*)?\s*WHAT_THIS_MEANS\s*(?:\*\*)?:\s*/i, 'whatThisMeans'],
       [/(?:#{1,4}\s*)?(?:\*\*)?\s*KEY_DRIVERS\s*(?:\*\*)?:\s*/i, 'keyDrivers'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*BULLISH_FACTORS\s*(?:\*\*)?:\s*/i, 'bullishFactors'],
+      [/(?:#{1,4}\s*)?(?:\*\*)?\s*BEARISH_FACTORS\s*(?:\*\*)?:\s*/i, 'bearishFactors'],
       [/(?:#{1,4}\s*)?(?:\*\*)?\s*NEWS_IMPACT\s*(?:\*\*)?:\s*/i, 'newsImpact'],
       [/(?:#{1,4}\s*)?(?:\*\*)?\s*KEY_LEVELS\s*(?:\*\*)?:\s*/i, 'keyLevels'],
       [/(?:#{1,4}\s*)?(?:\*\*)?\s*BOTTOM_LINE\s*(?:\*\*)?:\s*/i, 'bottomLine'],
@@ -269,6 +271,24 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
           case 'newsImpact': newsImpact = content; break
           case 'keyLevels': keyLevels = content; break
           case 'bottomLine': bottomLine = content; break
+          case 'bullishFactors':
+            for (const line of content.split('\n')) {
+              const trimmed = line.trim()
+              if (!trimmed) continue
+              const cleanLine = trimmed.replace(/^[+•\-*]\s*/, '').replace(/\*\*/g, '').trim()
+              if (cleanLine.length < 5) continue
+              keyDrivers.push({ text: cleanLine, type: 'bullish' })
+            }
+            break
+          case 'bearishFactors':
+            for (const line of content.split('\n')) {
+              const trimmed = line.trim()
+              if (!trimmed) continue
+              const cleanLine = trimmed.replace(/^[+•\-*]\s*/, '').replace(/\*\*/g, '').trim()
+              if (cleanLine.length < 5) continue
+              keyDrivers.push({ text: cleanLine, type: 'bearish' })
+            }
+            break
           case 'keyDrivers':
             for (const line of content.split('\n')) {
               const trimmed = line.trim()
