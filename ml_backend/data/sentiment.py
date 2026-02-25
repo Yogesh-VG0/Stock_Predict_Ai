@@ -808,7 +808,7 @@ class SentimentAnalyzer:
             logger.info(f"Marketaux sentiment: {total_volume} articles/entities, avg score: {avg_sentiment:.3f}")
             return {"marketaux_sentiment": avg_sentiment, "marketaux_volume": total_volume, "marketaux_confidence": min(total_volume/20, 1.0), "marketaux_raw_data": articles, "marketaux_nlp_results": sentiment_results}
         except Exception as e:
-            logger.error(f"Error analyzing Marketaux sentiment for {ticker}: {e}")
+            logger.error(f"Error analyzing Marketaux sentiment for {ticker}: {repr(e)}")
             return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0, "marketaux_raw_data": [], "marketaux_nlp_results": []}
 
     async def analyze_fmp_financial_estimates(self, ticker: str) -> dict:
@@ -1000,15 +1000,15 @@ class SentimentAnalyzer:
                         sentiment_dict[result_key] = result[suffix]
                         
             except Exception as e:
-                logger.warning(f"Sentiment fetch failed for {key}: {e}")
+                logger.warning(f"Sentiment fetch failed for {key}: {repr(e)}")
                 # Mark API as having an error
-                self._mark_api_error(key, str(e))
+                self._mark_api_error(key, repr(e))
                 
                 # Set default values for failed sources
                 sentiment_dict[f"{key}_sentiment"] = 0.0
                 sentiment_dict[f"{key}_volume"] = 0
                 sentiment_dict[f"{key}_confidence"] = 0.0
-                sentiment_dict[f"{key}_error"] = str(e)
+                sentiment_dict[f"{key}_error"] = repr(e)
                 
         # Add Economic Calendar Sentiment (global events, not ticker-specific)
         try:
@@ -1042,14 +1042,26 @@ class SentimentAnalyzer:
             sentiment_dict["sentiment_confidence"] = self._calculate_sentiment_confidence(sentiment_dict)
             sentiment_dict["sentiment_volume"] = self._calculate_sentiment_volume(sentiment_dict)
             
+            # Count providers with actual data (non-zero confidence)
+            # Used by sentiment_features.py as sent_source_count
+            source_count = sum(
+                1 for k, v in sentiment_dict.items()
+                if k.endswith("_confidence") and isinstance(v, (int, float)) and v > 0
+                and k not in ("sentiment_confidence", "economic_event_confidence",
+                              "short_interest_confidence")
+            )
+            sentiment_dict["sentiment_source_count"] = source_count
+            
             logger.info(f"Final blended sentiment for {ticker}: {blended_sentiment:.3f} "
                        f"(confidence: {sentiment_dict['sentiment_confidence']:.2f}, "
-                       f"volume: {sentiment_dict['sentiment_volume']})")
+                       f"volume: {sentiment_dict['sentiment_volume']}, "
+                       f"sources: {source_count})")
         except Exception as e:
             logger.error(f"Error calculating blended sentiment for {ticker}: {e}")
             sentiment_dict["blended_sentiment"] = 0.0
             sentiment_dict["sentiment_confidence"] = 0.0
             sentiment_dict["sentiment_volume"] = 0
+            sentiment_dict["sentiment_source_count"] = 0
         
         # Add feature-friendly fields expected by sentiment_features.py
         sentiment_dict["composite_sentiment"] = float(sentiment_dict.get("blended_sentiment", 0.0))
@@ -1421,7 +1433,7 @@ class SentimentAnalyzer:
                 }
             }
         except Exception as e:
-            logger.error(f"Error fetching Enhanced Finnhub Recommendation Trends for {ticker}: {e}")
+            logger.error(f"Error fetching Enhanced Finnhub Recommendation Trends for {ticker}: {repr(e)}")
             return {"finnhub_recommendation_sentiment": 0.0, "finnhub_recommendation_volume": 0, "finnhub_recommendation_confidence": 0.0}
 
     async def analyze_reddit_sentiment(self, ticker: str) -> Dict[str, float]:
@@ -1437,6 +1449,9 @@ class SentimentAnalyzer:
 
     def _analyze_reddit_sentiment_sync(self, ticker: str) -> Dict[str, float]:
         """Synchronous Reddit sentiment analysis using Twitter-Roberta and ticker-specific subreddits."""
+        # Module-level cache of subreddits known to 404/redirect in this process
+        if not hasattr(SentimentAnalyzer, '_known_bad_subreddits'):
+            SentimentAnalyzer._known_bad_subreddits = set()
         try:
             import praw
             from ..config.constants import TICKER_SUBREDDITS, REDDIT_SUBREDDITS
@@ -1460,6 +1475,9 @@ class SentimentAnalyzer:
                     )
                     
                     for subreddit_name in target_subreddits[:3]:  # Cap at 3 subreddits to control API call volume
+                        if subreddit_name in SentimentAnalyzer._known_bad_subreddits:
+                            logger.info(f"  Skipping r/{subreddit_name} for {ticker} (cached as invalid)")
+                            continue
                         try:
                             logger.info(f"  Searching r/{subreddit_name} for {ticker}")
                             posts = reddit.subreddit(subreddit_name).search(ticker, sort="new", time_filter="week", limit=20)
@@ -1525,7 +1543,11 @@ class SentimentAnalyzer:
                             logger.info(f"  Found {posts_found} posts in r/{subreddit_name} for {ticker}")
                             
                         except Exception as e:
-                            logger.error(f"  Error analyzing Reddit sentiment for {ticker} in r/{subreddit_name}: {str(e)}")
+                            error_str = str(e).lower()
+                            # Cache subreddits that 404 or redirect — they won't come back mid-run
+                            if '404' in error_str or 'redirect' in error_str or 'not found' in error_str:
+                                SentimentAnalyzer._known_bad_subreddits.add(subreddit_name)
+                            logger.warning(f"  Subreddit miss for {ticker} in r/{subreddit_name}: {str(e)}")
                             continue
                     break  # Success
                 except praw.exceptions.APIException as e:
@@ -1901,12 +1923,12 @@ class SentimentAnalyzer:
                 }
             }
         except Exception as e:
-            logger.error(f"Error analyzing Finnhub sentiment for {ticker}: {str(e)}")
+            logger.error(f"Error analyzing Finnhub sentiment for {ticker}: {repr(e)}")
             return {
                 'sentiment_score': 0.0,
                 'volume': 0,
                 'confidence': 0.0,
-                'error': str(e)
+                'error': repr(e)
             }
 
     async def analyze_alpha_earnings_call_sentiment(self, ticker: str) -> Dict[str, Any]:

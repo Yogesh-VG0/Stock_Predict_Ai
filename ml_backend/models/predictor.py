@@ -114,7 +114,7 @@ class StockPredictor:
         """Select & reorder columns of *X* so they match *model_cols*.
 
         If model_cols is None or identical to current_cols, returns X as a
-        DataFrame.  Missing columns are zero-filled (missing-data marker)
+        DataFrame.  Missing columns are NaN-filled (LightGBM native missing)
         and a warning is logged.  Always returns a DataFrame with model_cols
         as column names to suppress sklearn feature-name warnings.
         """
@@ -129,7 +129,7 @@ class StockPredictor:
 
         if missing:
             logger.warning(
-                "Feature mismatch [%s-%s]: %d missing cols (zero-filled): %s",
+                "Feature mismatch [%s-%s]: %d missing cols (NaN-filled): %s",
                 ticker, window, len(missing), missing[:10],
             )
         if extra and len(extra) <= 20:
@@ -138,13 +138,14 @@ class StockPredictor:
                 ticker, window, len(extra), extra[:10],
             )
 
-        # Build output array with model_cols ordering, zero-fill missing
+        # Build output array with model_cols ordering, NaN-fill missing
+        # (LightGBM treats NaN as missing and learns optimal split direction)
         n_rows = X.shape[0]
-        out = np.zeros((n_rows, len(model_cols)), dtype=np.float32)
+        out = np.full((n_rows, len(model_cols)), np.nan, dtype=np.float32)
         for j, col in enumerate(model_cols):
             if col in col_to_idx:
                 out[:, j] = X[:, col_to_idx[col]]
-            # else: stays zero (missing-data marker)
+            # else: stays NaN (LightGBM native missing-value)
         return pd.DataFrame(out, columns=model_cols)
 
     def get_oos_start_date(self) -> Optional[pd.Timestamp]:

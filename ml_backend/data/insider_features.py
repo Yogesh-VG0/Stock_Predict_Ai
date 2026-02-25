@@ -70,18 +70,20 @@ def make_insider_features(
     DataFrame with the same index as *price_df* and 11 insider feature
     columns.  Missing values are filled with neutral defaults.
     """
+    _NAN = float("nan")
     _defaults = {
-        "insider_net_shares_30d":  0.0,
-        "insider_net_shares_90d":  0.0,
-        "insider_buy_count_30d":   0.0,
+        "insider_net_shares_30d":  _NAN,   # score: unknown != zero activity
+        "insider_net_shares_90d":  _NAN,
+        "insider_buy_count_30d":   0.0,    # count: zero is accurate
         "insider_sell_count_30d":  0.0,
-        "insider_buy_ratio_30d":   0.5,   # neutral: equal buys/sells
-        "insider_buy_value_30d":   0.0,
-        "insider_sell_value_30d":  0.0,
-        "insider_net_value_30d":   0.0,
-        "insider_activity_z_90d":  0.0,
-        "insider_net_value_z_90d": 0.0,
-        "insider_cluster_buying":  0.0,
+        "insider_buy_ratio_30d":   _NAN,   # ratio: unknown != 50/50
+        "insider_buy_value_30d":   _NAN,
+        "insider_sell_value_30d":  _NAN,
+        "insider_net_value_30d":   _NAN,
+        "insider_activity_z_90d":  _NAN,   # z-score: unknown != average
+        "insider_net_value_z_90d": _NAN,
+        "insider_cluster_buying":  0.0,    # binary flag: no data → no cluster
+        "insider_available":       0.0,    # missingness indicator (0=no data)
     }
     empty = pd.DataFrame(
         {col: [val] * len(price_df) for col, val in _defaults.items()},
@@ -205,6 +207,9 @@ def make_insider_features(
             (feat["insider_buy_count_30d"] >= 3) & (feat["insider_sell_count_30d"] == 0)
         ).astype(float)
 
+        # --- Missingness indicator: data exists for this date range ---
+        feat["insider_available"] = 1.0
+
         # --- Align to price dates ---
         feat = feat.reset_index().rename(columns={"index": "date"})
         feat["date"] = pd.to_datetime(feat["date"]).dt.normalize()
@@ -223,12 +228,22 @@ def make_insider_features(
             if col in merged.columns:
                 merged[col] = merged[col].shift(1)
 
-        # Fill missing with neutral defaults
+        # Fill ONLY count-based and indicator columns.
+        # Score-based columns stay NaN so LightGBM knows data is missing.
+        _fill_cols = {
+            "insider_buy_count_30d":   0.0,
+            "insider_sell_count_30d":  0.0,
+            "insider_cluster_buying":  0.0,
+            "insider_available":       0.0,
+        }
+        for col, default in _fill_cols.items():
+            if col in merged.columns:
+                merged[col] = merged[col].fillna(default)
+
+        # Ensure all expected columns exist (even if not computed)
         for col, default in _defaults.items():
             if col not in merged.columns:
                 merged[col] = default
-            else:
-                merged[col] = merged[col].fillna(default)
 
         return merged[feature_cols]
 

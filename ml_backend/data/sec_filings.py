@@ -665,7 +665,7 @@ class SECFilingsAnalyzer:
                 if self.skip_sec_fmp:
                     logger.info("Kaleidoscope key missing and FMP SEC skip enabled - skipping SEC filings")
                     return {"status": "skipped", "source": "kaleidoscope", "reason": "no_key"}
-                logger.warning("Kaleidoscope API key not found, falling back to FMP")
+                logger.info("Kaleidoscope API key not found, using FMP for SEC filings")
                 return self.fetch_fmp_filings(ticker, lookback_days)
             
             # Calculate date range
@@ -1167,7 +1167,7 @@ class SECFilingsAnalyzer:
                 logger.info(f"Total extracted narrative content: {len(combined_text)} characters from SEC filing")
                 return combined_text
             else:
-                logger.warning("No meaningful narrative content found in SEC filing")
+                logger.info("No meaningful narrative content found in SEC filing (expected for non-narrative forms)")
                 return ""
             
         except Exception as e:

@@ -184,8 +184,12 @@ class ShortInterestAnalyzer:
                                 
                                 # If no structured data found, log the response for debugging
                                 if not short_data:
-                                    logger.warning(f"📊 No parseable short interest data found in API response")
-                                    logger.info(f"🔍 Full API response structure: {json.dumps(data, indent=2)[:1000]}...")
+                                    logger.warning(f"📊 No parseable short interest data found in API response for {ticker}")
+                                    # Log response shape for debugging Nasdaq API format changes
+                                    api_status = data.get('status', {}) if isinstance(data.get('status'), dict) else data.get('status', 'unknown')
+                                    api_msg = data.get('message', 'none')
+                                    data_keys = list(data.get('data', {}).keys()) if isinstance(data.get('data'), dict) else type(data.get('data', None)).__name__
+                                    logger.info(f"🔍 API response shape: status={api_status}, message={api_msg}, data_keys={data_keys}")
                             
                             if short_data:
                                 logger.info(f"🎉 Successfully extracted {len(short_data)} short interest records from direct API for {ticker}")

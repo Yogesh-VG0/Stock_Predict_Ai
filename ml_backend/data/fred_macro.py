@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _fred_client = None
 
 # Retry configuration for transient FRED API failures
-_FRED_MAX_RETRIES = 2
+_FRED_MAX_RETRIES = 3
 _FRED_BASE_DELAY = 1.5  # seconds
 
 
@@ -59,8 +59,20 @@ def fetch_fred_series(series_code, start_date, end_date):
             data = fred.get_series(series_code, observation_start=start_date, observation_end=end_date)
             data = data.dropna()
             return data
-        except ValueError:
-            raise  # re-raise config errors immediately
+        except ValueError as ve:
+            # Only re-raise config errors immediately; server errors should retry
+            ve_str = str(ve).lower()
+            if any(s in ve_str for s in ('internal server error', '500', '502', '503')):
+                last_exc = ve
+                if attempt < _FRED_MAX_RETRIES:
+                    delay = _FRED_BASE_DELAY * (2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
+                    logger.warning(
+                        "[FRED-RETRY] %s | FRED API server error (transient) | attempt=%d/%d | sleep=%.1fs",
+                        series_code, attempt, _FRED_MAX_RETRIES, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+            raise  # re-raise actual config errors immediately
         except Exception as exc:
             last_exc = exc
             if attempt < _FRED_MAX_RETRIES:
