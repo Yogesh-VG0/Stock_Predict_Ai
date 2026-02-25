@@ -104,7 +104,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
   const [explanation, setExplanation] = useState<AIExplanation | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
-  const [isExpanded, setIsExpanded] = useState(true)
+  const [isExpanded, setIsExpanded] = useState(false)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -509,135 +509,169 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
                 exit={{ opacity: 0, height: 0 }}
                 transition={{ duration: 0.25 }}
               >
-                <div className="space-y-3 pt-1">
-                  {/* Summary */}
-                  {parsed.summary && (
-                    <div>
-                      <p className="text-sm text-zinc-200 leading-relaxed"><FormatText text={parsed.summary} /></p>
-                    </div>
-                  )}
-
-                  {/* What This Means */}
-                  {parsed.whatThisMeans && (
-                    <div className="rounded-lg p-3 bg-blue-500/5 border border-blue-500/15">
-                      <div className="text-[10px] text-blue-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                        <Target className="h-3 w-3" /> What This Means
-                      </div>
-                      <p className="text-xs text-zinc-300 leading-relaxed"><FormatText text={parsed.whatThisMeans} /></p>
-                    </div>
-                  )}
-
-                  {/* Key Drivers */}
-                  {parsed.keyDrivers.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2">
-                      {bullishDrivers.length > 0 && (
-                        <div className="rounded-lg p-2.5 bg-emerald-500/5 border border-emerald-500/15">
-                          <div className="text-[10px] text-emerald-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                            <TrendingUp className="h-3 w-3" /> Bullish Factors
-                          </div>
-                          <ul className="space-y-1.5">
-                            {bullishDrivers.map((item, i) => (
-                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
-                                <span className="text-emerald-500 mt-0.5 shrink-0 font-bold">+</span>
-                                <span className="leading-relaxed">{item.text}</span>
-                              </li>
-                            ))}
-                          </ul>
+                <div className="relative">
+                  <div className="max-h-[480px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-zinc-700/60 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-zinc-600">
+                    <div className="space-y-3 pt-1 pb-4">
+                      {/* Summary */}
+                      {parsed.summary && (
+                        <div>
+                          <p className="text-sm text-zinc-200 leading-relaxed"><FormatText text={parsed.summary} /></p>
                         </div>
                       )}
-                      {bearishDrivers.length > 0 && (
-                        <div className="rounded-lg p-2.5 bg-red-500/5 border border-red-500/15">
-                          <div className="text-[10px] text-red-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                            <TrendingDown className="h-3 w-3" /> Bearish Factors
+
+                      {/* What This Means */}
+                      {parsed.whatThisMeans && (
+                        <div className="rounded-lg p-3 bg-blue-500/5 border border-blue-500/15">
+                          <div className="text-[10px] text-blue-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                            <Target className="h-3 w-3" /> What This Means
                           </div>
-                          <ul className="space-y-1.5">
-                            {bearishDrivers.map((item, i) => (
-                              <li key={i} className="text-xs text-zinc-300 flex items-start gap-1.5">
-                                <span className="text-red-500 mt-0.5 shrink-0 font-bold">&minus;</span>
-                                <span className="leading-relaxed">{item.text}</span>
-                              </li>
-                            ))}
-                          </ul>
+                          <p className="text-xs text-zinc-300 leading-relaxed"><FormatText text={parsed.whatThisMeans} /></p>
                         </div>
                       )}
-                    </div>
-                  )}
 
-                  {/* News Impact */}
-                  {(parsed.newsImpact || (recentNews && recentNews.length > 0)) && (
-                    <div className="rounded-lg p-3 bg-amber-500/5 border border-amber-500/15">
-                      <div className="text-[10px] text-amber-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                        <Newspaper className="h-3 w-3" /> News & Sentiment Impact
-                      </div>
-                      {parsed.newsImpact && (
-                        <p className="text-xs text-zinc-300 leading-relaxed"><FormatText text={parsed.newsImpact} /></p>
-                      )}
-                      {recentNews && recentNews.length > 0 && (
-                        <div className={parsed.newsImpact ? "mt-2 pt-2 border-t border-amber-500/10" : ""}>
-                          <div className="space-y-1.5">
-                            {recentNews.slice(0, 4).map((item, i) => (
-                              <div key={i} className="flex items-start gap-1.5 text-[11px]">
-                                <span className={`mt-0.5 shrink-0 ${item.sentiment === 'positive' ? 'text-emerald-400' :
-                                  item.sentiment === 'negative' ? 'text-red-400' : 'text-zinc-500'
-                                  }`}>
-                                  {item.sentiment === 'positive' ? '▲' : item.sentiment === 'negative' ? '▼' : '•'}
+                      {/* Key Drivers — Table Layout */}
+                      {parsed.keyDrivers.length > 0 && (
+                        <div className="rounded-lg border border-zinc-700/40 overflow-hidden">
+                          {/* Table header */}
+                          <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60 border-b border-zinc-700/30">
+                            <Zap className="h-3 w-3 text-amber-400" />
+                            <span className="text-[10px] text-zinc-400 uppercase tracking-wider font-medium">Key Drivers</span>
+                            <span className="ml-auto text-[10px] text-zinc-500">{bullishDrivers.length} bullish · {bearishDrivers.length} bearish</span>
+                          </div>
+
+                          {/* Desktop table (hidden on mobile) */}
+                          <div className="hidden md:block">
+                            <table className="w-full text-xs">
+                              <tbody>
+                                {parsed.keyDrivers.map((item, i) => (
+                                  <tr key={i} className={cn(
+                                    "border-b border-zinc-800/40 last:border-b-0 transition-colors hover:bg-zinc-800/30",
+                                    item.type === 'bullish' ? 'bg-emerald-500/[0.03]' : 'bg-red-500/[0.03]'
+                                  )}>
+                                    <td className="w-6 px-3 py-2 text-center">
+                                      <span className={item.type === 'bullish' ? 'text-emerald-500 font-bold' : 'text-red-500 font-bold'}>
+                                        {item.type === 'bullish' ? '+' : '−'}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 pr-2 text-zinc-300 leading-snug">{item.text}</td>
+                                    <td className="w-20 px-3 py-2 text-right">
+                                      <span className={cn(
+                                        "inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full",
+                                        item.type === 'bullish'
+                                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+                                          : 'bg-red-500/15 text-red-400 border border-red-500/20'
+                                      )}>
+                                        {item.type === 'bullish' ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
+                                        {item.type === 'bullish' ? 'Bull' : 'Bear'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          {/* Mobile stacked list (hidden on desktop) */}
+                          <div className="md:hidden divide-y divide-zinc-800/40">
+                            {parsed.keyDrivers.map((item, i) => (
+                              <div key={i} className={cn(
+                                "flex items-start gap-2 px-3 py-2",
+                                item.type === 'bullish' ? 'bg-emerald-500/[0.03]' : 'bg-red-500/[0.03]'
+                              )}>
+                                <span className={cn(
+                                  "mt-0.5 shrink-0 text-[9px] font-medium px-1.5 py-0.5 rounded-full border",
+                                  item.type === 'bullish'
+                                    ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
+                                    : 'bg-red-500/15 text-red-400 border-red-500/20'
+                                )}>
+                                  {item.type === 'bullish' ? '▲' : '▼'}
                                 </span>
-                                <span className="text-zinc-300 leading-relaxed line-clamp-1">{item.title}</span>
-                                {item.source && (
-                                  <span className="text-zinc-600 shrink-0 ml-auto text-[9px]">{item.source}</span>
-                                )}
+                                <span className="text-[11px] text-zinc-300 leading-snug">{item.text}</span>
                               </div>
                             ))}
                           </div>
                         </div>
                       )}
-                    </div>
-                  )}
 
-                  {/* Key Levels */}
-                  {parsed.keyLevels && (
-                    <div className="flex flex-wrap gap-2 text-[11px]">
-                      <span className="px-2.5 py-1.5 rounded-md bg-zinc-800/80 border border-zinc-700/40 text-zinc-300 flex items-center gap-1.5">
-                        <BarChart3 className="h-3 w-3 text-zinc-500" />
-                        {parsed.keyLevels}
-                      </span>
-                    </div>
-                  )}
+                      {/* News Impact */}
+                      {(parsed.newsImpact || (recentNews && recentNews.length > 0)) && (
+                        <div className="rounded-lg p-3 bg-amber-500/5 border border-amber-500/15">
+                          <div className="text-[10px] text-amber-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                            <Newspaper className="h-3 w-3" /> News & Sentiment Impact
+                          </div>
+                          {parsed.newsImpact && (
+                            <p className="text-xs text-zinc-300 leading-relaxed"><FormatText text={parsed.newsImpact} /></p>
+                          )}
+                          {recentNews && recentNews.length > 0 && (
+                            <div className={parsed.newsImpact ? "mt-2 pt-2 border-t border-amber-500/10" : ""}>
+                              <div className="space-y-1.5">
+                                {recentNews.slice(0, 4).map((item, i) => (
+                                  <div key={i} className="flex items-start gap-1.5 text-[11px]">
+                                    <span className={`mt-0.5 shrink-0 ${item.sentiment === 'positive' ? 'text-emerald-400' :
+                                      item.sentiment === 'negative' ? 'text-red-400' : 'text-zinc-500'
+                                      }`}>
+                                      {item.sentiment === 'positive' ? '▲' : item.sentiment === 'negative' ? '▼' : '•'}
+                                    </span>
+                                    <span className="text-zinc-300 leading-relaxed line-clamp-1">{item.title}</span>
+                                    {item.source && (
+                                      <span className="text-zinc-600 shrink-0 ml-auto text-[9px]">{item.source}</span>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
-                  {/* Bottom Line */}
-                  {parsed.bottomLine && (
-                    <div className="rounded-lg p-3 bg-gradient-to-br from-purple-500/10 to-violet-500/5 border border-purple-500/20">
-                      <div className="text-[10px] text-purple-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                        <Zap className="h-3 w-3" /> Bottom Line
-                      </div>
-                      <p className="text-sm text-zinc-200 font-medium leading-relaxed"><FormatText text={parsed.bottomLine} /></p>
-                    </div>
-                  )}
-
-                  {/* Fallback: if structured parsing failed, show raw */}
-                  {!parsed.summary && !parsed.keyDrivers.length && !parsed.bottomLine && (
-                    <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-line">
-                      <FormatText text={parsed.raw} />
-                    </p>
-                  )}
-
-                  {/* Data Sources Footer */}
-                  {dataSources.length > 0 && (
-                    <div className="pt-2 border-t border-zinc-800/50">
-                      <div className="flex flex-wrap gap-1.5">
-                        {dataSources.map((source, i) => (
-                          <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800/60 text-zinc-500 border border-zinc-700/30">
-                            {source}
+                      {/* Key Levels */}
+                      {parsed.keyLevels && (
+                        <div className="flex flex-wrap gap-2 text-[11px]">
+                          <span className="px-2.5 py-1.5 rounded-md bg-zinc-800/80 border border-zinc-700/40 text-zinc-300 flex items-center gap-1.5">
+                            <BarChart3 className="h-3 w-3 text-zinc-500" />
+                            {parsed.keyLevels}
                           </span>
-                        ))}
-                      </div>
-                      {lastUpdated && (
-                        <div className="text-[9px] text-zinc-600 mt-1.5">
-                          Last updated: {lastUpdated.toLocaleString()}
+                        </div>
+                      )}
+
+                      {/* Bottom Line */}
+                      {parsed.bottomLine && (
+                        <div className="rounded-lg p-3 bg-gradient-to-br from-purple-500/10 to-violet-500/5 border border-purple-500/20">
+                          <div className="text-[10px] text-purple-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                            <Zap className="h-3 w-3" /> Bottom Line
+                          </div>
+                          <p className="text-sm text-zinc-200 font-medium leading-relaxed"><FormatText text={parsed.bottomLine} /></p>
+                        </div>
+                      )}
+
+                      {/* Fallback: if structured parsing failed, show raw */}
+                      {!parsed.summary && !parsed.keyDrivers.length && !parsed.bottomLine && (
+                        <p className="text-xs text-zinc-400 leading-relaxed whitespace-pre-line">
+                          <FormatText text={parsed.raw} />
+                        </p>
+                      )}
+
+                      {/* Data Sources Footer */}
+                      {dataSources.length > 0 && (
+                        <div className="pt-2 border-t border-zinc-800/50">
+                          <div className="flex flex-wrap gap-1.5">
+                            {dataSources.map((source, i) => (
+                              <span key={i} className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-800/60 text-zinc-500 border border-zinc-700/30">
+                                {source}
+                              </span>
+                            ))}
+                          </div>
+                          {lastUpdated && (
+                            <div className="text-[9px] text-zinc-600 mt-1.5">
+                              Last updated: {lastUpdated.toLocaleString()}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
+                  {/* Bottom fade gradient to hint at scrollable content */}
+                  <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-zinc-950/90 to-transparent pointer-events-none rounded-b-lg" />
                 </div>
               </motion.div>
             )}
