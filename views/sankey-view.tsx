@@ -130,6 +130,12 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                                     : "bg-zinc-800 text-white hover:bg-zinc-700"
                             )}
                         >
+                            <img
+                                src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${ticker}.png`}
+                                alt={ticker}
+                                className="h-3.5 w-3.5 sm:h-4 sm:w-4 object-contain rounded-sm"
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                            />
                             {ticker}
                         </button>
                     ))}
@@ -232,7 +238,12 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                                                 {formatCurrency(grossProfit)}
                                             </div>
                                             <div className="text-[10px] sm:text-xs text-zinc-500 mt-0.5 sm:mt-1">
-                                                {(Number(sankeyData.financials.grossProfitMargin || 0) * 100).toFixed(1)}% Margin
+                                                {(() => {
+                                                    const apiMargin = Number(sankeyData.financials.grossProfitMargin || 0);
+                                                    const computedMargin = totalRevenue > 0 ? grossProfit / totalRevenue : 0;
+                                                    const margin = apiMargin > 0 ? apiMargin : computedMargin;
+                                                    return `${(margin * 100).toFixed(1)}% Margin`;
+                                                })()}
                                             </div>
                                         </div>
                                         <div className="bg-zinc-900 rounded-lg p-3 sm:p-4 border border-zinc-800">
