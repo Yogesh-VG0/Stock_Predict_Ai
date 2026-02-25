@@ -287,10 +287,13 @@ def calculate_technicals(df: pd.DataFrame) -> Dict:
 USE_GROQ = os.getenv("GROQ_API_KEY") is not None
 USE_GEMINI = os.getenv("GOOGLE_API_KEY") is not None
 
-# Groq models (much better free tier: 1K-14K RPD vs Gemini's 20 RPD)
+# Groq models — prioritize by token budget, not quality.
+# Free tier TPD limits are the binding constraint for 100 tickers:
+#   llama-3.1-8b-instant:      500K TPD, 14.4K RPD  ← primary
+#   llama-3.3-70b-versatile:   100K TPD, 1K RPD     ← exhausts after ~40 tickers
 GROQ_MODEL_FALLBACK_CHAIN = [
-    "llama-3.3-70b-versatile",  # Best quality: 1K RPD (vs Gemini's 20)
-    "llama-3.1-8b-instant",      # Fast fallback: 14.4K RPD
+    "llama-3.1-8b-instant",      # Primary: 500K TPD, 14.4K RPD
+    "llama-3.3-70b-versatile",   # Fallback: 100K TPD, 1K RPD
 ]
 
 # Gemini models (free tier: 20 RPD max)
@@ -314,10 +317,10 @@ else:
     API_PROVIDER = None
     DEFAULT_MODEL = None
 
-MAX_RETRIES = 5
-INITIAL_BACKOFF = 60
-MAX_BACKOFF = 300  # Max 5 minutes between retries
-BASE_BACKOFF = 2   # Exponential base
+MAX_RETRIES = 3
+INITIAL_BACKOFF = 10     # Start at 10s (was 60s — caused multi-minute stalls)
+MAX_BACKOFF = 30         # Cap at 30s (was 300s — caused 2h timeout)
+BASE_BACKOFF = 2         # Exponential base
 
 # Global rate limiter: track last API call time per model to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
@@ -326,9 +329,9 @@ _MIN_CALL_INTERVAL = 4.0  # Minimum seconds between API calls per model (Groq fr
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
 _MODEL_RPD_LIMITS: Dict[str, int] = {
-    # Groq models (much higher limits)
-    "llama-3.3-70b-versatile": 900,    # leave headroom vs 1K limit
-    "llama-3.1-8b-instant": 14000,     # leave headroom vs 14.4K limit
+    # Groq models — conservative limits (leave headroom for rate safety)
+    "llama-3.1-8b-instant": 500,       # Primary: 14.4K RPD limit, cap at 500 for CI
+    "llama-3.3-70b-versatile": 100,    # Fallback: 1K RPD limit, cap at 100 for CI
     # Gemini models (very low free tier limits)
     "gemini-2.5-pro": 0,               # Free tier: 0 RPD (not available)
     "gemini-2.5-flash": 18,             # leave headroom vs 20 limit
@@ -1470,8 +1473,8 @@ def generate_explanations(
                         results["details"].append({"ticker": remaining_ticker, "status": "skipped", "reason": "quota_exceeded"})
                 break  # Exit the loop early instead of continuing
             
-            # Exponential backoff before trying next ticker
-            backoff_time = min(60 * (2 ** (quota_failures - 1)), 300)  # Max 5 minutes
+            # Brief backoff before trying next ticker (kept very short to avoid stalling CI)
+            backoff_time = min(5 * (2 ** (quota_failures - 1)), 15)  # 5s, 10s, 15s max
             logger.info("  Sleeping %ds before retrying next ticker…", backoff_time)
             time.sleep(backoff_time)
             continue
