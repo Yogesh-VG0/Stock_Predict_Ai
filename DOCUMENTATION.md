@@ -319,7 +319,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | **Frontend** | Next.js 14 + React 18 | UI framework |
-| **Routing** | React Router DOM (inside Next.js shell) | Page navigation (see [Why We Did This](#why-we-use-react-router-inside-nextjs)) |
+| **Routing** | Next.js App Router (`app/`) | Full-stack routing, layout preservation, server/client boundaries |
 | **Styling** | Tailwind CSS + Shadcn/UI | Component styling |
 | **Charts** | TradingView Widgets (external) + ECharts (Sankey) | Stock charts + Financial flow visualization |
 | **Sankey Chart** | Apache ECharts | Interactive income statement flow visualization showing revenue sources → expenses → profits |
@@ -328,7 +328,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **ML Backend** | FastAPI (Python) | ML serving |
 | **Predictor** | LightGBM | Stock price prediction (the ONLY price predictor) |
 | **Sentiment Scorers** | FinBERT, RoBERTa, VADER | Sentiment analysis (INPUT features, not predictors) |
-| **Explainer** | SHAP + Google Gemini 2.5 (Pro/Flash auto-fallback) | SHAP decomposes predictions; Gemini writes stock-specific English text |
+| **Explainer** | SHAP + Groq / Google Gemini | SHAP decomposes predictions; Groq (Llama-3.1-8b) writes stock-specific English text with Gemini 2.5 as auto-fallback |
 | **Database** | MongoDB Atlas | Primary data store |
 | **Cache** | Redis (optional) | Caching & rate limiting |
 | **Real-time** | Finnhub WebSocket | Live stock prices |
@@ -352,7 +352,8 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **RapidAPI** | Fear & Greed Index | Node backend | `/v1/fgi` | `RAPIDAPI_KEY` | Per-plan limits | Not stored (returned to frontend only) |
 | **Calendarific** | US market holidays | Node backend | `/v2/holidays` | `CALENDARIFIC_API_KEY` | Per-plan limits | Redis `us_holidays_{year}` (1yr TTL) + in-memory |
 | **financialdata.net** | Stock prices for technical indicators | Node backend | `/api/v1/stock-prices` | `FINANCIALDATA_API_KEY` | Free: 300 req/day; 5 calls/min enforced | In-memory cache only (24hr indicators, 12hr prices) |
-| **Google Gemini** | AI-powered stock-specific explanation generation | ML backend (GitHub Actions) | `generate_content` API (auto-fallback: pro→flash→flash-lite) | `GOOGLE_API_KEY` | Pro: 15 RPM, 1.5K RPD; Flash: 5 RPM, 20 RPD | `prediction_explanations` (MongoDB) |
+| **Groq / Llama 3** | AI-powered stock-specific explanation generation (Primary) | ML backend (GitHub Actions) | `/v1/chat/completions` API (llama-3.1-8b-instant primary, 70b fallback) | `GROQ_API_KEY` | Free Tier: 30 RPM, 14.4K RPD, 500K TPD (much higher daily token budget) | `prediction_explanations` (MongoDB) |
+| **Google Gemini** | AI explanations (Fallback) | ML backend (GitHub Actions) | `generate_content` API (auto-fallback: pro→flash) | `GOOGLE_API_KEY` | Free Tier limits (used only if Groq hits 429 quota) | `prediction_explanations` (MongoDB) |
 | **Nasdaq** | Short interest data | ML backend | `/api/quote/{ticker}/short-interest` | None (public) | Not explicitly limited | Within `sentiment` collection (MongoDB) |
 | **Finviz** | Short interest fallback + news headlines | ML backend | Web scraping | None | Sequential with delays | Within `sentiment` collection (MongoDB) |
 | **Seeking Alpha** | Comment sentiment | ML backend | Web scraping (Playwright) | None | Sequential with locks; proxy rotation | `seeking_alpha_comments`, `seeking_alpha_sentiment` (MongoDB) |
@@ -369,9 +370,10 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
 **Required secrets for GitHub Actions:**
 - `MONGODB_URI` — MongoDB Atlas connection string
 - `FINNHUB_API_KEY` — Finnhub API key
-- `FRED_API_KEY` — FRED API key
+- `FRED_API_KEY` — FRED API key (used in training and sentiment_cron)
 - `FMP_API_KEY` — Financial Modeling Prep key
-- `GOOGLE_API_KEY` — Google Gemini API key
+- `GROQ_API_KEY` — Groq API key for Llama 3.1 AI explanations
+- `GOOGLE_API_KEY` — Google Gemini API key (fallback)
 - `MARKETAUX_API_KEY` — Marketaux API key
 - `ALPHAVANTAGE_API_KEY` — Alpha Vantage key (optional)
 - `REDDIT_CLIENT_ID` — Reddit app client ID
@@ -2366,6 +2368,18 @@ All external API calls use retry-with-backoff to handle transient errors (rate l
 ```
 
 **Error logging**: All exception handlers use `repr(e)` instead of `str(e)` to prevent blank error messages when exceptions have no message (e.g., bare `aiohttp.ClientError()`).
+
+### Pipeline Timeout & Safety Hardening
+
+Recent updates significantly hardened the reliability of the ML pipeline against CI timeouts and silent failures:
+
+| Component | Issue Fixed | Resolution Mechanism |
+|-----------|-------------|----------------------|
+| **Groq 429 Timeouts** | Pipeline stalled out on 2-hour limits due to 300s backoffs when 70b model hit 100K token limits | Switched primary explanation model to `llama-3.1-8b-instant` (500K TPD limit). Reduced error backoff from 300s → 30s. Cap quota-exhaustion limit quickly. |
+| **FRED Data Scarcity** | FRED macro data was skipped during sentiment cron due to missing env vars | Added `FRED_API_KEY` explicitly to the workflow YAML `sentiment_cron` step |
+| **Pickle Security** | Pre-2026 code used Python `pickle` for caching sentiment files | Migrated `mongodb.py` and `economic_calendar.py` to `json.dumps()` + `gzip` for secure deserialization |
+| **NaN Feature Eradication** | `.fillna(0)` silently destroyed NLP sentiment score NA logic | Prevented Sentiment/Insider features missing values from being 0-filled via a `_nan_preserve` exclusion set. |
+| **LightGBM NaNs** | `np.zeros` obscured LightGBM native missing value splits | Refactored `predictor.py` to use `np.full(np.nan)` to explicitly signal missing boundaries to trees. |
 
 ### Feature-Name Enforcement
 
