@@ -32,6 +32,11 @@ USE_SENTIMENT_FEATURES = True
 # Decoupled from sentiment so each alternative-data source can be A/B-tested independently.
 USE_INSIDER_FEATURES = True
 
+# v2.0 feature toggles — new data sources from stored MongoDB data
+USE_EARNINGS_FEATURES = True       # Post-earnings drift (FMP earnings data)
+USE_FUNDAMENTAL_FEATURES = True    # Valuation ratios (Finnhub basic financials)
+USE_SHORT_INTEREST_FEATURES = True # Crowding signal (short interest data)
+
 # Walk-forward folds: 0 = single split; 3-4 = rolling folds, report median metrics (credibility upgrade)
 WALK_FORWARD_FOLDS = 3
 
@@ -51,15 +56,16 @@ POOL_CONFIG = {
 
 # LightGBM params - conservative to avoid overfitting
 # Huber: robust to outliers (earnings surprises, black swans)
+# v2.0: tuned for expanded feature set (54+ features)
 LIGHTGBM_PARAMS = {
     "objective": "huber",
     "alpha": 0.9,  # Huber delta (moderately robust)
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 150,
+    "n_estimators": 200,           # v2.0: 150→200 (more features need more rounds)
     "max_depth": 4,
-    "learning_rate": 0.05,
-    "num_leaves": 15,
+    "learning_rate": 0.03,         # v2.0: 0.05→0.03 (slower learning, more stable)
+    "num_leaves": 20,              # v2.0: 15→20 (slightly more complex for interactions)
     "min_child_samples": 25,  # Allow smaller leaves for limited per-ticker data
     "reg_alpha": 0.1,
     "reg_lambda": 0.1,
@@ -75,7 +81,7 @@ LIGHTGBM_PARAMS = {
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
 FEATURE_PRUNING = {
     "enabled": True,
-    "top_k": 30,                       # Keep top-k features by gain per horizon
+    "top_k": 35,                       # v2.0: 30→35 (accommodate ~12 new features)
     "protected_features": [            # Core stability features — never prune
         "log_return_1d", "log_return_5d", "log_return_21d",
         "volatility_20d", "volume_ratio", "rsi",
@@ -104,6 +110,18 @@ FEATURE_PRUNING = {
         # FMP analyst features (v1.5) — fundamental signals from analyst consensus
         "analyst_sentiment_7d",                    # analyst estimates consensus (7d rolling)
         "analyst_rating_7d",                       # overall analyst rating score (7d rolling)
+        # Earnings features (v2.0) — post-earnings drift signals
+        "earnings_surprise",                       # EPS actual - estimated
+        "earnings_beat",                           # beat/miss binary signal
+        "earnings_recency",                        # decay weight since last earnings
+        # Fundamental features (v2.0) — valuation signals
+        "fund_pe_ratio",                           # price-to-earnings ratio
+        "fund_roe",                                # return on equity
+        "fund_beta",                               # market sensitivity
+        # Short interest features (v2.0) — crowding signals
+        "si_short_float_pct",                      # short interest % of float
+        "si_days_to_cover",                        # squeeze pressure metric
     ],
     "min_features": 15,                # Don't prune below this many features
 }
+

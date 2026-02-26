@@ -36,7 +36,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-MODEL_VERSION = "v1.5.0"
+MODEL_VERSION = "v2.0.0"
 
 
 class StockPredictor:

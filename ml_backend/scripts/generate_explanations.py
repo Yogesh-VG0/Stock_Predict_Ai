@@ -97,6 +97,21 @@ FEATURE_DISPLAY_NAMES = {
     "insider_net_value_30d": "Insider net trading (30-day)",
     "insider_buy_ratio_30d": "Insider buy ratio (30-day)",
     "insider_cluster_buying": "Insider cluster buying signal",
+    # Earnings features (v2.0)
+    "earnings_surprise": "Earnings surprise (EPS beat/miss)",
+    "earnings_beat": "Earnings beat/miss signal",
+    "earnings_recency": "Time since last earnings report",
+    "earnings_surprise_pct": "Earnings surprise (% of estimate)",
+    # Fundamental features (v2.0)
+    "fund_pe_ratio": "P/E ratio (valuation)",
+    "fund_pb_ratio": "Price-to-Book ratio",
+    "fund_dividend_yield": "Dividend yield",
+    "fund_roe": "Return on equity (profitability)",
+    "fund_beta": "Stock beta (market sensitivity)",
+    # Short interest features (v2.0)
+    "si_short_float_pct": "Short interest (% of float)",
+    "si_days_to_cover": "Short interest days to cover",
+    "si_available": "Short interest data available",
 }
 
 

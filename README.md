@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Full-stack stock analytics &amp; ML prediction platform for the S&amp;P 100</strong><br/>
-  Real-time data · 10+ sentiment sources · 42+ engineered features · plain-English AI explanations
+  Real-time data · 10+ sentiment sources · 77 engineered features · plain-English AI explanations
 </p>
 
 <p align="center">
@@ -251,9 +251,9 @@ A prediction generates a `trade_recommended = True` signal only when:
 - P(return > 0) > 52%
 - Predicted return exceeds transaction costs (10 basis points)
 
-### 42+ Engineered Features
+### 77 Engineered Features
 
-Features are organized into seven categories, all using `shift(1)` to ensure **point-in-time safety** (no future data leakage):
+Features are organized into ten categories, all using `shift(1)` to ensure **point-in-time safety** (no future data leakage):
 
 <details>
 <summary><strong>Price & Return Features (6)</strong></summary>
@@ -348,6 +348,42 @@ Features are organized into seven categories, all using `shift(1)` to ensure **p
 | `insider_net_value_30d` | Net insider trading value (30-day) |
 | `insider_buy_ratio_30d` | Insider buy/sell ratio |
 | `insider_cluster_buying` | Multiple insiders buying simultaneously |
+
+</details>
+
+<details>
+<summary><strong>Earnings Features (4) — v2.0</strong></summary>
+
+| Feature | Description |
+|---------|-------------|
+| `earnings_surprise` | EPS actual − EPS estimated (latest earnings) |
+| `earnings_beat` | +1 if beat, −1 if missed, 0 if met |
+| `earnings_recency` | 1/(days since last earnings + 1) decay weight |
+| `earnings_surprise_pct` | Surprise normalized by estimate magnitude |
+
+</details>
+
+<details>
+<summary><strong>Fundamental Features (5) — v2.0</strong></summary>
+
+| Feature | Description |
+|---------|-------------|
+| `fund_pe_ratio` | Price-to-Earnings ratio (TTM) |
+| `fund_pb_ratio` | Price-to-Book ratio |
+| `fund_dividend_yield` | Indicated annual dividend yield |
+| `fund_roe` | Return on Equity (TTM) |
+| `fund_beta` | Stock beta vs market |
+
+</details>
+
+<details>
+<summary><strong>Short Interest Features (3) — v2.0</strong></summary>
+
+| Feature | Description |
+|---------|-------------|
+| `si_short_float_pct` | Short interest as % of float |
+| `si_days_to_cover` | Short interest / avg daily volume |
+| `si_available` | 1 if short interest data exists, 0 otherwise |
 
 </details>
 
