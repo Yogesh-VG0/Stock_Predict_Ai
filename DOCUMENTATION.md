@@ -1,6 +1,6 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-02-24
+> **Last updated**: 2026-02-26
 
 ---
 
@@ -70,7 +70,7 @@ This project uses the word "model" for three very different things. Beginners of
 ### 1. The Predictor — LightGBM (the only model that predicts prices)
 
 - **What it is**: A gradient-boosted decision tree (a math/statistics algorithm)
-- **Input**: 42+ numeric features (price history, sentiment scores, macro data, etc.)
+- **Input**: 77 numeric features (price history, sentiment scores, macro data, earnings, fundamentals, short interest, etc.)
 - **Output**: A number — predicted log-return (e.g., +0.002 means ~+0.2%)
 - **Where it runs**: Python ML backend, during the daily GitHub Actions pipeline
 - **File**: `ml_backend/models/predictor.py`
@@ -215,8 +215,8 @@ GitHub Actions wakes up and starts the daily pipeline.
 ║  prices from Yahoo Finance, insider trades from Finnhub,        ║
 ║  macro indicators from FRED, and everything else from MongoDB.  ║
 ║                                                                ║
-║  It engineers 42+ features: price returns, volatility, RSI,     ║
-║  sentiment scores, insider activity, yield curve spreads...     ║
+║  It engineers 77 features: price returns, volatility, RSI,      ║
+║  sentiment, insider activity, earnings, fundamentals, SI...     ║
 ║                                                                ║
 ║  Then it trains ONE LightGBM model per horizon (1-day, 7-day,   ║
 ║  30-day) across all 100 tickers. The models are saved to disk.  ║
@@ -998,8 +998,8 @@ The ML pipeline predicts **stock price returns** (not absolute prices) for 100 S
 - **This does NOT predict prices** — it produces a feature that the LightGBM predictor uses
 
 #### Step 3: Feature Engineering (`data/features_minimal.py`)
-- Reads price data, sentiment, insider trades, macro indicators from MongoDB
-- Computes 42+ features organized into categories:
+- Reads price data, sentiment, insider trades, macro indicators, earnings, fundamentals, and short interest from MongoDB
+- Computes 77 features organized into categories:
 
 **Price & Return Features:**
 | Feature | Description |
@@ -1073,6 +1073,30 @@ The ML pipeline predicts **stock price returns** (not absolute prices) for 100 S
 | `insider_buy_ratio_30d` | Insider buy/sell ratio |
 | `insider_cluster_buying` | Multiple insiders buying simultaneously |
 
+**Earnings Features** (v2.0 — from FMP earnings data):
+| Feature | Description |
+|---------|-------------|
+| `earnings_surprise` | EPS actual - EPS estimated (latest earnings) |
+| `earnings_beat` | +1 if beat, -1 if missed, 0 if met/unknown |
+| `earnings_recency` | 1/(days since last earnings + 1) decay weight |
+| `earnings_surprise_pct` | Surprise normalized by estimate magnitude |
+
+**Fundamental Features** (v2.0 — from Finnhub basic financials):
+| Feature | Description |
+|---------|-------------|
+| `fund_pe_ratio` | Price-to-Earnings ratio (TTM) |
+| `fund_pb_ratio` | Price-to-Book ratio |
+| `fund_dividend_yield` | Indicated annual dividend yield |
+| `fund_roe` | Return on Equity (TTM) |
+| `fund_beta` | Stock beta vs market |
+
+**Short Interest Features** (v2.0 — from Nasdaq/Finviz data):
+| Feature | Description |
+|---------|-------------|
+| `si_short_float_pct` | Short interest as % of float |
+| `si_days_to_cover` | Short interest / avg daily volume |
+| `si_available` | 1 if short interest data exists, 0 otherwise |
+
 **Point-in-Time Safety**: Every feature uses `shift(1)` to ensure the model never sees future data. Row t only uses data available at market close on day t-1.
 
 #### Step 4: Target Computation
@@ -1103,13 +1127,13 @@ This means the model predicts how much the stock will beat or lag the market, no
 - Tabular cross-sectional features (many tickers, many numeric features) suit tree models better than sequential RNNs; LSTMs excel at long raw sequences (e.g. tick-by-tick), not pre-engineered panel data.
 - LightGBM needs less data and compute, is easier to tune and deploy in CI, and gives interpretable feature importance and fast TreeSHAP for explanations.
 
-**Hyperparameters:**
+**Hyperparameters** (v2.0):
 ```
 Objective:        huber (robust to outlier returns)
-Learning rate:    0.05
+Learning rate:    0.03 (v2.0: slower for expanded feature set)
 Max depth:        4 (prevents overfitting)
-Num leaves:       15
-N estimators:     150
+Num leaves:       20 (v2.0: slightly more complex for interactions)
+N estimators:     200 (v2.0: more rounds for more features)
 Min child samples: 25
 Regularization:   L1=0.1, L2=0.1
 Subsampling:      80% rows, 80% columns
@@ -1119,7 +1143,7 @@ Subsampling:      80% rows, 80% columns
 1. Combine data from all 100 tickers
 2. Train ONE model per horizon (3 models total)
 3. Uses walk-forward validation with purge/embargo gaps
-4. Feature pruning: Keep top 30 features per horizon (protected features always kept)
+4. Feature pruning: Keep top 35 features per horizon (protected features always kept)
 
 **Why Pooled?**
 A pooled model sees patterns across all stocks (e.g., "when VIX spikes, tech stocks drop"), making it more robust than per-ticker models which have limited data.

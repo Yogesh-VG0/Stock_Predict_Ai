@@ -11,7 +11,10 @@ import numpy as np
 import pandas as pd
 
 from ..utils.tickers import get_ticker_id
-from ..config.feature_config_v1 import FEATURE_CONFIG_V1, USE_SENTIMENT_FEATURES, USE_INSIDER_FEATURES
+from ..config.feature_config_v1 import (
+    FEATURE_CONFIG_V1, USE_SENTIMENT_FEATURES, USE_INSIDER_FEATURES,
+    USE_EARNINGS_FEATURES, USE_FUNDAMENTAL_FEATURES, USE_SHORT_INTEREST_FEATURES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -305,6 +308,33 @@ class MinimalFeatureEngineer:
                                 "insider_activity_z_90d", "insider_net_value_z_90d",
                                 "insider_cluster_buying", "insider_available"):
                         df[_ic] = 0.0
+
+                # 12. Earnings features (post-earnings drift from FMP data)
+                # Uses earnings_features.py adapter — same shift(1) PIT pattern.
+                if USE_EARNINGS_FEATURES:
+                    df = self._add_earnings_features(df, ticker, mc)
+                else:
+                    for _ec in ("earnings_surprise", "earnings_beat",
+                                "earnings_recency", "earnings_surprise_pct"):
+                        df[_ec] = float("nan")
+
+                # 13. Fundamental features (valuation ratios from Finnhub)
+                # Uses fundamental_features.py adapter — same shift(1) PIT pattern.
+                if USE_FUNDAMENTAL_FEATURES:
+                    df = self._add_fundamental_features(df, ticker, mc)
+                else:
+                    for _fc in ("fund_pe_ratio", "fund_pb_ratio",
+                                "fund_dividend_yield", "fund_roe", "fund_beta"):
+                        df[_fc] = float("nan")
+
+                # 14. Short interest features (crowding signal)
+                # Uses short_interest_features.py adapter — same shift(1) PIT pattern.
+                if USE_SHORT_INTEREST_FEATURES:
+                    df = self._add_short_interest_features(df, ticker, mc)
+                else:
+                    for _sic in ("si_short_float_pct", "si_days_to_cover",
+                                 "si_available"):
+                        df[_sic] = 0.0
     
                 # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
                 # SPY_close used for market-neutral target only, not as feature
@@ -351,6 +381,14 @@ class MinimalFeatureEngineer:
                     "insider_buy_value_30d", "insider_sell_value_30d",
                     "insider_net_value_30d",
                     "insider_activity_z_90d", "insider_net_value_z_90d",
+                    # Earnings features (v2.0) — NaN when no earnings data
+                    "earnings_surprise", "earnings_beat",
+                    "earnings_recency", "earnings_surprise_pct",
+                    # Fundamental features (v2.0) — NaN when no fundamentals
+                    "fund_pe_ratio", "fund_pb_ratio",
+                    "fund_dividend_yield", "fund_roe", "fund_beta",
+                    # Short interest features (v2.0) — score-based NaN
+                    "si_short_float_pct", "si_days_to_cover",
                 }
                 cols_to_fill = [c for c in self.feature_columns
                                 if c in df_clean.columns and c not in _nan_preserve]
@@ -822,6 +860,81 @@ class MinimalFeatureEngineer:
         except Exception as e:
             logger.warning("Could not add insider features for %s: %s", ticker, e)
             for col, default in _insider_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
+        return df
+
+    def _add_earnings_features(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
+        """Add post-earnings drift features from FMP earnings data.
+
+        Delegates to earnings_features.make_earnings_features which handles
+        MongoDB querying, PIT alignment, and shift(1) for point-in-time safety.
+        Score-based columns are left as NaN when data is absent.
+        """
+        _NAN = float("nan")
+        _earn_defaults = {
+            "earnings_surprise": _NAN, "earnings_beat": _NAN,
+            "earnings_recency": _NAN, "earnings_surprise_pct": _NAN,
+        }
+        try:
+            from .earnings_features import make_earnings_features
+
+            earn_df = make_earnings_features(df, ticker, mongo_client)
+            for col in earn_df.columns:
+                df[col] = earn_df[col].values
+        except Exception as e:
+            logger.warning("Could not add earnings features for %s: %s", ticker, e)
+            for col, default in _earn_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
+        return df
+
+    def _add_fundamental_features(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
+        """Add valuation ratio features from Finnhub basic financials.
+
+        Delegates to fundamental_features.make_fundamental_features which handles
+        MongoDB querying and shift(1) for point-in-time safety.
+        All columns use NaN when data is absent.
+        """
+        _NAN = float("nan")
+        _fund_defaults = {
+            "fund_pe_ratio": _NAN, "fund_pb_ratio": _NAN,
+            "fund_dividend_yield": _NAN, "fund_roe": _NAN, "fund_beta": _NAN,
+        }
+        try:
+            from .fundamental_features import make_fundamental_features
+
+            fund_df = make_fundamental_features(df, ticker, mongo_client)
+            for col in fund_df.columns:
+                df[col] = fund_df[col].values
+        except Exception as e:
+            logger.warning("Could not add fundamental features for %s: %s", ticker, e)
+            for col, default in _fund_defaults.items():
+                if col not in df.columns:
+                    df[col] = default
+        return df
+
+    def _add_short_interest_features(self, df: pd.DataFrame, ticker: str, mongo_client) -> pd.DataFrame:
+        """Add short interest features from MongoDB.
+
+        Delegates to short_interest_features.make_short_interest_features which
+        handles MongoDB querying and shift(1) for point-in-time safety.
+        Score-based columns use NaN when data is absent.
+        """
+        _si_defaults = {
+            "si_short_float_pct": float("nan"),
+            "si_days_to_cover": float("nan"),
+            "si_available": 0.0,
+        }
+        try:
+            from .short_interest_features import make_short_interest_features
+
+            si_df = make_short_interest_features(df, ticker, mongo_client)
+            for col in si_df.columns:
+                df[col] = si_df[col].values
+        except Exception as e:
+            logger.warning("Could not add short interest features for %s: %s", ticker, e)
+            for col, default in _si_defaults.items():
                 if col not in df.columns:
                     df[col] = default
         return df
