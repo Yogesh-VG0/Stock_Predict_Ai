@@ -197,7 +197,7 @@ class ShortInterestAnalyzer:
                                 short_data.sort(key=lambda x: x['settlementDate'], reverse=True)
                                 return short_data[:20]  # Return latest 20 records
                             else:
-                                logger.warning(f"❌ No short interest data found in API response for {ticker}")
+                                logger.info(f"No short interest data in Nasdaq API response for {ticker}")
                                 return []
                                 
                         except json.JSONDecodeError as e:
@@ -212,7 +212,7 @@ class ShortInterestAnalyzer:
                         return []
                         
         except Exception as e:
-            logger.warning(f"❌ Error in direct API call: {e}")
+            logger.info(f"Nasdaq short interest API unavailable for {ticker}: {e}")
             return []
 
     def _store_short_interest_raw(self, ticker: str, records: List[Dict]) -> None:
@@ -266,7 +266,7 @@ class ShortInterestAnalyzer:
                 self._store_short_interest_raw(ticker, nasdaq_data)
                 return nasdaq_data
             else:
-                logger.warning(f"❌ No data from Nasdaq API for {ticker}, trying Finviz fallback")
+                logger.info(f"No data from Nasdaq API for {ticker}, using Finviz fallback")
                 data = await self.fetch_finviz_short_interest(ticker)
                 self._store_short_interest_raw(ticker, data)
                 return data
