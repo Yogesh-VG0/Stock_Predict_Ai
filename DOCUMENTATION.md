@@ -35,6 +35,7 @@
 27. [API Rate Limit Compliance & Data Priority](#27-api-rate-limit-compliance--data-priority)
 28. [Technical Deep Dive: The AI Machine](#28-technical-deep-dive-the-ai-machine)
 29. [Stateless-to-Stateful Bridge: The Role of MongoDB](#29-stateless-to-stateful-bridge-the-role-of-mongodb)
+30. [Frontend Performance & Progressive Loading](#30-frontend-performance--progressive-loading)
 
 ---
 
@@ -2593,3 +2594,26 @@ If the GitHub VM crashes halfway through Batch #5:
 ---
 
 *End of documentation. Last updated 2026-02-21.*
+
+---
+
+## 30. Frontend Performance & Progressive Loading
+
+StockPredict AI is designed to feel fast and responsive even when backend APIs or ML explanations take several seconds to generate.
+
+### Parallelized API Waterfall
+We avoid sequential "waterfall" requests where one call waits for another. In `stock-detail.tsx`, we use `Promise.allSettled()` to fetch company details, AI explanations, live prices, and news concurrently. This reduces total load time from the *sum* of all calls to the *maximum* of any single call.
+
+### Decoupled TradingView Rendering
+TradingView widgets (Charts, Technicals, Profiles) are decoupled from backend data dependencies.
+- The **Advanced Chart** renders immediately in its own `Suspense` boundary using only the ticker symbol from the URL.
+- It initializes from TradingView's CDN (~300ms) while the heavier ML backend requests are still in flight.
+
+### Progressive Loading UX
+Instead of a full-page "Skeleton Screen" that blocks everything, we use **Granular Progressive Loading**:
+- **Immediate Shell**: Navigation, search bar, and chart appear instantly.
+- **Micro-Skeletons**: Individual cards (like AI Explanation or News) show their own pulse-loaders.
+- **Async Hydration**: Sections animate in as their specific data arrives, preventing "layout shift" while maintaining a snappy feel.
+
+### Prefetching Strategy
+The `usePrefetch` hook pre-warms the cache for the top 10 most visited stocks (`AAPL`, `MSFT`, `NVDA`, etc.) on initial app load. This ensures that clicking a popular ticker often results in an **instant (0ms) data load** from the in-memory cache.
