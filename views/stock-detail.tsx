@@ -145,113 +145,86 @@ export default function StockDetail({ }: StockDetailProps) {
     try {
       // Check prefetch cache first for instant loading
       const cachedDetails = getCachedData<StockDetails>(`stock-details-${symbol}`)
+      const cachedExplanation = getCachedData<any>(`explanation-${symbol}`)
 
-      // Load stock details (from cache or API)
-      const details = cachedDetails || await getStockDetails(symbol)
+      // Fire ALL requests in parallel instead of sequential waterfall
+      const [detailsResult, explanationResult, priceResult, newsResult] = await Promise.allSettled([
+        cachedDetails ? Promise.resolve(cachedDetails) : getStockDetails(symbol),
+        cachedExplanation ? Promise.resolve(cachedExplanation) : getComprehensiveAIExplanation(symbol).catch(() => null),
+        getStockPrice(symbol).catch(() => null),
+        fetchStockNews(symbol).catch(() => { setStockNews([]); return null }),
+      ])
+
+      // Process stock details
+      const details = detailsResult.status === 'fulfilled' ? detailsResult.value : null
       if (details) {
-        // Cache for future use if fetched from API
         if (!cachedDetails) setCachedData(`stock-details-${symbol}`, details)
-
-        // Track whether this stock has ML predictions
         const tracked = (details as any).isTracked !== false
         setIsTrackedStock(tracked)
-
-        // Use real price from backend if available, otherwise fallback to details or mock
         const finalPrice = details.price || currentPrice || 0
-        const stockDataWithPrice = {
+        setStockData({
           ...details,
           price: finalPrice,
           change: details.change !== undefined ? details.change : 0,
           changePercent: details.changePercent !== undefined ? details.changePercent : 0
-        }
-        setStockData(stockDataWithPrice)
+        })
         if (details.price) setCurrentPrice(details.price)
       }
 
-      // Load prediction data from the same source as AIExplanationWidget
-      let aiExplanation = null
-      let priceData = null
+      // Process price data
+      const priceData = priceResult.status === 'fulfilled' ? priceResult.value : null
+      if (priceData?.price) setCurrentPrice(priceData.price)
 
-      try {
-        // Check prefetch cache first, then fall back to API
-        const cachedExplanation = getCachedData<any>(`explanation-${symbol}`)
-        aiExplanation = cachedExplanation || await getComprehensiveAIExplanation(symbol)
-        if (!cachedExplanation && aiExplanation) setCachedData(`explanation-${symbol}`, aiExplanation)
-        console.log(`✅ Loaded AI explanation for ${symbol}:`, aiExplanation ? (cachedExplanation ? 'Prefetch cache' : 'API') : 'No stored data')
-      } catch (error) {
-        console.log(`No AI explanation available for ${symbol}, will use enhanced mock`)
-        aiExplanation = null
-      }
+      // Process AI explanation → prediction data
+      const aiExplanation = explanationResult.status === 'fulfilled' ? explanationResult.value : null
+      if (!cachedExplanation && aiExplanation) setCachedData(`explanation-${symbol}`, aiExplanation)
 
-      try {
-        priceData = await getStockPrice(symbol)
-        if (priceData) {
-          setCurrentPrice(priceData.price)
-        }
-      } catch (error) {
-        console.log(`Error fetching price for ${symbol}:`, error)
-        priceData = null
-      }
-
-      // Fetch news
-      try {
-        await fetchStockNews(symbol)
-      } catch (error) {
-        console.log(`Error fetching news for ${symbol}:`, error)
-        setStockNews([])
-      }
-
-      // Set prediction data - use real data from AI explanation if available
-      if (aiExplanation && aiExplanation.prediction_summary && (aiExplanation.prediction_summary['1_day'] || aiExplanation.prediction_summary.next_day)) {
-        // Transform AI explanation prediction data to match the expected format
+      if (aiExplanation?.prediction_summary && (aiExplanation.prediction_summary['1_day'] || aiExplanation.prediction_summary.next_day)) {
+        const ps = aiExplanation.prediction_summary
         const realPredictionData: PredictionTimeframes = {
           '1_day': {
-            predicted_price: aiExplanation.prediction_summary['1_day']?.predicted_price || aiExplanation.prediction_summary.next_day?.predicted_price || 0,
-            predicted_change: aiExplanation.prediction_summary['1_day']?.price_change || aiExplanation.prediction_summary.next_day?.price_change || 0,
+            predicted_price: ps['1_day']?.predicted_price || ps.next_day?.predicted_price || 0,
+            predicted_change: ps['1_day']?.price_change || ps.next_day?.price_change || 0,
             current_price: priceData?.price || 0,
-            confidence: aiExplanation.prediction_summary['1_day']?.confidence || aiExplanation.prediction_summary.next_day?.confidence || 0,
+            confidence: ps['1_day']?.confidence || ps.next_day?.confidence || 0,
           },
           '7_day': {
-            predicted_price: aiExplanation.prediction_summary['7_day']?.predicted_price || 0,
-            predicted_change: aiExplanation.prediction_summary['7_day']?.price_change || 0,
+            predicted_price: ps['7_day']?.predicted_price || 0,
+            predicted_change: ps['7_day']?.price_change || 0,
             current_price: priceData?.price || 0,
-            confidence: aiExplanation.prediction_summary['7_day']?.confidence || 0,
+            confidence: ps['7_day']?.confidence || 0,
           },
           '30_day': {
-            predicted_price: aiExplanation.prediction_summary['30_day']?.predicted_price || 0,
-            predicted_change: aiExplanation.prediction_summary['30_day']?.price_change || 0,
+            predicted_price: ps['30_day']?.predicted_price || 0,
+            predicted_change: ps['30_day']?.price_change || 0,
             current_price: priceData?.price || 0,
-            confidence: aiExplanation.prediction_summary['30_day']?.confidence || 0,
+            confidence: ps['30_day']?.confidence || 0,
           }
         }
-        console.log(`✅ Using real prediction data for ${symbol} from MongoDB explanation`)
         setPredictionData(realPredictionData)
         setIsUsingRealData(true)
       } else {
-        // fallback: Try to get predictions independently
-        console.log(`🔍 No explanation-based predictions, trying independent getPredictions for ${symbol}...`)
-        const independentPredictions = await getPredictions(symbol)
-
-        if (independentPredictions && independentPredictions[symbol]) {
-          console.log(`✅ Using independent ML predictions for ${symbol}`)
-          const mlPreds = independentPredictions[symbol]
-
-          // Map to PredictionTimeframes
-          const realPredictionData: PredictionTimeframes = {
-            '1_day': {
-              predicted_price: mlPreds['1_day']?.predicted_price || mlPreds.next_day?.predicted_price || 0,
-              predicted_change: mlPreds['1_day']?.predicted_change || mlPreds.next_day?.predicted_change || 0,
-              current_price: priceData?.price || 0,
-              confidence: mlPreds['1_day']?.confidence || mlPreds.next_day?.confidence || 0
-            },
-            '7_day': mlPreds['7_day'] || { predicted_price: 0, predicted_change: 0, current_price: 0, confidence: 0 },
-            '30_day': mlPreds['30_day'] || { predicted_price: 0, predicted_change: 0, current_price: 0, confidence: 0 }
+        // Fallback: try independent predictions
+        try {
+          const independentPredictions = await getPredictions(symbol)
+          if (independentPredictions?.[symbol]) {
+            const mlPreds = independentPredictions[symbol]
+            setPredictionData({
+              '1_day': {
+                predicted_price: mlPreds['1_day']?.predicted_price || mlPreds.next_day?.predicted_price || 0,
+                predicted_change: mlPreds['1_day']?.predicted_change || mlPreds.next_day?.predicted_change || 0,
+                current_price: priceData?.price || 0,
+                confidence: mlPreds['1_day']?.confidence || mlPreds.next_day?.confidence || 0
+              },
+              '7_day': mlPreds['7_day'] || { predicted_price: 0, predicted_change: 0, current_price: 0, confidence: 0 },
+              '30_day': mlPreds['30_day'] || { predicted_price: 0, predicted_change: 0, current_price: 0, confidence: 0 }
+            })
+            setIsUsingRealData(true)
+          } else {
+            setPredictionData(null)
+            setIsUsingRealData(false)
           }
-
-          setPredictionData(realPredictionData)
-          setIsUsingRealData(true)
-        } else {
-          console.log(`⚠️ No real prediction data available for ${symbol}`)
+        } catch {
           setPredictionData(null)
           setIsUsingRealData(false)
         }
@@ -375,19 +348,18 @@ export default function StockDetail({ }: StockDetailProps) {
     }
   };
 
-  if (isLoading || !stockData) {
-    return (
-      <div className="flex flex-col gap-6">
-        <div className="h-20 bg-zinc-900 animate-pulse rounded-lg"></div>
-        <div className="h-[500px] bg-zinc-900 animate-pulse rounded-lg"></div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="h-64 bg-zinc-900 animate-pulse rounded-lg"></div>
-          <div className="h-64 bg-zinc-900 animate-pulse rounded-lg"></div>
-          <div className="h-64 bg-zinc-900 animate-pulse rounded-lg"></div>
+  // Header skeleton shown inline when data is still loading
+  const HeaderSkeleton = () => (
+    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-zinc-900 to-black p-4 rounded-lg border border-zinc-800">
+      <div className="flex items-center gap-4">
+        <div className="h-12 w-12 rounded-lg bg-zinc-800 animate-pulse" />
+        <div>
+          <div className="h-6 w-40 bg-zinc-800 rounded animate-pulse mb-2" />
+          <div className="h-4 w-60 bg-zinc-800 rounded animate-pulse" />
         </div>
       </div>
-    )
-  }
+    </div>
+  )
 
   return (
     <div className="space-y-5 md:space-y-6">
@@ -437,58 +409,59 @@ export default function StockDetail({ }: StockDetailProps) {
         </div>
       </motion.div>
 
-      {/* Stock Header */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.1 }}
-        className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-zinc-900 to-black p-4 rounded-lg border border-zinc-800"
-      >
-        <div className="flex items-center gap-4">
-          <div className="h-12 w-12 rounded-lg overflow-hidden bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">
-            <img
-              src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${selectedStock}.png`}
-              alt={selectedStock}
-              className="h-12 w-12 object-contain"
-              onError={(e) => {
-                // Fallback to first letter if logo not found
-                const target = e.target as HTMLImageElement;
-                target.style.display = 'none';
-                if (target.parentElement) {
-                  target.parentElement.innerHTML = `<span class="text-xl font-bold">${selectedStock.charAt(0)}</span>`;
-                }
-              }}
-            />
-          </div>
-          <div>
-            <h1 className="text-base sm:text-2xl font-bold flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
-              <span className="truncate max-w-[160px] sm:max-w-[280px] md:max-w-none">{stockData.name}</span>
-              <span className="text-xs sm:text-lg text-zinc-400 shrink-0">({selectedStock})</span>
-            </h1>
-            <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm flex-wrap">
-              <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stockData.sector}</span>
-              <span className="text-zinc-600">•</span>
-              <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stockData.industry}</span>
+      {/* Stock Header — show skeleton inline while loading */}
+      {!stockData ? <HeaderSkeleton /> : (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.1 }}
+          className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-zinc-900 to-black p-4 rounded-lg border border-zinc-800"
+        >
+          <div className="flex items-center gap-4">
+            <div className="h-12 w-12 rounded-lg overflow-hidden bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center">
+              <img
+                src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${selectedStock}.png`}
+                alt={selectedStock}
+                className="h-12 w-12 object-contain"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                  if (target.parentElement) {
+                    target.parentElement.innerHTML = `<span class="text-xl font-bold">${selectedStock.charAt(0)}</span>`;
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <h1 className="text-base sm:text-2xl font-bold flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0">
+                <span className="truncate max-w-[160px] sm:max-w-[280px] md:max-w-none">{stockData.name}</span>
+                <span className="text-xs sm:text-lg text-zinc-400 shrink-0">({selectedStock})</span>
+              </h1>
+              <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm flex-wrap">
+                <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stockData.sector}</span>
+                <span className="text-zinc-600">•</span>
+                <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-none">{stockData.industry}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="flex items-center gap-2 sm:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end">
-          <button
-            onClick={handleFollow}
-            className={`px-4 py-2 rounded-md flex items-center gap-2 font-medium transition-colors border focus:outline-none focus:ring-2 focus:ring-emerald-500
-              ${isFollowed
-                ? 'bg-amber-100 border-amber-300 text-amber-700 hover:bg-amber-200'
-                : 'bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700'}`}
-            aria-pressed={isFollowed}
-          >
-            <Star className={`h-5 w-5 ${isFollowed ? 'fill-amber-400 text-amber-400' : 'text-amber-400'}`} />
-            <span className="text-sm font-semibold">
-              {isFollowed ? 'Followed' : 'Follow'}
-            </span>
-          </button>
-        </div>
-      </motion.div>
+          <div className="flex items-center gap-2 sm:gap-3 mt-2 md:mt-0 w-full md:w-auto justify-end">
+            <button
+              onClick={handleFollow}
+              className={`px-4 py-2 rounded-md flex items-center gap-2 font-medium transition-colors border focus:outline-none focus:ring-2 focus:ring-emerald-500
+                ${isFollowed
+                  ? 'bg-amber-100 border-amber-300 text-amber-700 hover:bg-amber-200'
+                  : 'bg-zinc-800 border-zinc-700 text-white hover:bg-zinc-700'}`}
+              aria-pressed={isFollowed}
+            >
+              <Star className={`h-5 w-5 ${isFollowed ? 'fill-amber-400 text-amber-400' : 'text-amber-400'}`} />
+              <span className="text-sm font-semibold">
+                {isFollowed ? 'Followed' : 'Follow'}
+              </span>
+            </button>
+          </div>
+        </motion.div>
+      )}
 
       {/* TradingView Chart */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>

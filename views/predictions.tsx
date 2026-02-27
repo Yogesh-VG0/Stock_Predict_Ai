@@ -43,7 +43,7 @@ export default function Predictions() {
   const [predictions, setPredictions] = useState<StockPrediction[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isGeneratingBatch, setIsGeneratingBatch] = useState(false)
-  
+
   useEffect(() => {
     loadPredictions()
   }, [])
@@ -220,8 +220,8 @@ export default function Predictions() {
         </div>
       </motion.div>
 
-      {/* Loading State */}
-      {isLoading && (
+      {/* Predictions Grid — skeleton while loading, empty state, or real data */}
+      {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <Card key={i}>
@@ -240,10 +240,7 @@ export default function Predictions() {
             </Card>
           ))}
         </div>
-      )}
-
-      {/* Empty State */}
-      {!isLoading && predictions.length === 0 && (
+      ) : predictions.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
             <AlertCircle className="h-10 w-10 text-zinc-600 mb-4" />
@@ -253,10 +250,7 @@ export default function Predictions() {
             </p>
           </CardContent>
         </Card>
-      )}
-
-      {/* Predictions Grid */}
-      {!isLoading && predictions.length > 0 && (
+      ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {predictions.map((stock, index) => {
             const pred = stock.predictions[selectedTimeframe]
@@ -303,11 +297,10 @@ export default function Predictions() {
                           <span className="text-2xl font-bold">
                             ${pred.predicted_price.toFixed(2)}
                           </span>
-                          <div className={`flex items-center gap-1 text-sm font-medium px-2 py-1 rounded-md ${
-                            pred.price_change >= 0
+                          <div className={`flex items-center gap-1 text-sm font-medium px-2 py-1 rounded-md ${pred.price_change >= 0
                               ? "bg-emerald-500/20 text-emerald-400"
                               : "bg-red-500/20 text-red-400"
-                          }`}>
+                            }`}>
                             {pred.price_change >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
                             {pred.price_change >= 0 ? '+' : ''}{pred.price_change.toFixed(1)}%
                           </div>
