@@ -985,6 +985,7 @@ class SECFilingsAnalyzer:
                     # Process each filing
                     sentiments = []
                     processed_filings = []
+                    no_text_count = 0
                     logger.info(f"Processing {total_filings} SEC filings for {ticker}...")
                     
                     for i, filing in enumerate(filings):
@@ -1032,12 +1033,15 @@ class SECFilingsAnalyzer:
                                         
                                         logger.info(f"Filing {i+1}/{total_filings}: {form_type} ({filing_date}) → sentiment: {sentiment:.3f}")
                                     else:
-                                        logger.warning(f"No text content extracted from filing {i+1}/{total_filings}: {form_type}")
+                                        no_text_count += 1
                                 else:
                                     logger.warning(f"Failed to fetch HTML for filing {i+1}/{total_filings}: {form_type}, status: {html_response.status}")
                         except Exception as e:
                             logger.warning(f"Error processing filing {i+1}/{total_filings} ({form_type}): {str(e)}")
                             continue
+                    
+                    if no_text_count:
+                        logger.info(f"SEC text extraction: {no_text_count}/{total_filings} filings had no extractable text for {ticker}")
                     
                     if not sentiments:
                         return {

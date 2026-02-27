@@ -940,6 +940,8 @@ class SentimentAnalyzer:
 
         # Detect CI environment (GitHub Actions sets CI=true)
         _is_ci = os.getenv("CI", "").lower() in ("true", "1")
+        # Respect SKIP_SEC_FMP — when true, skip SEC and FMP entirely
+        _skip_sec_fmp = os.getenv("SKIP_SEC_FMP", "false").lower() == "true"
 
         # Define sentiment sources and their corresponding keys
         # NOTE: Removed only duplicate sources (yahoo_news, seekingalpha) that are already in rss_news
@@ -947,17 +949,23 @@ class SentimentAnalyzer:
         #       free-tier insufficient (25 req/day for 100 tickers).
         sources = [
             self.get_finviz_sentiment,
-            self.get_sec_sentiment,
             self.get_marketaux_sentiment,
             self.get_rss_news_sentiment,  # This already includes Yahoo + SeekingAlpha
             self.get_reddit_sentiment,
-            self.get_fmp_sentiment,  # FMP data is valuable for analyst estimates/ratings
             self.get_finnhub_sentiment,
         ]
         keys = [
-            "finviz", "sec", "marketaux", "rss_news", "reddit",
-            "fmp", "finnhub",
+            "finviz", "marketaux", "rss_news", "reddit", "finnhub",
         ]
+
+        if not _skip_sec_fmp:
+            # Insert SEC after finviz, FMP before finnhub
+            sources.insert(1, self.get_sec_sentiment)
+            keys.insert(1, "sec")
+            sources.insert(-1, self.get_fmp_sentiment)
+            keys.insert(-1, "fmp")
+        else:
+            logger.info("SKIP_SEC_FMP=true — sec and fmp sources skipped for %s", ticker)
 
         # SeekingAlpha comments removed — requires Playwright browser (unusable in CI)
 
@@ -2681,7 +2689,7 @@ class FMPAPIManager:
         
         # Check if ticker is supported on free tier
         if ticker and not self._is_ticker_supported(ticker):
-            logger.warning(f"  Ticker {ticker} not supported on FMP free tier")
+            logger.info(f"  Ticker {ticker} not supported on FMP free tier")
             return {}
         
         # Check if we're in cooldown period

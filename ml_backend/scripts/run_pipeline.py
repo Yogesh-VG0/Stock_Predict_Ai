@@ -59,14 +59,18 @@ class PipelineHealthSummary:
         print(f"  Training status:          {self.training_status} ({self.training_tickers} tickers)")
         print(f"  Backtest status:          {self.backtest_status}")
         stored_horizons = f" x {len(self.horizons_used)} horizons" if self.horizons_used else ""
-        print(f"  Predictions stored:       {self.predictions_stored} tickers{stored_horizons}")
+        if self.predictions_stored == 0 and self.predictions_failed == 0 and self.predictions_skipped == 0:
+            print(f"  Predictions stored:       — (--no-predict mode)")
+        else:
+            print(f"  Predictions stored:       {self.predictions_stored} tickers{stored_horizons}")
         if self.predictions_failed:
             print(f"  Predictions failed:       {self.predictions_failed}")
         if self.predictions_skipped:
             print(f"  Predictions skipped:      {self.predictions_skipped} (insufficient data)")
 
         print(f"  Gemini explanations:      {self.gemini_explanations}")
-        print(f"  Evaluation samples found: {self.evaluation_samples} (expected 0 early)")
+        eval_note = " (none yet — predictions need 1+ day to become evaluable)" if self.evaluation_samples == 0 else ""
+        print(f"  Evaluation samples found: {self.evaluation_samples}{eval_note}")
         print("=" * 56 + "\n")
 
     def check_quality_gate(self) -> bool:

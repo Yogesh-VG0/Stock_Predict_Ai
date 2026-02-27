@@ -463,7 +463,7 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
         if is_rate_limit:
             # Parse Retry-After hint and sleep proactively before returning
             retry_after = _parse_retry_after(error_str)
-            sleep_secs = max(retry_after, 15)  # At least 15s on any 429
+            sleep_secs = max(retry_after, 30)  # At least 30s on any 429 — Groq RPM resets per-minute
             logger.info("Groq 429 for %s — sleeping %ds (Retry-After=%ds)", ticker, sleep_secs, retry_after)
             time.sleep(sleep_secs)
             return (f"AI explanation unavailable: Groq API rate limited ({model})", "rate_limit")
