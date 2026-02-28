@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from .config.feature_config_v1 import TARGET_CONFIG, ROUND_TRIP_COST_BPS
+from .config.feature_config_v1 import TARGET_CONFIG, ROUND_TRIP_COST_BPS, TRADE_MIN_ALPHA, USE_MARKET_NEUTRAL_TARGET
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +75,9 @@ def run_backtest(
     cfg = TARGET_CONFIG.get(horizon, TARGET_CONFIG["next_day"])
     hold_days = cfg["horizon"]
     round_trip_cost = ROUND_TRIP_COST_BPS / 10000
+    # Stop-loss: cap maximum loss per trade to protect against fat-tail losses.
+    # Scaled by horizon: shorter horizons get tighter stops.
+    stop_loss_pct = {1: -0.03, 5: -0.05, 21: -0.08}.get(hold_days, -0.05)
 
     # Build date index from all tickers
     all_dates = []
@@ -121,11 +124,14 @@ def run_backtest(
 
     # Build SPY returns if available
     spy_returns = {}
+    _spy_price_cache = None  # For holding-period SPY return on trade close
+    market_neutral = USE_MARKET_NEUTRAL_TARGET and spy_data is not None and not spy_data.empty
     if spy_data is not None and not spy_data.empty:
         s = spy_data.copy()
         s["date"] = pd.to_datetime(s["date"])
         s = s.sort_values("date").set_index("date")
         if "Close" in s.columns:
+            _spy_price_cache = s  # keep for holding-period lookups
             s["ret"] = np.log(s["Close"] / s["Close"].shift(1))
             for d in trade_dates:
                 dt = pd.Timestamp(d)
@@ -133,6 +139,8 @@ def run_backtest(
                     spy_returns[d] = s.loc[dt, "ret"] if pd.notna(s.loc[dt, "ret"]) else 0.0
                 else:
                     spy_returns[d] = 0.0
+    if market_neutral:
+        logger.info("Backtest running in MARKET-NEUTRAL mode (returns = stock alpha vs SPY)")
 
     # Portfolio state: ticker -> (entry_bar_idx, entry_date, entry_price, weight)
     positions = {}
@@ -196,21 +204,31 @@ def run_backtest(
         day_return = 0.0
 
         # 1. Mark-to-market: daily return from open positions (equal weight)
+        #    When market_neutral, subtract SPY daily return so we measure alpha.
         n_pos = len(positions)
         weight = 1.0 / n_pos if n_pos > 0 else 0.0
+        spy_daily_ret = spy_returns.get(trade_date, 0.0) if market_neutral else 0.0
         if i > 0 and n_pos > 0:
             for ticker, (entry_i, entry_date, entry_price, _) in list(positions.items()):
                 prev_p = prev_prices.get(ticker, entry_price)
                 curr_p = _get_price(ticker, trade_date)
                 if curr_p is not None and prev_p is not None and prev_p > 0 and curr_p > 0:
-                    day_return += weight * np.log(curr_p / prev_p)
+                    stock_ret = np.log(curr_p / prev_p)
+                    day_return += weight * (stock_ret - spy_daily_ret)
                 if curr_p is not None:
                     prev_prices[ticker] = curr_p
 
-        # 2. Sell positions that have reached hold_days (using TRADING bars, not calendar days)
+        # 2. Sell positions that have reached hold_days OR hit stop-loss
         to_close = []
         for ticker, (entry_i, entry_date, entry_price, _w) in list(positions.items()):
             bars_held = i - entry_i
+            curr_p = _get_price(ticker, trade_date)
+            # Check stop-loss: close if unrealised loss exceeds threshold
+            if curr_p is not None and entry_price > 0:
+                unrealised_ret = np.log(curr_p / entry_price)
+                if unrealised_ret <= stop_loss_pct:
+                    to_close.append(ticker)
+                    continue
             if bars_held >= hold_days:
                 to_close.append(ticker)
         n_before_close = len(positions)
@@ -221,6 +239,17 @@ def run_backtest(
             if exit_price is None or exit_price <= 0:
                 continue
             full_ret = np.log(exit_price / entry_price)
+            # Compute SPY return over the same holding period for alpha calc
+            spy_hold_ret = 0.0
+            if market_neutral and _spy_price_cache is not None:
+                spy_entry_idx = _spy_price_cache.index.searchsorted(entry_date, side="right") - 1
+                spy_exit_idx = _spy_price_cache.index.searchsorted(trade_date, side="right") - 1
+                if spy_entry_idx >= 0 and spy_exit_idx >= 0:
+                    spy_entry_p = float(_spy_price_cache.iloc[spy_entry_idx]["Close"])
+                    spy_exit_p = float(_spy_price_cache.iloc[spy_exit_idx]["Close"])
+                    if spy_entry_p > 0 and spy_exit_p > 0:
+                        spy_hold_ret = np.log(spy_exit_p / spy_entry_p)
+            alpha_ret = full_ret - spy_hold_ret
             # Daily mark-to-market already captured the price P/L via incremental
             # log(curr/prev) each bar. On close, only subtract the transaction cost
             # to avoid double-counting the holding-period return.
@@ -232,7 +261,9 @@ def run_backtest(
                 "exit_date": trade_date,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
-                "return": full_ret - round_trip_cost,  # full trade return for stats
+                "return": alpha_ret - round_trip_cost,  # alpha trade return for stats
+                "abs_return": full_ret - round_trip_cost,  # absolute return for reference
+                "spy_return": spy_hold_ret,
                 "bars_held": i - entry_i,
                 "weight": w,
             })
@@ -334,4 +365,5 @@ def run_backtest(
         "oos_start": str(start),
         "start_date": str(trade_dates[0]) if trade_dates else None,
         "end_date": str(trade_dates[-1]) if trade_dates else None,
+        "market_neutral": market_neutral,
     }

@@ -26,6 +26,7 @@ from ..config.feature_config_v1 import (
     TRADE_MIN_ALPHA,
     TRADE_MIN_PROB_POSITIVE,
     TRADE_SIGMA_MULT,
+    TRADE_THRESHOLD_CAP,
     ROUND_TRIP_COST_BPS,
 )
 
@@ -508,6 +509,11 @@ class StockPredictor:
             pred_mean = float(np.mean(val_pred_all))
             pred_std = float(np.std(val_pred_all)) if len(val_pred_all) > 1 else 0.0
             threshold = pred_mean + TRADE_SIGMA_MULT * pred_std if pred_std > 0 else float(TRADE_MIN_ALPHA)
+            # Cap threshold per horizon to prevent unreasonably high/low values
+            _cap = TRADE_THRESHOLD_CAP.get(window_name, {})
+            if _cap:
+                threshold = max(_cap["min"], min(_cap["max"], threshold))
+                logger.info("POOLED-%s threshold=%.5f (capped to [%.5f, %.5f])", window_name, threshold, _cap["min"], _cap["max"])
             # Persist feature importance for pooled model
             top_features_gain_pooled = []
             try:
@@ -811,6 +817,10 @@ class StockPredictor:
             pred_mean = float(np.mean(val_pred))
             pred_std = float(np.std(val_pred)) if len(val_pred) > 1 else 0.0
             threshold = pred_mean + TRADE_SIGMA_MULT * pred_std if pred_std > 0 else float(TRADE_MIN_ALPHA)
+            # Cap threshold per horizon to prevent unreasonably high/low values
+            _cap = TRADE_THRESHOLD_CAP.get(window_name, {})
+            if _cap:
+                threshold = max(_cap["min"], min(_cap["max"], threshold))
             meta_out = {
                 "feature_columns": active_cols,
                 "top_features_gain": top_features_gain,

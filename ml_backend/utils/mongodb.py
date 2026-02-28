@@ -284,8 +284,10 @@ class MongoDBClient:
                 for key, value in data.items():
                     if key not in document and key not in excluded_fields:
                         try:
-                            # Ensure all numeric values are properly converted
-                            if isinstance(value, (int, float)):
+                            # bool must be checked BEFORE int/float (bool is subclass of int)
+                            if isinstance(value, (bool, np.bool_)):
+                                document[key] = bool(value)
+                            elif isinstance(value, (int, float)):
                                 document[key] = float(value)
                             elif isinstance(value, dict):
                                 document[key] = value

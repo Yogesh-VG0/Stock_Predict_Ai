@@ -1,6 +1,6 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-02-26
+> **Last updated**: 2026-02-28
 
 ---
 
@@ -281,8 +281,8 @@ GitHub Actions wakes up and starts the daily pipeline.
 |------|---------|----------|------------|-----------|
 | **Frontend (UI)** | User's browser | TypeScript/React | Node backend API | Nothing (read-only) |
 | **TradingView widgets** | User's browser (iframe) | JavaScript (external) | TradingView CDN | Nothing |
-| **Node.js backend** | Cloud server / Render | JavaScript | Finnhub API, MongoDB, ML backend | MongoDB (notifications), in-memory (watchlists, cache) |
-| **ML backend (API)** | Cloud server / Render | Python | MongoDB, Redis | MongoDB (predictions), Redis (cache) |
+| **Node.js backend** | Koyeb | JavaScript | Finnhub API, MongoDB, ML backend | MongoDB (notifications), in-memory (watchlists, cache) |
+| **ML backend (API)** | Koyeb | Python | MongoDB, Redis | MongoDB (predictions), Redis (cache) |
 | **ML pipeline (training)** | GitHub Actions runner | Python | Yahoo Finance, FRED, Finnhub, FMP, Reddit, etc. | MongoDB (all collections) |
 | **Sentiment cron** | GitHub Actions runner | Python | 10+ news/social APIs | MongoDB (sentiment, insider_transactions) |
 | **SHAP analysis** | GitHub Actions runner | Python | MongoDB (predictions, historical_data) | MongoDB (feature_importance) |

@@ -38,13 +38,23 @@ USE_FUNDAMENTAL_FEATURES = True    # Valuation ratios (Finnhub basic financials)
 USE_SHORT_INTEREST_FEATURES = True # Crowding signal (short interest data)
 
 # Walk-forward folds: 0 = single split; 3-4 = rolling folds, report median metrics (credibility upgrade)
-WALK_FORWARD_FOLDS = 3
+WALK_FORWARD_FOLDS = 4
 
 # Trade filters: only recommend when model is both optimistic and confident
-TRADE_MIN_ALPHA = 0.001  # Minimum predicted alpha (0.1%)
+TRADE_MIN_ALPHA = 0.001  # Minimum predicted alpha (0.1%) — keep low; model outputs near-zero
 TRADE_MIN_PROB_POSITIVE = 0.52  # P(return > 0) must exceed this
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
 TRADE_SIGMA_MULT = 1.0  # Regime-adaptive threshold multiplier
+
+# Per-horizon caps for adaptive trade_threshold.
+# Without caps, pred_mean + sigma*pred_std can be unreasonably high (killing
+# all trades) or negative (allowing garbage trades).  Caps are in log-return
+# units and scale with horizon length.
+TRADE_THRESHOLD_CAP = {
+    "next_day": {"min": 0.0005, "max": 0.005},   # 0.05% – 0.5%
+    "7_day":    {"min": 0.001,  "max": 0.015},    # 0.1%  – 1.5%
+    "30_day":   {"min": 0.002,  "max": 0.04},     # 0.2%  – 4.0%
+}
 
 # Pooled model config (one model per horizon across all tickers)
 POOL_CONFIG = {
@@ -59,18 +69,18 @@ POOL_CONFIG = {
 # v2.0: tuned for expanded feature set (54+ features)
 LIGHTGBM_PARAMS = {
     "objective": "huber",
-    "alpha": 0.9,  # Huber delta (moderately robust)
+    "alpha": 0.8,  # Huber delta — lowered for more robustness to outliers (earnings, gaps)
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 200,           # v2.0: 150→200 (more features need more rounds)
-    "max_depth": 4,
-    "learning_rate": 0.03,         # v2.0: 0.05→0.03 (slower learning, more stable)
-    "num_leaves": 20,              # v2.0: 15→20 (slightly more complex for interactions)
-    "min_child_samples": 25,  # Allow smaller leaves for limited per-ticker data
-    "reg_alpha": 0.1,
-    "reg_lambda": 0.1,
-    "subsample": 0.8,
-    "colsample_bytree": 0.8,
+    "n_estimators": 300,           # v2.1: 200→300 (more rounds with slower lr)
+    "max_depth": 5,                # v2.1: 4→5 (allow slightly deeper interactions)
+    "learning_rate": 0.02,         # v2.1: 0.03→0.02 (slower learning = less overfit)
+    "num_leaves": 20,
+    "min_child_samples": 30,       # v2.1: 25→30 (larger leaf = more regularization)
+    "reg_alpha": 0.5,              # v2.1: 0.1→0.5 (much stronger L1 regularization)
+    "reg_lambda": 0.5,             # v2.1: 0.1→0.5 (much stronger L2 regularization)
+    "subsample": 0.7,              # v2.1: 0.8→0.7 (more stochastic = less overfit)
+    "colsample_bytree": 0.7,       # v2.1: 0.8→0.7 (force diverse feature usage)
     "random_state": 42,
     "verbosity": -1,
     "n_jobs": -1,
@@ -81,7 +91,7 @@ LIGHTGBM_PARAMS = {
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
 FEATURE_PRUNING = {
     "enabled": True,
-    "top_k": 35,                       # v2.0: 30→35 (accommodate ~12 new features)
+    "top_k": 30,                       # v2.1: 35→30 (tighter pruning reduces noise features)
     "protected_features": [            # Core stability features — never prune
         "log_return_1d", "log_return_5d", "log_return_21d",
         "volatility_20d", "volume_ratio", "rsi",
