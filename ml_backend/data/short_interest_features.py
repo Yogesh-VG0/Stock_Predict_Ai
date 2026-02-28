@@ -68,38 +68,45 @@ def make_short_interest_features(
         return empty
 
     try:
-        short_float_pct = None
-        days_to_cover = None
+        si_records = []
 
-        # --- Primary: short_interest_data collection ---
+        # --- Primary: short_interest_data collection (full time series) ---
         try:
             si_col = mongo_client.db.get_collection("short_interest_data")
             if si_col is not None:
-                # Get the latest document for this ticker
-                doc = si_col.find_one(
+                docs = list(si_col.find(
                     {"ticker": ticker.upper()},
-                    sort=[("fetched_at", -1)],
-                )
-                if doc:
-                    # Handle different field naming conventions
-                    sfp = doc.get("short_float_pct") or doc.get("shortFloatPct")
-                    dtc = doc.get("daysToCover") or doc.get("days_to_cover")
-
-                    if sfp is not None:
-                        try:
-                            short_float_pct = float(sfp)
-                        except (ValueError, TypeError):
-                            pass
-                    if dtc is not None:
-                        try:
-                            days_to_cover = float(dtc)
-                        except (ValueError, TypeError):
-                            pass
+                    sort=[("settlementDate", 1)],
+                ).limit(50))
+                for doc in docs:
+                    settle_date = doc.get("settlementDate")
+                    if settle_date is None:
+                        continue
+                    sfp = (doc.get("short_float_pct")
+                           or doc.get("shortFloatPct")
+                           or doc.get("shortFloatPercentage"))
+                    dtc = (doc.get("daysToCover")
+                           or doc.get("days_to_cover")
+                           or doc.get("daysToCoVerShortInterest"))
+                    try:
+                        sfp_val = float(sfp) if sfp is not None else None
+                    except (ValueError, TypeError):
+                        sfp_val = None
+                    try:
+                        dtc_val = float(dtc) if dtc is not None else None
+                    except (ValueError, TypeError):
+                        dtc_val = None
+                    if sfp_val is not None:
+                        si_records.append({
+                            "date": pd.to_datetime(settle_date).normalize(),
+                            "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0),
+                            "si_days_to_cover": np.clip(dtc_val, 0.0, 60.0) if dtc_val is not None else _NAN,
+                        })
         except Exception as e:
             logger.debug("short_interest_features: direct collection failed for %s: %s", ticker, e)
 
-        # --- Fallback: sentiment collection ---
-        if short_float_pct is None:
+        # --- Fallback: sentiment collection (latest only) ---
+        if not si_records:
             try:
                 sent_col = mongo_client.db.get_collection("sentiment")
                 if sent_col is not None:
@@ -113,56 +120,53 @@ def make_short_interest_features(
                             latest = si_data[0] if isinstance(si_data[0], dict) else {}
                             sfp = latest.get("short_float_pct") or latest.get("short_float_percentage")
                             dtc = latest.get("daysToCover") or latest.get("days_to_cover")
+                            sfp_val = None
+                            dtc_val = None
                             if sfp is not None:
                                 try:
-                                    short_float_pct = float(sfp)
+                                    sfp_val = float(sfp)
                                 except (ValueError, TypeError):
                                     pass
                             if dtc is not None:
                                 try:
-                                    days_to_cover = float(dtc)
+                                    dtc_val = float(dtc)
                                 except (ValueError, TypeError):
                                     pass
-                        # Also check nested sources dict
-                        if short_float_pct is None:
-                            sources = doc.get("sources", {})
-                            si_source = sources.get("short_interest", {})
-                            if isinstance(si_source, dict):
-                                sfp = si_source.get("short_float_percentage")
-                                dtc = si_source.get("days_to_cover")
-                                if sfp is not None:
-                                    try:
-                                        short_float_pct = float(sfp)
-                                    except (ValueError, TypeError):
-                                        pass
-                                if dtc is not None:
-                                    try:
-                                        days_to_cover = float(dtc)
-                                    except (ValueError, TypeError):
-                                        pass
+                            if sfp_val is not None:
+                                doc_date = pd.to_datetime(doc.get("date", datetime.utcnow())).normalize()
+                                si_records.append({
+                                    "date": doc_date,
+                                    "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0),
+                                    "si_days_to_cover": np.clip(dtc_val, 0.0, 60.0) if dtc_val is not None else _NAN,
+                                })
             except Exception as e:
                 logger.debug("short_interest_features: sentiment fallback failed for %s: %s", ticker, e)
 
-        # --- Build result ---
-        has_data = short_float_pct is not None
-
-        if not has_data:
+        if not si_records:
             return empty
 
-        # Clip extreme values
-        if short_float_pct is not None:
-            short_float_pct = np.clip(short_float_pct, 0.0, 100.0)
-        if days_to_cover is not None:
-            days_to_cover = np.clip(days_to_cover, 0.0, 60.0)
+        # --- Build time-series aligned features ---
+        si_df = pd.DataFrame(si_records).sort_values("date").drop_duplicates("date", keep="last")
 
-        result = pd.DataFrame(
-            {
-                "si_short_float_pct": short_float_pct if short_float_pct is not None else _NAN,
-                "si_days_to_cover": days_to_cover if days_to_cover is not None else _NAN,
-                "si_available": 1.0,
-            },
+        # Align to price dates via asof merge (forward-fill from last settlement)
+        price_dates = pd.DataFrame(
+            {"date": pd.to_datetime(price_df["date"]).dt.normalize()},
             index=price_df.index,
         )
+        merged = pd.merge_asof(
+            price_dates.sort_values("date"),
+            si_df,
+            on="date",
+            direction="backward",
+        )
+        # Re-index to price_df order
+        merged.index = price_dates.sort_values("date").index
+        merged = merged.reindex(price_df.index)
+
+        result = pd.DataFrame(index=price_df.index)
+        result["si_short_float_pct"] = merged["si_short_float_pct"]
+        result["si_days_to_cover"] = merged["si_days_to_cover"]
+        result["si_available"] = result["si_short_float_pct"].notna().astype(float)
 
         # --- Point-in-time shift: use yesterday's data ---
         for col_name in ("si_short_float_pct", "si_days_to_cover", "si_available"):

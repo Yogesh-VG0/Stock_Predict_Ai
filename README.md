@@ -156,7 +156,7 @@ Price history        →  Feature engineering          →  42+ features (NUMBER
 | Layer | Role |
 |-------|------|
 | **Frontend** (Next.js 15, port 3000) | UI, TradingView charts, Sankey diagrams, search, watchlist, stock detail pages |
-| **Node Backend** (Express, port 5000) | API gateway, news aggregation, watchlist, Finnhub WebSocket, proxies ML endpoints |
+| **Node Backend** (Express, port 5000, Koyeb) | API gateway, news aggregation, watchlist, Finnhub WebSocket, proxies ML endpoints |
 | **ML Backend** (FastAPI, port 8000) | Predictions, sentiment analysis, model training, SHAP, Gemini explanations |
 | **MongoDB Atlas** | All persistent data — historical prices, sentiment, predictions, explanations, insider trades, macro data |
 | **Redis** (optional) | Caching (predictions, Sankey data, holidays), rate limiting (sliding window) |
@@ -224,15 +224,16 @@ LightGBM (gradient-boosted decision trees) was chosen over deep learning approac
 ### Hyperparameters
 
 | Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| Objective | Huber | Robust to outlier returns |
-| Learning rate | 0.05 | Slow learning for stability |
-| Max depth | 4 | Prevents overfitting |
-| Num leaves | 15 | Conservative tree complexity |
-| N estimators | 150 | Balanced compute/accuracy |
-| Min child samples | 25 | Requires sufficient evidence per leaf |
-| Regularization | L1=0.1, L2=0.1 | Prevents feature over-reliance |
-| Subsampling | 80% rows, 80% columns | Reduces variance |
+|-----------|-------|----------|
+| Objective | Huber (delta=0.8) | Robust to outlier returns (earnings gaps, black swans) |
+| Learning rate | 0.02 | Slow learning for stability |
+| Max depth | 5 | Allows slightly deeper feature interactions |
+| Num leaves | 20 | Conservative tree complexity |
+| N estimators | 300 | More rounds with slower learning rate |
+| Min child samples | 30 | Requires sufficient evidence per leaf |
+| Regularization | L1=0.5, L2=0.5 | Strong regularization prevents overfitting |
+| Subsampling | 70% rows, 70% columns | Reduces variance, forces diverse feature usage |
+| Walk-forward folds | 4 | Rolling validation for robust evaluation |
 
 ### Market-Neutral Alpha
 
@@ -474,7 +475,7 @@ The AI explanation prompt is **stock-specific** — tailored with company name, 
 | **Backend** | Node.js 18+, Express.js, MongoDB Atlas, Redis |
 | **ML / AI** | Python 3.11+, FastAPI, LightGBM, SHAP (TreeSHAP), Groq (Llama 3.1-8b), Google Gemini 2.5, yfinance, FinBERT, RoBERTa, VADER |
 | **Data** | Finnhub, Yahoo Finance, FRED, FMP, Marketaux, Reddit (PRAW), Seeking Alpha (Playwright), SEC/Kaleidoscope, Nasdaq |
-| **Infrastructure** | Vercel (frontend), Render (backends), GitHub Actions (daily pipeline), MongoDB Atlas, Redis Cloud |
+| **Infrastructure** | Vercel (frontend), Koyeb (backends), GitHub Actions (daily pipeline), MongoDB Atlas, Redis Cloud |
 | **Monitoring** | Drift monitor (PSI), stored prediction evaluation, quality gates, Vercel Analytics |
 
 ---

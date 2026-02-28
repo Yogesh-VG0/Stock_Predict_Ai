@@ -67,7 +67,7 @@ async def _finnhub_get_with_retry(url: str, params: dict, ticker: str, label: st
         try:
             await finnhub_limiter.acquire()
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=15) as resp:
+                async with session.get(url, params=params, timeout=30) as resp:
                     if resp.status == 200:
                         return await resp.json()
                     if resp.status in _FINNHUB_RETRYABLE_STATUSES:
@@ -970,7 +970,7 @@ class SentimentAnalyzer:
         # SeekingAlpha comments removed — requires Playwright browser (unusable in CI)
 
         # Per-source timeout — prevents one slow API from eating the whole ticker budget
-        _PER_SOURCE_TIMEOUT = 30  # seconds
+        _PER_SOURCE_TIMEOUT = 45  # seconds (raised from 30 to avoid Finnhub timeouts)
         
         # Process each sentiment source
         for source_func, key in zip(sources, keys):

@@ -24,6 +24,7 @@ from ml_backend.models.predictor import StockPredictor
 from ml_backend.data.features_minimal import MinimalFeatureEngineer
 from ml_backend.utils.mongodb import MongoDBClient
 from ml_backend.config.constants import TOP_100_TICKERS
+from ml_backend.config.feature_config_v1 import TARGET_CONFIG
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ def main():
     if args.end:
         end_date = datetime.strptime(args.end, "%Y-%m-%d")
         
-    start_date = end_date - timedelta(days=365 * 2) # Default 2 years
+    start_date = end_date - timedelta(days=365 * 3) # Default 3 years (more data for pooled model)
     if args.start:
         start_date = datetime.strptime(args.start, "%Y-%m-%d")
 
@@ -299,52 +300,77 @@ def main():
                 sys.exit(1)
 
         # 5. Run Backtest (OOS only — restricted to dates after training cutoff)
-        # Use only the prediction tickers for backtest (not all 100).
+        # Run for ALL 3 horizons so we see which horizon actually has signal.
         backtest_data = {t: historical_data[t] for t in tickers if t in historical_data}
-        logger.info("Running backtest...")
+        logger.info("Running backtest for all horizons...")
         oos_start = predictor.get_oos_start_date()
         if oos_start:
             logger.info("OOS backtest start date: %s", oos_start.date())
         else:
             logger.warning("No OOS start date available — backtest will use last 20%% fallback.")
-        result = run_backtest(
-            predictor=predictor,
-            historical_data=backtest_data,
-            spy_data=spy_data,
-            tickers=list(backtest_data.keys()),
-            start_date=args.start,
-            end_date=args.end,
-            max_positions=5,
-            horizon=args.horizon,
-            oos_start_date=oos_start,
-        )
 
-        if "error" in result:
-            logger.error("Backtest failed: %s", result["error"])
-            health.backtest_status = f"FAILED ({result['error']})"
+        all_horizons = list(TARGET_CONFIG.keys())  # ["next_day", "7_day", "30_day"]
+        total_eval_trades = 0
+        any_backtest_ok = False
+        for hz in all_horizons:
+            logger.info("--- Backtest horizon: %s ---", hz)
+            result = run_backtest(
+                predictor=predictor,
+                historical_data=backtest_data,
+                spy_data=spy_data,
+                tickers=list(backtest_data.keys()),
+                start_date=args.start,
+                end_date=args.end,
+                max_positions=5,
+                horizon=hz,
+                oos_start_date=oos_start,
+            )
+
+            if "error" in result:
+                logger.warning("Backtest %s: %s", hz, result["error"])
+                continue
+
+            any_backtest_ok = True
+            ts = result.get("trade_stats", {})
+            n_trades = ts.get("n_trades", 0)
+            total_eval_trades += n_trades
+            mn_label = " (market-neutral)" if result.get("market_neutral") else ""
+            print(f"\n=== Backtest: {hz}{mn_label} ===")
+            print(f"  OOS start: {result.get('oos_start', 'N/A')}")
+            print(f"  Period: {result.get('start_date')} to {result.get('end_date')}")
+            print(f"  Strategy return: {result.get('total_return', 0):.2%}")
+            print(f"  Strategy Sharpe: {result.get('sharpe_ratio', 0):.3f}")
+            print(f"  Max drawdown: {result.get('max_drawdown', 0):.2%}")
+            if result.get("spy_return") is not None:
+                print(f"  SPY return: {result['spy_return']:.2%}")
+            if n_trades > 0:
+                print(f"  Trades: {n_trades} ({ts.get('trades_per_year', 0):.0f}/yr)")
+                print(f"  Avg return/trade: {ts.get('avg_return_per_trade', 0):.4f}")
+                print(f"  Win rate: {ts.get('win_rate', 0):.1%}")
+                print(f"  Avg holding: {ts.get('avg_holding_bars', 0):.1f} bars")
+            else:
+                print("  Trades: 0 (check filters)")
+
+            # Performance sanity guard: warn if backtest is catastrophically bad
+            sharpe = result.get("sharpe_ratio", 0)
+            win_rate = ts.get("win_rate", 0.5)
+            if n_trades >= 10 and (sharpe < -1.0 or win_rate < 0.40):
+                logger.warning(
+                    "SANITY CHECK FAILED for %s: Sharpe=%.2f win_rate=%.1f%% — "
+                    "model may be broken or data degraded",
+                    hz, sharpe, win_rate * 100,
+                )
+                print(f"  ⚠ SANITY WARNING: poor performance (Sharpe={sharpe:.2f}, win_rate={win_rate:.1%})")
+            print("=" * 40)
+
+        if not any_backtest_ok:
+            logger.error("All backtests failed.")
+            health.backtest_status = "FAILED (all horizons)"
             health.print_summary()
             sys.exit(1)
 
-        health.backtest_status = "completed"
-        health.evaluation_samples = result.get("trade_stats", {}).get("n_trades", 0)
-        print("\n=== Pipeline Results (OOS) ===")
-        print(f"OOS start: {result.get('oos_start', 'N/A')}")
-        print(f"Period: {result.get('start_date')} to {result.get('end_date')}")
-        print(f"Horizon: {args.horizon}")
-        print(f"Strategy return: {result.get('total_return', 0):.2%}")
-        print(f"Strategy Sharpe: {result.get('sharpe_ratio', 0):.3f}")
-        print(f"Max drawdown: {result.get('max_drawdown', 0):.2%}")
-        if result.get("spy_return") is not None:
-            print(f"SPY return: {result['spy_return']:.2%}")
-        ts = result.get("trade_stats", {})
-        if ts.get("n_trades", 0) > 0:
-            print(f"Trades: {ts['n_trades']} ({ts.get('trades_per_year', 0):.0f}/yr)")
-            print(f"Avg return/trade: {ts.get('avg_return_per_trade', 0):.4f}")
-            print(f"Win rate: {ts.get('win_rate', 0):.1%}")
-            print(f"Avg holding: {ts.get('avg_holding_bars', 0):.1f} bars")
-        else:
-            print("Trades: 0 (check filters)")
-        print("==============================\n")
+        health.backtest_status = "completed (all horizons)"
+        health.evaluation_samples = total_eval_trades
 
     # 6. Generate and Store Live Predictions (skip with --no-predict)
     if args.no_predict:
