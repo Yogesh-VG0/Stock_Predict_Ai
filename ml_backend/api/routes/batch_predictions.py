@@ -2,7 +2,7 @@
 Batch prediction endpoints for processing multiple tickers efficiently.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 import asyncio
 import logging
@@ -129,7 +129,7 @@ async def _predict_single_ticker(
         predictions = app_state.mongo_client.get_latest_predictions(ticker)
 
         if not predictions:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=365 * 2)
             df = app_state.mongo_client.get_historical_data(ticker, start_date, end_date)
             if df is None or df.empty:
@@ -151,7 +151,7 @@ async def _predict_single_ticker(
         windows = normalize_prediction_dict(predictions)
         result = {
             "ticker": ticker,
-            "as_of": datetime.utcnow().isoformat(),
+            "as_of": datetime.now(timezone.utc).isoformat(),
             "windows": windows,
         }
 
@@ -235,7 +235,7 @@ async def batch_predictions(
         failed=failed,
         results=results,
         total_processing_time_ms=total_time,
-        as_of=datetime.utcnow(),
+        as_of=datetime.now(timezone.utc),
     )
 
 

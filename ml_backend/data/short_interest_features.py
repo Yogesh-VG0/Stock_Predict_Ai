@@ -22,7 +22,7 @@ in prepare_features().  Do not add a second shift outside this module.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import numpy as np
@@ -133,7 +133,7 @@ def make_short_interest_features(
                                 except (ValueError, TypeError):
                                     pass
                             if sfp_val is not None:
-                                doc_date = pd.to_datetime(doc.get("date", datetime.utcnow())).normalize()
+                                doc_date = pd.to_datetime(doc.get("date", datetime.now(timezone.utc))).normalize()
                                 si_records.append({
                                     "date": doc_date,
                                     "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0),
@@ -153,6 +153,12 @@ def make_short_interest_features(
             {"date": pd.to_datetime(price_df["date"]).dt.normalize()},
             index=price_df.index,
         )
+
+        # Normalise datetime resolution so merge_asof never sees
+        # incompatible dtypes (e.g. datetime64[s] vs datetime64[us]).
+        si_df["date"] = pd.to_datetime(si_df["date"]).astype("datetime64[ns]")
+        price_dates["date"] = price_dates["date"].astype("datetime64[ns]")
+
         merged = pd.merge_asof(
             price_dates.sort_values("date"),
             si_df,

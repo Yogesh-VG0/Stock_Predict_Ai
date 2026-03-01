@@ -4,7 +4,7 @@ Module for analyzing short interest data from Nasdaq API.
 
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Optional, List, Any
 from dotenv import load_dotenv
 from ..utils.mongodb import MongoDBClient
@@ -224,7 +224,7 @@ class ShortInterestAnalyzer:
             for rec in records:
                 col.update_one(
                     {"ticker": ticker.upper(), "settlementDate": rec.get("settlementDate", "")},
-                    {"$set": {**rec, "ticker": ticker.upper(), "fetched_at": datetime.utcnow()}},
+                    {"$set": {**rec, "ticker": ticker.upper(), "fetched_at": datetime.now(timezone.utc)}},
                     upsert=True,
                 )
             logger.info(f"Stored {len(records)} short interest records for {ticker}")
@@ -233,31 +233,11 @@ class ShortInterestAnalyzer:
 
     async def fetch_short_interest(self, ticker: str) -> List[Dict]:
         """
-        Fetch short interest data using the new Nasdaq API approach with NYSE fallback.
-        This is the main method that should be used.
+        Fetch short interest data: try Nasdaq API first for ALL tickers,
+        fall back to Finviz if Nasdaq returns empty.
         """
         try:
-            # Check if this is an NYSE stock that needs Finviz backup
-            nyse_stocks = [
-                'BRK-B', 'LLY', 'WMT', 'JPM', 'V', 'MA', 'XOM', 'ORCL', 'PG', 'JNJ', 
-                'UNH', 'HD', 'ABBV', 'KO', 'CRM', 'BAC', 'CVX', 'DIS', 'MRK', 'ADBE',
-                'NFLX', 'TMO', 'ACN', 'COST', 'VZ', 'DHR', 'TXN', 'NEE', 'LIN', 'HON',
-                'UPS', 'QCOM', 'PM', 'LOW', 'SPGI', 'UNP', 'T', 'RTX', 'IBM', 'INTU',
-                'CAT', 'GS', 'DE', 'BKNG', 'AXP', 'ELV', 'LMT', 'SYK', 'GILD', 'MMM',
-                'MDLZ', 'CI', 'NOW', 'ISRG', 'TJX', 'CB', 'BLK', 'AMT', 'VRTX', 'ZTS',
-                'PLD', 'SCHW', 'MO', 'BSX', 'ADP', 'SHW', 'DUK', 'SO', 'CCI', 'ITW',
-                'FI', 'WM', 'MMC', 'AON', 'GD', 'ICE', 'EQIX', 'PNC', 'CL', 'APH',
-                'CSX', 'MCK', 'USB', 'TFC', 'NSC', 'EMR', 'COF', 'HUM', 'D', 'PSA',
-                'KMB', 'NOC', 'ECL', 'GE', 'WELL', 'SLB', 'EOG', 'TRV', 'HCA', 'AIG'
-            ]
-            
-            if ticker.upper() in nyse_stocks:
-                logger.info(f"📊 {ticker} is NYSE-listed, using Finviz for short interest data")
-                data = await self.fetch_finviz_short_interest(ticker)
-                self._store_short_interest_raw(ticker, data)
-                return data
-            
-            # Use the direct Nasdaq API method for NASDAQ stocks
+            # Try Nasdaq API first for ALL tickers (returns 20+ historical records)
             logger.info(f"Fetching short interest for {ticker} using Nasdaq API")
             nasdaq_data = await self.fetch_short_interest_direct_api(ticker)
             
@@ -818,7 +798,7 @@ class ShortInterestAnalyzer:
                                         logger.info(f"📊 Calculated Short Interest: {short_interest:,.0f} shares")
                                 
                                 short_data.append({
-                                    'settlementDate': datetime.utcnow().strftime('%Y-%m-%d'),
+                                    'settlementDate': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
                                     'shortInterest': int(found_data.get('short_interest', 0)),
                                     'sharesFloat': int(found_data.get('shares_float', 0)),
                                     'avgDailyShareVolumeInThousands': 0,  # Not available from snapshot
@@ -845,11 +825,13 @@ class ShortInterestAnalyzer:
             return []
 
     def _parse_finviz_number(self, value_str: str) -> float:
-        """Parse number from Finviz with M/B/K suffixes."""
+        """Parse number from Finviz with T/B/M/K suffixes."""
         try:
             value_str = value_str.replace(',', '').strip()
             
-            if 'B' in value_str:
+            if 'T' in value_str:
+                return float(value_str.replace('T', '')) * 1_000_000_000_000
+            elif 'B' in value_str:
                 return float(value_str.replace('B', '')) * 1_000_000_000
             elif 'M' in value_str:
                 return float(value_str.replace('M', '')) * 1_000_000
@@ -885,16 +867,20 @@ class ShortInterestAnalyzer:
                 
                 # If we don't have short float percentage from Nasdaq, calculate it
                 if short_float == 0 and latest_data.get('shortInterest', 0) > 0:
-                    # Estimation using typical shares outstanding for major stocks
-                    # For AAPL: ~15.8B shares, for TSLA: ~3.2B, etc.
-                    typical_shares = {
-                        'AAPL': 15800000000,
-                        'TSLA': 3200000000, 
-                        'MSFT': 7400000000,
-                        'GOOGL': 12600000000,
-                        'AMZN': 10800000000
-                    }
-                    estimated_shares = typical_shares.get(ticker.upper(), 5000000000)  # Default 5B
+                    # Dynamically fetch shares outstanding from yfinance
+                    estimated_shares = 5_000_000_000  # Safe fallback
+                    try:
+                        import yfinance as yf
+                        info = yf.Ticker(ticker).info
+                        shares_out = info.get("sharesOutstanding")
+                        if shares_out and shares_out > 0:
+                            estimated_shares = shares_out
+                            logger.info(f"📈 Got shares outstanding for {ticker} from yfinance: {estimated_shares:,.0f}")
+                        else:
+                            logger.warning(f"⚠️ yfinance returned no sharesOutstanding for {ticker}, using fallback 5B")
+                    except Exception as yf_err:
+                        logger.warning(f"⚠️ Failed to fetch sharesOutstanding for {ticker}: {yf_err}, using fallback 5B")
+
                     short_float = (latest_data['shortInterest'] / estimated_shares) * 100
                     logger.info(f"📈 Calculated short float from Nasdaq data: {short_float:.2f}%")
                 

@@ -16,7 +16,7 @@ import json
 import gzip
 from typing import Dict, List, Optional, Any
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 import numpy as np
 import pandas as pd
@@ -241,7 +241,7 @@ class MongoDBClient:
             
             # Prepare documents for bulk insert
             documents = []
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(timezone.utc)
             # asof_date = calendar day the prediction was generated (midnight UTC).
             # This becomes part of the upsert key so re-runs on the same day
             # update in-place but different days accumulate history.
@@ -394,7 +394,7 @@ class MongoDBClient:
             f"get sentiment collection for {ticker}",
         )
         sentiment['ticker'] = ticker
-        sentiment['last_updated'] = datetime.utcnow()
+        sentiment['last_updated'] = datetime.now(timezone.utc)
         # Respect pre-set trading-day-aligned date from get_combined_sentiment().
         # Only fall back to UTC midnight if caller didn't set it.
         if 'date' not in sentiment or sentiment['date'] is None:
@@ -721,7 +721,7 @@ class MongoDBClient:
                 "window": window,
                 "version": version,
                 "metrics": metrics,
-                "timestamp": datetime.utcnow()
+                "timestamp": datetime.now(timezone.utc)
             }
             
             # Upsert on {ticker, window, version} so retrains update in place
@@ -746,7 +746,7 @@ class MongoDBClient:
                 "ticker": ticker,
                 "window": window,
                 "metrics": metrics,
-                "timestamp": datetime.utcnow()
+                "timestamp": datetime.now(timezone.utc)
             }
             
             # Upsert on {ticker, window} so only the latest metrics are kept
@@ -792,7 +792,7 @@ class MongoDBClient:
                 logger.warning(f"Alpha Vantage data is a list, converting to dict structure for {ticker}/{endpoint}")
                 data = {
                     'data': data,
-                    'timestamp': datetime.utcnow(),
+                    'timestamp': datetime.now(timezone.utc),
                     'ticker': ticker,
                     'endpoint': endpoint
                 }
@@ -802,7 +802,7 @@ class MongoDBClient:
             
             # Ensure required fields exist
             if 'timestamp' not in data:
-                data['timestamp'] = datetime.utcnow()
+                data['timestamp'] = datetime.now(timezone.utc)
             if 'ticker' not in data:
                 data['ticker'] = ticker
             if 'endpoint' not in data:
@@ -996,7 +996,7 @@ class MongoDBClient:
             recent_sentiment = collection.find_one(
                 {
                     'ticker': ticker,
-                    'timestamp': {'$gte': datetime.utcnow() - timedelta(hours=1)}
+                    'timestamp': {'$gte': datetime.now(timezone.utc) - timedelta(hours=1)}
                 },
                 sort=[('timestamp', -1)]
             )
@@ -1029,11 +1029,11 @@ class MongoDBClient:
             collection.insert_one({
                 **sentiment,
                 'ticker': ticker,
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc)
             })
             
             # Cleanup old data (keep only last 30 days)
-            cutoff_date = datetime.utcnow() - timedelta(days=30)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=30)
             collection.delete_many({
                 'ticker': ticker,
                 'timestamp': {'$lt': cutoff_date}
@@ -1052,7 +1052,7 @@ class MongoDBClient:
             
             cached = collection.find_one({'cache_key': cache_key})
             if cached:
-                age = (datetime.utcnow() - cached['timestamp']).total_seconds() / 3600
+                age = (datetime.now(timezone.utc) - cached['timestamp']).total_seconds() / 3600
                 if age < max_age_hours:
                     # Decompress if needed
                     if cached.get('_compressed'):
@@ -1076,7 +1076,7 @@ class MongoDBClient:
             
             cache_doc = {
                 'cache_key': cache_key,
-                'timestamp': datetime.utcnow(),
+                'timestamp': datetime.now(timezone.utc),
                 'expire_hours': expire_hours
             }
             
@@ -1095,7 +1095,7 @@ class MongoDBClient:
             )
             
             # Cleanup expired cache entries
-            expiry_time = datetime.utcnow() - timedelta(hours=24)  # Clean entries older than 24h
+            expiry_time = datetime.now(timezone.utc) - timedelta(hours=24)  # Clean entries older than 24h
             collection.delete_many({'timestamp': {'$lt': expiry_time}})
             
         except Exception as e:
@@ -1167,7 +1167,7 @@ class MongoDBClient:
             document = {
                 "ticker": ticker,
                 "window": window,
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.now(timezone.utc),
                 "explanation_data": converted_explanation_data
             }
 
@@ -1212,8 +1212,8 @@ class MongoDBClient:
             
             document = {
                 "ticker": ticker,
-                "timestamp": datetime.utcnow(),
-                "session_id": f"{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}",
+                "timestamp": datetime.now(timezone.utc),
+                "session_id": f"{ticker}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
                 **session_data
             }
             
@@ -1239,7 +1239,7 @@ class MongoDBClient:
         try:
             collection = self.collections[MONGO_COLLECTIONS["predictions"]]
             
-            cutoff_date = datetime.utcnow() - timedelta(days=days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
             
             cursor = collection.find(
                 {
@@ -1263,8 +1263,8 @@ class MongoDBClient:
             doc = {
                 'etf': etf,
                 'data': data_dict,
-                'timestamp': datetime.utcnow(),
-                'last_updated': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc),
+                'last_updated': datetime.now(timezone.utc)
             }
             
             # Use upsert to update if exists

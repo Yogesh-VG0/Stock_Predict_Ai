@@ -10,7 +10,7 @@ import logging
 import joblib
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 import lightgbm as lgb
 
@@ -284,7 +284,7 @@ class StockPredictor:
         """Fetch historical data from MongoDB."""
         if self.mongo_client is None:
             return None
-        end = datetime.utcnow() if not end_date else pd.to_datetime(end_date)
+        end = datetime.now(timezone.utc) if not end_date else pd.to_datetime(end_date)
         start = end - timedelta(days=365 * 5) if not start_date else pd.to_datetime(start_date)
         df = self.mongo_client.get_historical_data(ticker, start, end)
         if df is None or df.empty:
@@ -346,6 +346,40 @@ class StockPredictor:
                 rows_by_window[window_name].append(X)
                 y_by_window[window_name].append(y)
                 dates_by_window[window_name].append(dates_x)
+
+        # --- Feature coverage guardrails ---
+        # Log per-feature-group coverage so silent batch-wide missingness is visible
+        if feature_cols_ref:
+            _feature_groups = {
+                "short_interest": [c for c in feature_cols_ref if c.startswith("si_")],
+                "sentiment": [c for c in feature_cols_ref if c.startswith("sent_") or "sentiment" in c],
+                "insider": [c for c in feature_cols_ref if c.startswith("insider_")],
+                "earnings": [c for c in feature_cols_ref if c.startswith("earn_")],
+                "fundamental": [c for c in feature_cols_ref if c.startswith("fund_")],
+                "sector_etf": [c for c in feature_cols_ref if c.startswith("sector_etf_") or c.startswith("excess_vs_")],
+            }
+            first_window = next(iter(TARGET_CONFIG))
+            if rows_by_window[first_window]:
+                X_check = np.vstack(rows_by_window[first_window])
+                col_idx = {c: i for i, c in enumerate(feature_cols_ref)}
+                coverage_lines = ["[FEATURE-COVERAGE] Per-group non-zero coverage in pooled training data:"]
+                for group_name, cols in _feature_groups.items():
+                    if not cols:
+                        continue
+                    idxs = [col_idx[c] for c in cols if c in col_idx]
+                    if not idxs:
+                        continue
+                    group_data = X_check[:, idxs]
+                    nonzero_pct = float((group_data != 0).any(axis=1).mean()) * 100
+                    flag = " ⚠️ LOW" if nonzero_pct < 30 else ""
+                    coverage_lines.append(f"  {group_name}: {nonzero_pct:.1f}% rows have non-zero values ({len(cols)} features){flag}")
+                logger.info("\n".join(coverage_lines))
+
+        # --- SEC/FMP consistency metadata ---
+        skip_sec_fmp = os.environ.get("SKIP_SEC_FMP", "false").lower() == "true"
+        if skip_sec_fmp:
+            logger.warning("[SEC/FMP] Training with SKIP_SEC_FMP=true — SEC/FMP features will be zero-filled. "
+                           "Ensure SKIP_SEC_FMP is also set at inference time for consistency.")
 
         for window_name in TARGET_CONFIG:
             if not rows_by_window[window_name]:
@@ -594,6 +628,7 @@ class StockPredictor:
             except Exception as e:
                 logger.warning("Could not train pooled sign classifier for %s: %s", window_name, e)
             pooled_meta.update(pooled_holdout_meta)
+            pooled_meta["skip_sec_fmp_at_train"] = skip_sec_fmp
             self.pooled_metadata[window_name] = pooled_meta
             logger.info(
                 "Trained POOLED-%s: rmse=%.4f mae=%.4f n=%d hit_rate=%.1f%% corr=%.3f (folds=%d)",
@@ -936,6 +971,18 @@ class StockPredictor:
         if features is None or len(features) == 0:
             return {}
 
+        # --- SEC/FMP consistency check at inference ---
+        infer_skip_sec_fmp = os.environ.get("SKIP_SEC_FMP", "false").lower() == "true"
+        for _wn, _pm in self.pooled_metadata.items():
+            trained_skip = _pm.get("skip_sec_fmp_at_train")
+            if trained_skip is not None and trained_skip != infer_skip_sec_fmp:
+                logger.warning(
+                    "[SEC/FMP-MISMATCH] Model %s was trained with SKIP_SEC_FMP=%s but inference "
+                    "is running with SKIP_SEC_FMP=%s — predictions may be unreliable.",
+                    _wn, trained_skip, infer_skip_sec_fmp,
+                )
+            break  # Only need to check once
+
         results = {}
         # Use last row for prediction; current_price from df_aligned (matches feature row)
         X_full = features[-1:].astype(np.float32)
@@ -1104,7 +1151,7 @@ class StockPredictor:
                 "covers_transaction_cost": covers_transaction_cost,
                 "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
                 "model_version": MODEL_VERSION,
-                "training_timestamp": datetime.utcnow().isoformat(),
+                "training_timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         # Add best_window: highest normalized_return among trade_recommended, else highest normalized_return
@@ -1367,7 +1414,7 @@ class StockPredictor:
         try:
             model_meta = {
                 "model_version": MODEL_VERSION,
-                "trained_at": datetime.utcnow().isoformat(),
+                "trained_at": datetime.now(timezone.utc).isoformat(),
                 "n_pooled_models": len(self.pooled_models),
                 "n_ticker_models": len(self.models),
                 "windows": list(self.pooled_models.keys()),

@@ -5,7 +5,7 @@ Module for analyzing SEC filings using Kaleidoscope API (primary) and FMP (backu
 import requests
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
 from ratelimit import limits, sleep_and_retry
@@ -638,8 +638,8 @@ class SECFilingsAnalyzer:
             
             # Store the complete data
             collection.replace_one(
-                {'ticker': ticker, 'fetched_at': datetime.utcnow()},
-                {**filings_data, 'ticker': ticker, 'fetched_at': datetime.utcnow()},
+                {'ticker': ticker, 'fetched_at': datetime.now(timezone.utc)},
+                {**filings_data, 'ticker': ticker, 'fetched_at': datetime.now(timezone.utc)},
                 upsert=True
             )
             logger.info(f"Stored SEC filings for {ticker} in MongoDB with {len(processed_filings)} processed filings")
@@ -669,7 +669,7 @@ class SECFilingsAnalyzer:
                 return self.fetch_fmp_filings(ticker, lookback_days)
             
             # Calculate date range
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=lookback_days)
             
             # Convert dates to Unix timestamps
@@ -808,7 +808,7 @@ class SECFilingsAnalyzer:
                 }
                 
             # Calculate date range
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=lookback_days)
             
             # Prepare request parameters
@@ -922,7 +922,7 @@ class SECFilingsAnalyzer:
                 return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
             
             # Calculate date range - extend lookback for more filings
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=max(lookback_days, 90))  # Minimum 90 days
             
             # Convert dates to Unix timestamps
@@ -1027,7 +1027,7 @@ class SECFilingsAnalyzer:
                                             'form_desc': filing.get('Form_Desc', ''),
                                             'pdf_url': filing.get('pdf', ''),
                                             'word_url': filing.get('word', ''),
-                                            'processed_at': datetime.utcnow().isoformat()
+                                            'processed_at': datetime.now(timezone.utc).isoformat()
                                         }
                                         processed_filings.append(processed_filing)
                                         
@@ -1105,7 +1105,7 @@ class SECFilingsAnalyzer:
                                 "11-K": [f for f in filings if f['Form'] == '11-K']
                             },
                             "total_processed": len(processed_filings),
-                            "processed_at": datetime.utcnow().isoformat()
+                            "processed_at": datetime.now(timezone.utc).isoformat()
                         },
                         "sec_processed_filings": processed_filings
                     }
@@ -1118,7 +1118,7 @@ class SECFilingsAnalyzer:
         """Check if a filing date is within the last 30 days."""
         try:
             filing_date = datetime.strptime(date_str, "%Y-%m-%d")
-            return (datetime.utcnow() - filing_date).days <= 30
+            return (datetime.now(timezone.utc) - filing_date).days <= 30
         except Exception:
             return False 
 
@@ -1358,7 +1358,7 @@ class SECFilingsAnalyzer:
                 }
             
             # Calculate date range
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=lookback_days)
             
             # FMP SEC filings endpoint
@@ -1460,7 +1460,7 @@ class SECFilingsAnalyzer:
                                     'accepted_date': filing.get('acceptedDate', ''),
                                     'period_of_report': filing.get('periodOfReport', ''),
                                     'effective_date': filing.get('effectiveDate', ''),
-                                    'processed_at': datetime.utcnow().isoformat(),
+                                    'processed_at': datetime.now(timezone.utc).isoformat(),
                                     'source': 'fmp'
                                 }
                                 collection.replace_one(
@@ -1492,7 +1492,7 @@ class SECFilingsAnalyzer:
                                 "other": [f for f in filings if f.get('type') not in ['10-K', '10-Q', '8-K', 'DEF 14A']]
                             },
                             "total_processed": len(sentiments),
-                            "processed_at": datetime.utcnow().isoformat()
+                            "processed_at": datetime.now(timezone.utc).isoformat()
                         }
                     }
             

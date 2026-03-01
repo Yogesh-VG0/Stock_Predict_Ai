@@ -5,7 +5,7 @@ Main FastAPI application for the stock prediction system.
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import redis.asyncio as redis
@@ -247,7 +247,7 @@ async def get_metadata(ticker: str) -> Dict:
             "predictions": predictions,
             "sentiment": sentiment,
             "statistics": stats,
-            "last_updated": datetime.utcnow().isoformat()
+            "last_updated": datetime.now(timezone.utc).isoformat()
         }
         
     except HTTPException:
@@ -276,7 +276,7 @@ def _run_training_job(job_id: str) -> None:
     jobs = app.state.training_jobs
     try:
         jobs[job_id] = {"status": "running", "progress": 0, "message": "Loading historical data..."}
-        end_date = datetime.utcnow()
+        end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=HISTORICAL_DATA_YEARS * 365)
         historical_data = load_all_historical_data_from_mongodb(
             app.state.mongo_client, TOP_100_TICKERS, start_date, end_date
@@ -312,7 +312,7 @@ def _run_training_job(job_id: str) -> None:
             "status": "completed",
             "progress": 100,
             "message": "Training and prediction completed",
-            "completed_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as e:
         logger.error(f"Training job {job_id} failed: {e}")
@@ -321,7 +321,7 @@ def _run_training_job(job_id: str) -> None:
             "progress": 0,
             "message": str(e),
             "error": str(e),
-            "completed_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
         }
 
 
@@ -385,7 +385,7 @@ async def get_predictions(ticker: str) -> Dict:
         else:
             predictions = app.state.mongo_client.get_latest_predictions(ticker)
         if not predictions:
-            end_date = datetime.utcnow()
+            end_date = datetime.now(timezone.utc)
             start_date = end_date - timedelta(days=365 * 2)
             df = app.state.mongo_client.get_historical_data(ticker, start_date, end_date)
             if df is None or df.empty:
@@ -399,7 +399,7 @@ async def get_predictions(ticker: str) -> Dict:
         windows = normalize_prediction_dict(predictions) if predictions else {}
         result = {
             "ticker": ticker,
-            "as_of": datetime.utcnow().isoformat(),
+            "as_of": datetime.now(timezone.utc).isoformat(),
             "windows": windows,
         }
         await _set_predictions_cache(ticker, result)
@@ -1677,7 +1677,7 @@ async def get_optimization_insights(ticker: str):
                     'avg_cache_age_hours': {
                         '$avg': {
                             '$divide': [
-                                {'$subtract': [datetime.utcnow(), '$timestamp']},
+                                {'$subtract': [datetime.now(timezone.utc), '$timestamp']},
                                 3600000  # Convert to hours
                             ]
                         }
@@ -1765,7 +1765,7 @@ async def trigger_optimization(ticker: str):
             'sentiment_updated': bool(sentiment_data),
             'optimized_feature_count': len(optimized_features) if optimized_features else 0,
             'indexes_created': True,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
         
         # Don't close shared connection
@@ -2009,7 +2009,7 @@ async def debug_sec_filing_extraction(ticker: str):
                 "section_numbers": ["Item 1", "Item 1A", "Item 7"],
                 "quality_threshold": "500+ chars per section with business keywords"
             },
-            "debug_timestamp": datetime.utcnow().isoformat()
+            "debug_timestamp": datetime.now(timezone.utc).isoformat()
         }
         
     except Exception as e:
@@ -2029,7 +2029,7 @@ async def get_complete_predictions(ticker: str):
         return {
             "ticker": ticker,
             "predictions": predictions,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         logger.error(f"Error getting complete predictions for {ticker}: {e}")
@@ -2049,7 +2049,7 @@ async def get_prediction_explanation(ticker: str, window: str = "next_day"):
             "ticker": ticker,
             "window": window,
             "explanation": explanation,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         logger.error(f"Error getting prediction explanation for {ticker}-{window}: {e}")
@@ -2067,7 +2067,7 @@ async def get_prediction_history(ticker: str, days: int = 30):
             "days": days,
             "history": history,
             "count": len(history),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         logger.error(f"Error getting prediction history for {ticker}: {e}")
@@ -2088,7 +2088,7 @@ async def get_bulk_complete_predictions(tickers: str):
         return {
             "tickers": ticker_list,
             "predictions": all_predictions,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
         logger.error(f"Error getting bulk complete predictions: {e}")
@@ -2262,7 +2262,7 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
                 "risk_assessment": extract_risk_signals(sentiment_data, technicals),
                 "financial_data_richness": len([k for k in comprehensive_financial_data.keys() if comprehensive_financial_data[k]])
             },
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "prompt_length": len(comprehensive_prompt),
             "explanation_length": len(gemini_explanation) if gemini_explanation else 0
         }
@@ -2296,7 +2296,7 @@ async def get_comprehensive_ai_explanation(ticker: str, date: str):
             "metadata": {
                 "data_sources": explanation_data["data_sources_used"],
                 "quality_score": explanation_data["explanation_quality"]["data_completeness"],
-                "processing_time": datetime.utcnow().isoformat(),
+                "processing_time": datetime.now(timezone.utc).isoformat(),
                 "api_version": "2.0.0"
             }
         }
@@ -2573,7 +2573,7 @@ def get_comprehensive_financial_data(mongo_client, ticker: str) -> Dict:
         
         # 3. Get economic events affecting this ticker
         events_collection = mongo_client.db['economic_events']
-        today = datetime.utcnow().strftime('%Y-%m-%d')
+        today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
         economic_events = list(events_collection.find({
             'date': {'$gte': today},
             'affected_tickers': ticker
@@ -2826,7 +2826,7 @@ async def get_stored_ai_explanation(ticker: str, window: str = "comprehensive"):
             "timestamp": stored_doc.get("timestamp"),
             "explanation_data": stored_doc.get("explanation_data", {}),
             "source": "mongodb_stored",
-            "retrieved_at": datetime.utcnow().isoformat()
+            "retrieved_at": datetime.now(timezone.utc).isoformat()
         }
         
     except HTTPException:
@@ -2855,7 +2855,7 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
     """
     try:
         # Use today's date if not provided
-        target_date = date or datetime.utcnow().strftime('%Y-%m-%d')
+        target_date = date or datetime.now(timezone.utc).strftime('%Y-%m-%d')
         
         # Validate date format
         try:
@@ -2869,11 +2869,11 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
         results = []
         success_count = 0
         error_count = 0
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Process each ticker
         for i, ticker in enumerate(TOP_100_TICKERS, 1):
-            ticker_start_time = datetime.utcnow()
+            ticker_start_time = datetime.now(timezone.utc)
             
             try:
                 logger.info(f"[{i}/25] Processing {ticker}...")
@@ -2977,7 +2977,7 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
                         "Economic Events",
                         "Insider Transactions"
                     ],
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "explanation_length": len(gemini_explanation) if gemini_explanation else 0
                 }
                 
@@ -2990,7 +2990,7 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
                     storage_success = False
                 
                 # Calculate processing time
-                ticker_end_time = datetime.utcnow()
+                ticker_end_time = datetime.now(timezone.utc)
                 processing_time = (ticker_end_time - ticker_start_time).total_seconds()
                 
                 # Record success
@@ -3011,7 +3011,7 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
             except Exception as e:
                 # Record error
                 error_count += 1
-                ticker_end_time = datetime.utcnow()
+                ticker_end_time = datetime.now(timezone.utc)
                 processing_time = (ticker_end_time - ticker_start_time).total_seconds()
                 
                 results.append({
@@ -3029,7 +3029,7 @@ async def batch_generate_ai_explanations(date: Optional[str] = None):
                 await asyncio.sleep(2)
         
         # Calculate total processing time
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         total_processing_time = (end_time - start_time).total_seconds()
         
         # Calculate summary statistics

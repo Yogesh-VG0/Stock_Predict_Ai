@@ -8,7 +8,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 # transformers removed — VADER is used for all local sentiment analysis
 # (transformers adds ~2 GB and fails to install in GitHub Actions CI)
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 from typing import Dict, Any
 import logging
@@ -143,7 +143,7 @@ USE_ALPHA_OBJECTS_FOR_SENTIMENT = True  # Set to True to use Alpha Vantage objec
 RECENT_DAYS = 7  # Use news/posts from the last 7 days
 
 def get_cutoff_datetime():
-    return datetime.utcnow() - timedelta(days=RECENT_DAYS)
+    return datetime.now(timezone.utc) - timedelta(days=RECENT_DAYS)
 
 def _map_sentiment_label(label):
     if label in LABEL_MAP:
@@ -158,7 +158,7 @@ def _map_sentiment_label(label):
 def _is_recent(date_obj):
     if not date_obj:
         return False
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # Always make both timezone-naive (UTC)
     if hasattr(date_obj, 'tz_localize') or hasattr(date_obj, 'tzinfo'):
         if getattr(date_obj, 'tzinfo', None) is not None:
@@ -284,7 +284,7 @@ class SentimentAnalyzer:
         status = self.api_status.get(api_name, {})
         if not status.get('working', True):
             cooldown_until = status.get('cooldown_until')
-            if cooldown_until and datetime.utcnow() < cooldown_until:
+            if cooldown_until and datetime.now(timezone.utc) < cooldown_until:
                 return False
             else:
                 # Reset status if cooldown period is over
@@ -297,7 +297,7 @@ class SentimentAnalyzer:
         self.api_status[api_name] = {
             'working': False,
             'last_error': error,
-            'cooldown_until': datetime.utcnow() + timedelta(minutes=cooldown_minutes)
+            'cooldown_until': datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes)
         }
         logger.warning(f"API {api_name} marked as down for {cooldown_minutes} minutes due to: {error}")
     
@@ -535,8 +535,8 @@ class SentimentAnalyzer:
         try:
             await finnhub_limiter.acquire()
             finnhub_client = finnhub.Client(api_key=api_key)
-            from_date = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
-            to_date = datetime.utcnow().strftime("%Y-%m-%d")
+            from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
+            to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             
             # Fetch insider transactions
             data = finnhub_client.stock_insider_transactions(ticker, from_date, to_date)
@@ -602,7 +602,7 @@ class SentimentAnalyzer:
                     "04. low": str(data.get('l', 0)),
                     "05. price": str(data.get('c', 0)),
                     "06. volume": "0",  # Finnhub doesn't provide volume in quote
-                    "07. latest trading day": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "07. latest trading day": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
                     "08. previous close": str(data.get('pc', 0)),
                     "09. change": str(data.get('d', 0)),
                     "10. change percent": f"{data.get('dp', 0)}%"
@@ -935,7 +935,7 @@ class SentimentAnalyzer:
         """
         sentiment_dict = {
             "ticker": ticker,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         }
 
         # Detect CI environment (GitHub Actions sets CI=true)
@@ -1119,7 +1119,7 @@ class SentimentAnalyzer:
             sentiment_dict["date"] = sentiment_dict["timestamp"].replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
-        sentiment_dict["last_updated"] = datetime.utcnow()
+        sentiment_dict["last_updated"] = datetime.now(timezone.utc)
         sentiment_dict["api_status"] = self.api_status  # Store API health status
         
         # Store in MongoDB with error handling
@@ -1199,7 +1199,7 @@ class SentimentAnalyzer:
 
     def get_latest_quarter(self) -> str:
         """Return the most recent completed quarter in format YYYYQn (e.g., 2024Q1)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         year = now.year
         month = now.month
         if month <= 3:
@@ -2211,8 +2211,8 @@ class SentimentAnalyzer:
         
         try:
             # Get data for the last 12 months
-            from_date = (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
-            to_date = datetime.utcnow().strftime('%Y-%m-%d')
+            from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime('%Y-%m-%d')
+            to_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
             import finnhub
             finnhub_client = finnhub.Client(api_key=api_key)
@@ -2321,8 +2321,8 @@ class SentimentAnalyzer:
                 logger.warning("FINNHUB_API_KEY not found")
                 return {}
             
-            from_date = (datetime.utcnow() - timedelta(days=365)).strftime('%Y-%m-%d')
-            to_date = datetime.utcnow().strftime('%Y-%m-%d')
+            from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime('%Y-%m-%d')
+            to_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
             url = "https://finnhub.io/api/v1/stock/insider-sentiment"
             params = {
@@ -2487,7 +2487,7 @@ def fetch_and_store_options_sentiment(mongo_client, ticker, date):
         if cached_doc and cached_doc.get('data'):
             # Check if cache is still valid (less than 1 day old)
             if cached_doc.get('timestamp'):
-                age = (datetime.utcnow() - cached_doc['timestamp']).total_seconds()
+                age = (datetime.now(timezone.utc) - cached_doc['timestamp']).total_seconds()
                 if age < 86400:  # 24 hours
                     logger.info(f"Using cached Alpha Vantage options data for {ticker}")
                     return {'data': cached_doc['data']}
@@ -2519,7 +2519,7 @@ def fetch_and_store_options_sentiment(mongo_client, ticker, date):
                 'endpoint': 'Historical Options',
                 'data': options_data['data'],
                 'message': 'success',
-                'timestamp': datetime.utcnow()
+                'timestamp': datetime.now(timezone.utc)
             }
             
             # Store in alpha_vantage_data collection (as per your MongoDB structure)
@@ -2554,8 +2554,8 @@ def store_finnhub_data_in_mongodb(mongo_client, ticker, data_type, data, api_end
             'data_type': data_type,
             'api_source': f'finnhub_{api_endpoint}',
             'data': data,
-            'fetched_at': datetime.utcnow(),
-            'expires_at': datetime.utcnow() + timedelta(hours=6)  # 6 hour cache for Finnhub
+            'fetched_at': datetime.now(timezone.utc),
+            'expires_at': datetime.now(timezone.utc) + timedelta(hours=6)  # 6 hour cache for Finnhub
         }
         
         # Use ticker-specific collection for better organization
@@ -2587,8 +2587,8 @@ def store_fmp_data_in_mongodb(mongo_client, ticker, data_type, data, api_endpoin
             'data_type': data_type,
             'api_source': f'fmp_{api_endpoint}',
             'data': data,
-            'fetched_at': datetime.utcnow(),
-            'expires_at': datetime.utcnow() + timedelta(hours=4)  # 4 hour cache for FMP
+            'fetched_at': datetime.now(timezone.utc),
+            'expires_at': datetime.now(timezone.utc) + timedelta(hours=4)  # 4 hour cache for FMP
         }
         
         # Use ticker-specific collection
@@ -2639,7 +2639,7 @@ def get_stored_data_from_mongodb(mongo_client, ticker, data_type, collection_pre
             return None
         
         # Check if data is still valid (if expiration field exists)
-        if 'expires_at' in doc and datetime.utcnow() > doc.get('expires_at', datetime.utcnow()):
+        if 'expires_at' in doc and datetime.now(timezone.utc) > doc.get('expires_at', datetime.now(timezone.utc)):
             logger.info(f"Cached {data_type} data for {ticker} has expired")
             return None
         
@@ -2694,7 +2694,7 @@ class FMPAPIManager:
         
         # Check if we're in cooldown period
         if (not self.api_working and self.last_error_time and 
-            (datetime.utcnow() - self.last_error_time).total_seconds() < self.error_cooldown):
+            (datetime.now(timezone.utc) - self.last_error_time).total_seconds() < self.error_cooldown):
             logger.warning(f"FMP API in cooldown period, skipping {endpoint}")
             return {}
             
@@ -2705,7 +2705,7 @@ class FMPAPIManager:
         try:
             cached = self.mongo_client.get_alpha_vantage_data(ticker or 'global', cache_key)
             if cached and 'timestamp' in cached:
-                age = (datetime.utcnow() - cached['timestamp']).total_seconds()
+                age = (datetime.now(timezone.utc) - cached['timestamp']).total_seconds()
                 if age < self.cache_duration:
                     logger.info(f"Using cached FMP data for {endpoint} - {ticker or 'global'}")
                     return cached.get('data', {})
@@ -2730,12 +2730,12 @@ class FMPAPIManager:
                     if resp.status == 403:
                         logger.error(f"  FMP 403 Forbidden: {endpoint} - Check API subscription level or ticker support")
                         self.api_working = False
-                        self.last_error_time = datetime.utcnow()
+                        self.last_error_time = datetime.now(timezone.utc)
                         return {}
                     elif resp.status == 429:
                         logger.warning(f"  FMP 429 Rate Limited: {endpoint}")
                         self.api_working = False
-                        self.last_error_time = datetime.utcnow()
+                        self.last_error_time = datetime.now(timezone.utc)
                         return {}
                     elif resp.status != 200:
                         logger.warning(f"  FMP {endpoint} returned status {resp.status}")
@@ -2754,7 +2754,7 @@ class FMPAPIManager:
                             logger.error(f"  FMP API error: {data['Error Message']}")
                             if 'limit' in data['Error Message'].lower() or 'subscription' in data['Error Message'].lower():
                                 self.api_working = False
-                                self.last_error_time = datetime.utcnow()
+                                self.last_error_time = datetime.now(timezone.utc)
                             return {}
                         elif 'error' in data:
                             logger.error(f"  FMP API error: {data['error']}")
@@ -2773,7 +2773,7 @@ class FMPAPIManager:
                         self.mongo_client.store_alpha_vantage_data(
                             ticker or 'global', 
                             cache_key, 
-                            {'data': data, 'timestamp': datetime.utcnow()}
+                            {'data': data, 'timestamp': datetime.now(timezone.utc)}
                         )
                     except Exception as e:
                         logger.warning(f"Failed to cache FMP data: {e}")
@@ -2797,9 +2797,9 @@ class FMPAPIManager:
         """Get dividends calendar using correct stable endpoint."""
         #   CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/dividends-calendar
         if not from_date:
-            from_date = datetime.utcnow().strftime("%Y-%m-%d")
+            from_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if not to_date:
-            to_date = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")  # Free tier: 1 month max
+            to_date = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")  # Free tier: 1 month max
         
         params = {"from": from_date, "to": to_date}
         data = await self._make_fmp_request("dividends-calendar", None, **params)
@@ -2815,9 +2815,9 @@ class FMPAPIManager:
         """Get earnings calendar using correct stable endpoint."""
         #   CORRECT STABLE ENDPOINT: https://financialmodelingprep.com/stable/earnings-calendar
         if not from_date:
-            from_date = datetime.utcnow().strftime("%Y-%m-%d")
+            from_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if not to_date:
-            to_date = (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d")  # Free tier: 1 month max
+            to_date = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")  # Free tier: 1 month max
         
         params = {"from": from_date, "to": to_date}
         data = await self._make_fmp_request("earnings-calendar", None, **params)

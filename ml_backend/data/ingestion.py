@@ -5,7 +5,7 @@ Data ingestion module for fetching and processing market data.
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 from typing import Dict, List, Optional, Tuple
 import logging
@@ -94,7 +94,7 @@ class DataIngestion:
         Returns the last available trading day by downloading a wide window and using the last index.
         If the DataFrame is empty, tries a fallback window ending at a known recent date.
         """
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         start = today - timedelta(days=60)
         data = yf.download("AAPL", start=start.strftime("%Y-%m-%d"), end=(today + timedelta(days=1)).strftime("%Y-%m-%d"))
         if not data.empty:
@@ -118,7 +118,7 @@ class DataIngestion:
             end_date = self.get_last_available_trading_day()
             if latest_date is None or pd.isna(latest_date):
                 logger.warning(f"NaT/null latest_date for {ticker}, treating as no data exists. Fetching full 10 years from Yahoo Finance.")
-                start_date = (datetime.utcnow() - pd.DateOffset(years=10)).date()
+                start_date = (datetime.now(timezone.utc) - pd.DateOffset(years=10)).date()
                 data = yf.download(ticker, start=start_date, end=end_date, auto_adjust=True)
                 if data is None or data.empty:
                     logger.error(f"No data fetched for {ticker} from Yahoo Finance.")
@@ -221,7 +221,7 @@ class DataIngestion:
         """
         results = {}
         nyse = mcal.get_calendar('NYSE')
-        today = datetime.utcnow().date()
+        today = datetime.now(timezone.utc).date()
         canary_found = False
         for canary in CANARY_TICKERS:
             latest_date = self.mongo_client.get_latest_date(canary)

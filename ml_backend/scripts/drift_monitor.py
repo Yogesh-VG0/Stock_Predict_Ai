@@ -19,7 +19,7 @@ import logging
 import math
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -100,7 +100,7 @@ def run_drift_monitor(
 ) -> Dict:
     """Run drift monitoring across all horizons."""
     results = {}
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=days + 30)  # extra buffer for horizon alignment
     baseline_cutoff = end - timedelta(days=days)
     midpoint = baseline_cutoff + timedelta(days=days // 2)
@@ -239,7 +239,7 @@ def run_drift_monitor(
 
 def check_sentiment_coverage(mongo_client: MongoDBClient, tickers: List[str], days: int = 30) -> Dict:
     """Check if sentiment data is flowing for each ticker."""
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     coverage = {}
     for ticker in tickers:
@@ -265,7 +265,7 @@ def check_sentiment_coverage(mongo_client: MongoDBClient, tickers: List[str], da
 def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
     print(f"\n{'='*70}")
     print("  DRIFT MONITORING REPORT")
-    print(f"  Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    print(f"  Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"{'='*70}")
 
     for window, m in results.items():
