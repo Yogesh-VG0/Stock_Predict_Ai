@@ -25,7 +25,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -339,7 +339,7 @@ BASE_BACKOFF = 2         # Exponential base
 
 # Global rate limiter: track last API call time (GLOBAL, not per-model) to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
-_MIN_CALL_INTERVAL = 6.0  # Minimum seconds between ANY API call (≈10 RPM, well under Groq's 30 RPM free limit)
+_MIN_CALL_INTERVAL = 8.0  # Minimum seconds between ANY API call (≈7.5 RPM; raised from 6s to reduce 429s)
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
@@ -461,9 +461,9 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
         is_quota = "quota" in error_str or "limit" in error_str
         
         if is_rate_limit:
-            # Parse Retry-After hint and sleep proactively before returning
+            # Parse Retry-After hint and respect it; add 2s safety margin instead of always 30s
             retry_after = _parse_retry_after(error_str)
-            sleep_secs = max(retry_after, 30)  # At least 30s on any 429 — Groq RPM resets per-minute
+            sleep_secs = max(retry_after + 2, 15)  # At least 15s on any 429, prefer Retry-After hint
             logger.info("Groq 429 for %s — sleeping %ds (Retry-After=%ds)", ticker, sleep_secs, retry_after)
             time.sleep(sleep_secs)
             return (f"AI explanation unavailable: Groq API rate limited ({model})", "rate_limit")
@@ -776,7 +776,7 @@ def _get_recent_news(mongo, ticker: str) -> List[Dict]:
                 coll = mongo.db[coll_name]
             except Exception:
                 continue
-            cutoff = datetime.utcnow() - timedelta(days=7)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
             query = {
                 "$or": [
                     {"tickers": ticker.upper()},
@@ -1311,7 +1311,7 @@ def generate_explanations(
     from ml_backend.utils.mongodb import MongoDBClient
 
     mongo = MongoDBClient()
-    target_date = date or datetime.utcnow().strftime("%Y-%m-%d")
+    target_date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     ticker_list = tickers or TOP_100_TICKERS
     ticker_list = ticker_list[:max_tickers]
 
@@ -1567,7 +1567,7 @@ def generate_explanations(
                     (0.10 if fmp_context else 0)
                 )),
             },
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "prompt_length": len(prompt),
             "explanation_length": len(explanation_text),
         }

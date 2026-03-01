@@ -113,37 +113,21 @@ def make_earnings_features(
             try:
                 import yfinance as yf
                 stock = yf.Ticker(ticker)
-                # quarterly earnings have 'Reported EPS' and 'Surprise(%)'
-                eq = getattr(stock, 'quarterly_earnings', None)
-                if eq is not None and not eq.empty:
-                    for idx_date, row in eq.iterrows():
+                # Use earnings_dates (non-deprecated) which has Reported EPS & EPS Estimate
+                dates = getattr(stock, 'earnings_dates', None)
+                if dates is not None and not dates.empty:
+                    for idx_date, row in dates.iterrows():
                         try:
-                            eps_actual = row.get('Reported EPS') or row.get('Actual')
-                            eps_estimated = row.get('Estimated') or row.get('EPS Estimate')
-                            if eps_actual is not None and eps_estimated is not None:
+                            eps_actual = row.get('Reported EPS')
+                            eps_est = row.get('EPS Estimate')
+                            if eps_actual is not None and eps_est is not None:
                                 earnings_records.append({
-                                    'date': str(idx_date),
+                                    'date': str(idx_date.date()) if hasattr(idx_date, 'date') else str(idx_date),
                                     'eps': float(eps_actual),
-                                    'epsEstimated': float(eps_estimated),
+                                    'epsEstimated': float(eps_est),
                                 })
                         except Exception:
                             continue
-                if not earnings_records:
-                    # Try earnings_dates as minimal fallback (dates only, no surprise)
-                    dates = getattr(stock, 'earnings_dates', None)
-                    if dates is not None and not dates.empty:
-                        for idx_date, row in dates.iterrows():
-                            try:
-                                eps_actual = row.get('Reported EPS')
-                                eps_est = row.get('EPS Estimate')
-                                if eps_actual is not None and eps_est is not None:
-                                    earnings_records.append({
-                                        'date': str(idx_date.date()) if hasattr(idx_date, 'date') else str(idx_date),
-                                        'eps': float(eps_actual),
-                                        'epsEstimated': float(eps_est),
-                                    })
-                            except Exception:
-                                continue
             except Exception as e:
                 logger.debug("earnings_features: yfinance fallback failed for %s: %s", ticker, e)
 

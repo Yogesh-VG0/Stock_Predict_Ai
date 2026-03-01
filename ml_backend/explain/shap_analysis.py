@@ -323,7 +323,7 @@ def run_shap_analysis(
         # -- Fetch historical data via yfinance --
         try:
             import yfinance as yf
-            df = yf.download(ticker, period="10y", progress=False, auto_adjust=True)
+            df = yf.download(ticker, period="10y", progress=False)
             if df is not None and not df.empty:
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)

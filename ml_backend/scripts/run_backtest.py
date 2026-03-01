@@ -12,7 +12,7 @@ Requires: MongoDB with historical_data, or pass --no-mongo to use yfinance (slow
 import argparse
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -56,7 +56,7 @@ def main():
         sys.exit(1)
 
     # Fetch historical data
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=365 * 2)
     historical_data = {}
     spy_data = None

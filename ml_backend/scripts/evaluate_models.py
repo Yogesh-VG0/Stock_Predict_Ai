@@ -24,7 +24,7 @@ import logging
 import math
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -143,7 +143,7 @@ def run_ab_evaluation(
 
     eval_tickers = eval_tickers or DEFAULT_BACKTEST_TICKERS
 
-    end_date = datetime.utcnow()
+    end_date = datetime.now(timezone.utc)
     start_date = end_date - timedelta(days=365 * 2)
 
     # Fetch data
@@ -277,7 +277,7 @@ def evaluate_stored_predictions(
 ) -> Dict:
     """Evaluate stored predictions vs realized returns."""
     results = {}
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(days=days + 30)
 
     for window_name, tcfg in TARGET_CONFIG.items():

@@ -1135,7 +1135,7 @@ class EconomicCalendar:
                     logger.info(f"  - Data sources checked: {features['data_sources_checked']}")
                 else:
                     features['sentiment_data_available'] = False
-                    logger.warning(f"No sentiment data found for {ticker}")
+                    logger.warning(f"No FMP/earnings data in sentiment collection for {ticker}")
 
             # Process economic events - only high impact events
             features['economic_events_count'] = len(events)

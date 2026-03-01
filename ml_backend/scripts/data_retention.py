@@ -32,7 +32,7 @@ Usage:
 import argparse
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Tuple
 
 from dotenv import load_dotenv
@@ -94,7 +94,7 @@ def run_retention(
     db = client["stock_predictor"]
 
     results: Dict[str, int] = {}
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     for coll_name, (default_months, ts_field) in RETENTION_CONFIG.items():
         months = retention_override if retention_override > 0 else default_months

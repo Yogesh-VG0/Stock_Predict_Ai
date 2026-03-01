@@ -13,7 +13,7 @@ import argparse
 import logging
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 # Add parent to path for imports
@@ -163,7 +163,7 @@ def main():
 
     # 3. Fetch Data
     logger.info("Fetching historical data...")
-    end_date = datetime.utcnow()
+    end_date = datetime.now(timezone.utc)
     if args.end:
         end_date = datetime.strptime(args.end, "%Y-%m-%d")
         

@@ -5,7 +5,7 @@ Structured error handling with error codes and request tracking.
 import logging
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -153,7 +153,7 @@ class ErrorResponse:
                 "message": message,
                 "details": details or {},
                 "request_id": request_id or str(uuid.uuid4()),
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "path": request.url.path,
                 "status": status_code,
             }

@@ -4,7 +4,7 @@ Every feature for row t uses ONLY data available at/before market close of day t
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -295,6 +295,13 @@ class MinimalFeatureEngineer:
                                 "sent_momentum", "sent_std_7d", "news_count_1d",
                                 "news_count_7d", "news_spike_1d"):
                         df[_sc] = 0.0
+                    # Must match the 4 extra columns produced by
+                    # make_sentiment_features() so feature dimensions stay
+                    # identical regardless of the toggle.
+                    df["analyst_sentiment_7d"] = float("nan")
+                    df["analyst_rating_7d"] = float("nan")
+                    df["sent_available"] = 0.0
+                    df["sent_source_count"] = 0.0
     
                 # 11. Insider-transaction features (rolling aggregates from MongoDB)
                 # Uses insider_features.py adapter — same shift(1) PIT pattern.
@@ -454,7 +461,7 @@ class MinimalFeatureEngineer:
             start = pd.Timestamp(dates.min()) - timedelta(days=30)
             # Use 'now' or a fixed far future date to ensure stable cache key during loop
             # df merge handles point-in-time safety (left join on df dates)
-            end = datetime.utcnow() + timedelta(days=2)
+            end = datetime.now(timezone.utc) + timedelta(days=2)
 
             spy_df = fetch_price_df_mongo_first(
                 mongo_client,
@@ -582,7 +589,7 @@ class MinimalFeatureEngineer:
 
             dates = _to_series(df["date"])
             start = pd.Timestamp(dates.min()) - timedelta(days=60)
-            end = datetime.utcnow() + timedelta(days=2)
+            end = datetime.now(timezone.utc) + timedelta(days=2)
             df["date_norm"] = pd.to_datetime(dates).dt.normalize()
 
             # --- VIX proxy ---
@@ -643,12 +650,13 @@ class MinimalFeatureEngineer:
                     df["sector_etf_return_60d"] = df["sector_etf_return_60d"].shift(1).fillna(0)
                     df["sector_etf_vol_20d"] = df["sector_etf_vol_20d"].shift(1).ffill().fillna(0)
                     # Excess vs sector: stock return minus sector return
+                    # Both sides shifted(1) to align temporally (ETF returns are already shifted above)
                     df["excess_vs_sector_5d"] = (
-                        df.get("log_return_5d", pd.Series(0, index=df.index)).fillna(0)
+                        df.get("log_return_5d", pd.Series(0, index=df.index)).shift(1).fillna(0)
                         - df["sector_etf_return_5d"]
                     )
                     df["excess_vs_sector_20d"] = (
-                        df.get("log_return_21d", pd.Series(0, index=df.index)).fillna(0)
+                        df.get("log_return_21d", pd.Series(0, index=df.index)).shift(1).fillna(0)
                         - df["sector_etf_return_20d"]
                     )
                 else:
@@ -769,7 +777,7 @@ class MinimalFeatureEngineer:
                 # Staleness guard: ignore docs older than 180 days
                 doc_ts = doc.get("timestamp")
                 if doc_ts and hasattr(doc_ts, "timestamp"):
-                    age_days = (datetime.utcnow() - doc_ts).days
+                    age_days = (datetime.now(timezone.utc) - doc_ts).days
                     if age_days > 180:
                         logger.debug("Skipping stale %s doc for %s (%d days old)", coll_name, ticker, age_days)
                         continue

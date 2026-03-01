@@ -5,7 +5,7 @@ Module for scraping and analyzing Seeking Alpha comments using Playwright.
 import asyncio
 import logging
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import random
 import os
@@ -421,7 +421,7 @@ class SeekingAlphaAnalyzer:
             for comment in comments:
                 comment.update({
                     'ticker': ticker,
-                    'fetched_at': datetime.utcnow(),
+                    'fetched_at': datetime.now(timezone.utc),
                     'source': 'seeking_alpha'
                 })
                 
@@ -443,7 +443,7 @@ class SeekingAlphaAnalyzer:
             # Add metadata
             sentiment_data.update({
                 'ticker': ticker,
-                'fetched_at': datetime.utcnow(),
+                'fetched_at': datetime.now(timezone.utc),
                 'source': 'seeking_alpha'
             })
             
@@ -515,9 +515,9 @@ class SeekingAlphaAnalyzer:
             return {
                 'text': text,
                 'username': username,
-                'timestamp': timestamp or datetime.utcnow(),
+                'timestamp': timestamp or datetime.now(timezone.utc),
                 'likes': likes,
-                'fetched_at': datetime.utcnow()
+                'fetched_at': datetime.now(timezone.utc)
             }
                 
         except Exception as e:
@@ -651,8 +651,8 @@ class SeekingAlphaAnalyzer:
                 compound_score = vs['compound']
                 
                 # Calculate time decay factor (more recent comments have higher weight)
-                comment_date = comment.get('fetched_at', datetime.utcnow())
-                days_old = (datetime.utcnow() - comment_date).days
+                comment_date = comment.get('fetched_at', datetime.now(timezone.utc))
+                days_old = (datetime.now(timezone.utc) - comment_date).days
                 time_decay = max(0.1, 1.0 - (days_old / lookback_days))
                 
                 # Use time decay as weight
@@ -666,7 +666,7 @@ class SeekingAlphaAnalyzer:
                 analyzed_comments.append({
                     'text': text,
                     'username': comment.get('username', 'Anonymous'),
-                    'timestamp': comment.get('timestamp', datetime.utcnow()),
+                    'timestamp': comment.get('timestamp', datetime.now(timezone.utc)),
                     'likes': comment.get('likes', 0),
                     'sentiment_score': compound_score,
                     'sentiment_components': {
@@ -694,7 +694,7 @@ class SeekingAlphaAnalyzer:
                 "seeking_alpha_comments_sentiment_std": sentiment_std,
                 "seeking_alpha_comments": analyzed_comments,  # Store individual comments with their sentiment
                 "ticker": ticker,
-                "fetched_at": datetime.utcnow(),
+                "fetched_at": datetime.now(timezone.utc),
                 "source": "seeking_alpha"
             }
             

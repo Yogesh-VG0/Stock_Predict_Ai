@@ -143,8 +143,8 @@ def make_insider_features(
             net_shares=("signed_shares", "sum"),
             buy_count=("is_buy", "sum"),
             sell_count=("is_sell", "sum"),
-            buy_value=("value", lambda x: x[txn.loc[x.index, "is_buy"]].sum() if len(x) > 0 else 0),
-            sell_value=("value", lambda x: x[txn.loc[x.index, "is_sell"]].sum() if len(x) > 0 else 0),
+            buy_value=("value", "sum"),   # placeholder — overridden by safe re-aggregation below
+            sell_value=("value", "sum"),   # placeholder — overridden by safe re-aggregation below
             net_value=("signed_value", "sum"),
             txn_count=("signed_shares", "count"),
         ).reset_index()
