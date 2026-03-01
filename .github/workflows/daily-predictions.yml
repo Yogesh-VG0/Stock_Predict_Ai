@@ -12,7 +12,8 @@ concurrency:
 
 env:
   MONGODB_URI: ${{ secrets.MONGODB_URI }}
-  SKIP_SEC_FMP: "true"  # WARNING: SEC and FMP data sources disabled — features may be degraded
+  # SKIP_SEC_FMP removed — Kaleidoscope (SEC) and FMP are now enabled.
+  # The code gracefully handles missing/failing API keys with fallbacks.
 
 jobs:
   update-predictions:
@@ -73,9 +74,6 @@ jobs:
         run: |
           set -e
           echo "===== Training pooled model on ALL 100 tickers ====="
-          if [ "$SKIP_SEC_FMP" = "true" ]; then
-            echo "::warning::SKIP_SEC_FMP=true — SEC and FMP data sources are disabled for this run"
-          fi
           # Train on the full S&P 100 cross-section so the pooled model
           # sees all tickers.  --no-predict skips storing predictions
           # (handled in the batch loop below).
