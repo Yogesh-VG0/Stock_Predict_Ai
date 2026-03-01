@@ -27,16 +27,17 @@ export default function TradingViewAdvancedChart({
   // Determine the correct exchange prefix
   const getFullSymbol = (symbol: string) => {
     const nyseSymbols = [
-      "JPM", "WMT", "DIS", "V", "PG", "JNJ", "XOM",
+      "JPM", "DIS", "V", "PG", "JNJ", "XOM",
       "BAC", "PFE", "KO", "VZ", "T", "CVX", "MRK",
       "WFC", "C", "PEP", "HD", "MCD", "IBM",
-      // Adding the missing NYSE symbols from your list
       "LLY", "MA", "UNH", "ABBV", "CRM", "BRK.B", "ORCL"
     ]
     
     const nasdaqSymbols = [
-      "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", 
-      "TSLA", "AVGO", "COST", "NFLX"
+      "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
+      "TSLA", "AVGO", "COST", "NFLX",
+      // WMT joined Nasdaq-100 on January 20, 2026
+      "WMT"
     ]
     
     if (symbol.includes(":")) return symbol
