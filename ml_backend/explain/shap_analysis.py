@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import math
+import signal
 import sys
 import os
 from datetime import datetime, timezone
@@ -28,6 +29,18 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Per-ticker timeout for SHAP analysis (seconds).
+# Prevents a single slow yfinance download from eating the whole budget.
+_PER_TICKER_TIMEOUT = 90
+
+
+class _ShapTickerTimeout(Exception):
+    """Raised when a single ticker's SHAP analysis exceeds the timeout."""
+
+
+def _timeout_handler(signum, frame):
+    raise _ShapTickerTimeout("SHAP per-ticker timeout exceeded")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -320,136 +333,171 @@ def run_shap_analysis(
         logger.info("Analyzing %s ...", ticker)
         ticker_results = {}
 
-        # -- Fetch historical data via yfinance --
+        # Per-ticker timeout guard (Linux only; no-op on Windows)
+        _use_alarm = hasattr(signal, "SIGALRM")
+        if _use_alarm:
+            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+            signal.alarm(_PER_TICKER_TIMEOUT)
+
         try:
-            import yfinance as yf
-            df = yf.download(ticker, period="10y", progress=False)
-            if df is not None and not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                df = df.reset_index()
-                if "Date" in df.columns:
-                    df = df.rename(columns={"Date": "date"})
-            else:
-                logger.warning("No data for %s", ticker)
-                continue
+            ticker_results = _analyze_single_ticker(
+                ticker, horizons, predictor, mongo_client, store_to_mongo,
+                USE_MARKET_NEUTRAL_TARGET,
+            )
+        except _ShapTickerTimeout:
+            logger.warning("SHAP TIMEOUT for %s after %ds — skipping", ticker, _PER_TICKER_TIMEOUT)
         except Exception as e:
-            logger.warning("Could not fetch %s: %s", ticker, e)
-            continue
+            logger.warning("SHAP failed for %s: %s", ticker, e)
+        finally:
+            if _use_alarm:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
 
-        # -- Prepare features (same path as predict_all_windows) --
-        if predictor.feature_engineer is None:
-            from ml_backend.data.features_minimal import MinimalFeatureEngineer
-            predictor.feature_engineer = MinimalFeatureEngineer(mongo_client)
+        if ticker_results:
+            all_results[ticker] = ticker_results
 
-        features, meta = predictor.feature_engineer.prepare_features(
-            df, ticker=ticker, mongo_client=mongo_client
-        )
-        if features is None or len(features) == 0:
-            logger.warning("No features for %s", ticker)
-            continue
+    return all_results
 
-        X_full = features[-1:].astype(np.float32)
-        current_cols = meta.get("feature_columns", [])
-        df_aligned = meta.get("df_aligned")
-        if df_aligned is not None and "Close" in df_aligned.columns:
-            current_price = float(df_aligned["Close"].iloc[-1])
+
+def _analyze_single_ticker(
+    ticker: str,
+    horizons: List[str],
+    predictor,
+    mongo_client,
+    store_to_mongo: bool,
+    USE_MARKET_NEUTRAL_TARGET: bool,
+) -> Dict:
+    """Analyze a single ticker (extracted for timeout wrapping)."""
+    ticker_results = {}
+
+    # -- Fetch historical data via yfinance --
+    try:
+        import yfinance as yf
+        df = yf.download(ticker, period="10y", progress=False)
+        if df is not None and not df.empty:
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+            df = df.reset_index()
+            if "Date" in df.columns:
+                df = df.rename(columns={"Date": "date"})
         else:
-            current_price = float(df["Close"].iloc[-1])
+            logger.warning("No data for %s", ticker)
+            return {}
+    except Exception as e:
+        logger.warning("Could not fetch %s: %s", ticker, e)
+        return {}
 
-        for window_name in horizons:
-            # -- Select model (mirrors predict_all_windows logic exactly) --
-            model = predictor.pooled_models.get(window_name)
-            meta_w = predictor.pooled_metadata.get(window_name, {})
-            key = (ticker, window_name)
-            ticker_meta = predictor.metadata.get(key)
-            model_type = "pooled"
-            if (ticker_meta
-                    and ticker_meta.get("n_train", 0) >= 300
-                    and ticker_meta.get("production_ready", False)):
-                model = predictor.models.get(key, model)
-                meta_w = ticker_meta
-                model_type = "per-ticker"
+    # -- Prepare features (same path as predict_all_windows) --
+    if predictor.feature_engineer is None:
+        from ml_backend.data.features_minimal import MinimalFeatureEngineer
+        predictor.feature_engineer = MinimalFeatureEngineer(mongo_client)
 
-            if model is None:
-                continue
+    features, meta = predictor.feature_engineer.prepare_features(
+        df, ticker=ticker, mongo_client=mongo_client
+    )
+    if features is None or len(features) == 0:
+        logger.warning("No features for %s", ticker)
+        return {}
 
-            # -- Align features to the model's training columns --
-            model_cols = meta_w.get("feature_columns", current_cols)
-            X_pred = predictor._select_features(X_full, current_cols, model_cols)
+    X_full = features[-1:].astype(np.float32)
+    current_cols = meta.get("feature_columns", [])
+    df_aligned = meta.get("df_aligned")
+    if df_aligned is not None and "Close" in df_aligned.columns:
+        current_price = float(df_aligned["Close"].iloc[-1])
+    else:
+        current_price = float(df["Close"].iloc[-1])
 
-            # -- Prediction (log-return / market-neutral alpha) --
-            pred_return = float(model.predict(X_pred)[0])
-            # pred_return is log-return.  Convert to price via exp().
-            # When market-neutral, this is alpha_implied_price (not a true forecast).
-            pred_price = current_price * math.exp(pred_return)
+    for window_name in horizons:
+        # -- Select model (mirrors predict_all_windows logic exactly) --
+        model = predictor.pooled_models.get(window_name)
+        meta_w = predictor.pooled_metadata.get(window_name, {})
+        key = (ticker, window_name)
+        ticker_meta = predictor.metadata.get(key)
+        model_type = "pooled"
+        if (ticker_meta
+                and ticker_meta.get("n_train", 0) >= 300
+                and ticker_meta.get("production_ready", False)):
+            model = predictor.models.get(key, model)
+            meta_w = ticker_meta
+            model_type = "per-ticker"
 
-            # -- P(up) from sign classifier --
-            sign_model = predictor.pooled_sign_models.get(window_name)
-            if ticker_meta and ticker_meta.get("production_ready", False):
-                sign_model = predictor.sign_models.get(key, sign_model)
-            sigma = float(meta_w.get("val_rmse", 0.01))
-            if sign_model is not None:
-                try:
-                    prob_up = float(sign_model.predict_proba(X_pred)[0, 1])
-                except Exception:
-                    prob_up = (
-                        0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2))))
-                        if sigma > 0 else 0.5
-                    )
-            else:
+        if model is None:
+            continue
+
+        # -- Align features to the model's training columns --
+        model_cols = meta_w.get("feature_columns", current_cols)
+        X_pred = predictor._select_features(X_full, current_cols, model_cols)
+
+        # -- Prediction (log-return / market-neutral alpha) --
+        pred_return = float(model.predict(X_pred)[0])
+        # pred_return is log-return.  Convert to price via exp().
+        # When market-neutral, this is alpha_implied_price (not a true forecast).
+        pred_price = current_price * math.exp(pred_return)
+
+        # -- P(up) from sign classifier --
+        sign_model = predictor.pooled_sign_models.get(window_name)
+        if ticker_meta and ticker_meta.get("production_ready", False):
+            sign_model = predictor.sign_models.get(key, sign_model)
+        sigma = float(meta_w.get("val_rmse", 0.01))
+        if sign_model is not None:
+            try:
+                prob_up = float(sign_model.predict_proba(X_pred)[0, 1])
+            except Exception:
                 prob_up = (
                     0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2))))
                     if sigma > 0 else 0.5
                 )
-
-            prediction_info = {
-                "predicted_value": pred_return,       # raw model output
-                "predicted_price": pred_price,        # current_price * exp(pred)
-                "prob_up": prob_up,                   # P(return > 0)
-                "current_price": current_price,
-                "model_type": model_type,
-                "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
-                # Legacy compat aliases
-                "prediction": pred_return,
-                "confidence": prob_up,
-            }
-
-            # -- Compute SHAP values (native TreeSHAP) --
-            shap_result = compute_shap_for_prediction(
-                model,
-                X_pred,
-                model_cols,
-                feature_values=X_pred.values[0],
-                top_k=15,
+        else:
+            prob_up = (
+                0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2))))
+                if sigma > 0 else 0.5
             )
 
-            # -- Compute global importance (normalized gain) --
-            global_importance = compute_global_importance(model, model_cols, top_k=30)
+        prediction_info = {
+            "predicted_value": pred_return,       # raw model output
+            "predicted_price": pred_price,        # current_price * exp(pred)
+            "prob_up": prob_up,                   # P(return > 0)
+            "current_price": current_price,
+            "model_type": model_type,
+            "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
+            # Legacy compat aliases
+            "prediction": pred_return,
+            "confidence": prob_up,
+        }
 
-            # -- Format and print human-readable report --
-            report = format_shap_analysis(
-                ticker, window_name, shap_result, global_importance, prediction_info
+        # -- Compute SHAP values (native TreeSHAP) --
+        shap_result = compute_shap_for_prediction(
+            model,
+            X_pred,
+            model_cols,
+            feature_values=X_pred.values[0],
+            top_k=15,
+        )
+
+        # -- Compute global importance (normalized gain) --
+        global_importance = compute_global_importance(model, model_cols, top_k=30)
+
+        # -- Format and print human-readable report --
+        report = format_shap_analysis(
+            ticker, window_name, shap_result, global_importance, prediction_info
+        )
+        print(report)
+
+        ticker_results[window_name] = {
+            "shap": shap_result,
+            "global_importance": global_importance,
+            "prediction_info": prediction_info,
+            "model_type": model_type,
+        }
+
+        # -- Store to MongoDB (rich document) --
+        if store_to_mongo and mongo_client:
+            _store_explainability_doc(
+                mongo_client, ticker, window_name, model_type,
+                prediction_info, shap_result, global_importance, model_cols,
             )
-            print(report)
 
-            ticker_results[window_name] = {
-                "shap": shap_result,
-                "global_importance": global_importance,
-                "prediction_info": prediction_info,
-                "model_type": model_type,
-            }
-
-            # -- Store to MongoDB (rich document) --
-            if store_to_mongo and mongo_client:
-                _store_explainability_doc(
-                    mongo_client, ticker, window_name, model_type,
-                    prediction_info, shap_result, global_importance, model_cols,
-                )
-
-        all_results[ticker] = ticker_results
-
-    return all_results
+    return ticker_results
 
 
 def _store_explainability_doc(

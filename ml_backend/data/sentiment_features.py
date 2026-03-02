@@ -105,6 +105,23 @@ def make_sentiment_features(
         if sent_df is None or sent_df.empty:
             return empty
 
+        # ── Staleness guard ──────────────────────────────────────
+        # If the most recent sentiment doc is >14 days older than the
+        # latest price date, the rolling features will be NaN for recent
+        # rows anyway (left-join produces NaN).  Log a warning so
+        # operators notice persistent data-gap tickers.
+        _MAX_STALENESS_DAYS = 14
+        latest_sent_date = pd.to_datetime(sent_df["date"]).max()
+        latest_price_date = dates.max()
+        staleness_gap = (latest_price_date - latest_sent_date).days
+        if staleness_gap > _MAX_STALENESS_DAYS:
+            logger.warning(
+                "Stale sentiment for %s: last doc %s is %d days old "
+                "(threshold %d). Recent rows will be NaN.",
+                ticker, latest_sent_date.date(), staleness_gap,
+                _MAX_STALENESS_DAYS,
+            )
+
         # Ensure sorted by date
         sent_df = sent_df.sort_values("date").reset_index(drop=True)
         sent_df["date"] = pd.to_datetime(sent_df["date"]).dt.normalize()

@@ -19,7 +19,7 @@ env:
 jobs:
   update-predictions:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 135
 
     steps:
       - name: Checkout repository
@@ -56,7 +56,7 @@ jobs:
             echo "::warning::Sentiment cron failed — predictions will use stale sentiment data"
           }
 
-      - name: Train pooled model on all 100 tickers
+      - name: Train pooled model on all 75 tickers
         env:
           MONGODB_URI: ${{ secrets.MONGODB_URI }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
@@ -74,10 +74,10 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           set -e
-          echo "===== Training pooled model on ALL 100 tickers ====="
-          # Train on the full S&P 100 cross-section so the pooled model
-          # sees all tickers.  --no-predict skips storing predictions
-          # (handled in the batch loop below).
+          echo "===== Training pooled model on ALL 75 tickers ====="
+          # Train on the full cross-section so the pooled model sees all
+          # tickers.  --no-predict skips storing predictions (handled in
+          # the batch loop below).
           python -m ml_backend.scripts.run_pipeline --all-tickers --no-predict
 
       - name: Generate predictions (sequential batches)
@@ -99,19 +99,17 @@ jobs:
         run: |
           set -e
 
-          # 10 batches × 10 tickers = 100 stocks
+          # 8 batches × ~9-10 tickers = 75 stocks
           # Models are already trained above; --predict-only loads them from disk.
           BATCHES=(
             "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
-            "CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX"
-            "LOW SBUX NKE MCD DIS BKNG TGT JPM V MA"
-            "BAC WFC GS MS AXP BLK SCHW C COF BK"
-            "MET AIG USB XOM CVX COP JNJ UNH LLY PFE"
-            "ABBV ABT TMO DHR MRK AMGN GILD ISRG MDT BMY"
-            "CVS WMT COST PG KO PEP MDLZ CL MO CAT"
-            "HON UNP BA RTX LMT DE GE GD EMR FDX"
-            "UPS MMM CMCSA VZ T CHTR BRK-B ACN IBM PYPL"
-            "LIN NEE SO DUK AMT SPG PLTR TMUS PM AMAT"
+            "CSCO ADBE QCOM TXN INTU AMAT IBM PYPL PLTR"
+            "AMZN TSLA HD NFLX LOW SBUX NKE MCD DIS BKNG"
+            "TGT JPM V MA BAC WFC GS MS AXP C"
+            "BRK-B XOM CVX JNJ UNH LLY PFE ABBV MRK AMGN"
+            "GILD ISRG CVS WMT COST PG KO PEP MDLZ"
+            "CAT HON BA RTX LMT DE GE FDX UPS"
+            "CMCSA VZ T CHTR TMUS LIN NEE AMT"
           )
 
           FAILED_BATCHES=()
@@ -156,8 +154,8 @@ jobs:
           echo "Failed batches: ${#FAILED_BATCHES[@]}"
           if [ "${#FAILED_BATCHES[@]}" -gt 0 ]; then
             echo "Failed batch numbers: ${FAILED_BATCHES[*]}"
-            # Fail the job if more than 30% of batches failed
-            if [ "${#FAILED_BATCHES[@]}" -gt 3 ]; then
+            # Fail the job if more than 25% of batches failed (2 of 8)
+            if [ "${#FAILED_BATCHES[@]}" -gt 2 ]; then
               echo "Too many failures — failing job."
               exit 1
             fi
@@ -189,7 +187,7 @@ jobs:
           horizons = ["next_day", "7_day", "30_day"]
 
           # Check a representative sample (canary tickers from each batch)
-          canary = ["AAPL", "AMZN", "JPM", "XOM", "WMT", "CAT", "CMCSA", "PLTR"]
+          canary = ["AAPL", "AMZN", "JPM", "XOM", "WMT", "CAT", "CMCSA", "NEE"]
           missing = []
           stale = []
 
@@ -215,7 +213,7 @@ jobs:
 
           assert not missing, f"Missing predictions: {missing}"
           assert not stale, f"Stale predictions: {stale}"
-          assert total >= 200, f"Expected >= 200 fresh docs, got {total}"
+          assert total >= 210, f"Expected >= 210 fresh docs (75 tickers x 3 horizons = 225), got {total}"
           print("Freshness verified")
           PY
 
@@ -227,19 +225,17 @@ jobs:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
-          echo "===== Running SHAP analysis for all 100 tickers ====="
-          # Process in batches of 10 to avoid timeouts
+          echo "===== Running SHAP analysis for all 75 tickers ====="
+          # Process in batches of ~10 with per-ticker timeout
           TICKER_BATCHES=(
             "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
-            "CSCO ADBE QCOM TXN NOW INTU AMZN TSLA HD NFLX"
-            "LOW SBUX NKE MCD DIS BKNG TGT JPM V MA"
-            "BAC WFC GS MS AXP BLK SCHW C COF BK"
-            "MET AIG USB XOM CVX COP JNJ UNH LLY PFE"
-            "ABBV ABT TMO DHR MRK AMGN GILD ISRG MDT BMY"
-            "CVS WMT COST PG KO PEP MDLZ CL MO CAT"
-            "HON UNP BA RTX LMT DE GE GD EMR FDX"
-            "UPS MMM CMCSA VZ T CHTR BRK-B ACN IBM PYPL"
-            "LIN NEE SO DUK AMT SPG PLTR TMUS PM AMAT"
+            "CSCO ADBE QCOM TXN INTU AMAT IBM PYPL PLTR"
+            "AMZN TSLA HD NFLX LOW SBUX NKE MCD DIS BKNG"
+            "TGT JPM V MA BAC WFC GS MS AXP C"
+            "BRK-B XOM CVX JNJ UNH LLY PFE ABBV MRK AMGN"
+            "GILD ISRG CVS WMT COST PG KO PEP MDLZ"
+            "CAT HON BA RTX LMT DE GE FDX UPS"
+            "CMCSA VZ T CHTR TMUS LIN NEE AMT"
           )
           SHAP_FAILED=0
           for batch in "${TICKER_BATCHES[@]}"; do
@@ -249,7 +245,7 @@ jobs:
             }
           done
           echo "SHAP batches failed: $SHAP_FAILED / ${#TICKER_BATCHES[@]}"
-          if [ "$SHAP_FAILED" -gt 5 ]; then
+          if [ "$SHAP_FAILED" -gt 3 ]; then
             echo "Too many SHAP failures"
             exit 1
           fi
