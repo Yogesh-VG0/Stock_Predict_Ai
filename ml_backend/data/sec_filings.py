@@ -548,8 +548,7 @@ class SECFilingsAnalyzer:
             
             # VADER sentiment analysis (primary method — FinBERT removed)
             try:
-                analyzer = SentimentIntensityAnalyzer()
-                vader_scores = analyzer.polarity_scores(text)
+                vader_scores = self.vader.polarity_scores(text)
                 score = vader_scores['compound']
                 logger.debug(f"VADER sentiment: {score:.3f}")
                 return float(score)
@@ -602,45 +601,42 @@ class SECFilingsAnalyzer:
             # Store in sec_filings collection
             collection = self.mongo_client.db['sec_filings']
             
-            # Process and store individual filings with their text and sentiment
-            processed_filings = []
-            for category, filings in filings_data["categorized_filings"].items():
-                for filing in filings:
-                    if filing.get("html_url"):
-                        try:
-                            # Get filing content
-                            response = requests.get(filing["html_url"], timeout=30)
-                            response.raise_for_status()
-                            
-                            # Extract text content
-                            text_content = self._extract_text_from_html(response.text)
-                            
-                            # Analyze sentiment
-                            sentiment_score = self._analyze_sentiment(text_content)
-                            
-                            # Store filing with its text and sentiment
-                            processed_filing = {
-                                'form_type': filing['Form'],
-                                'filing_date': filing.get('Date', ''),
-                                'text_content': text_content,
-                                'sentiment_score': sentiment_score,
-                                'html_url': filing['html_url'],
-                                'acc': filing.get('acc', '')
-                            }
-                            processed_filings.append(processed_filing)
-                            
-                        except Exception as e:
-                            logger.error(f"Error processing filing {filing.get('acc', '')}: {str(e)}")
-                            continue
-            
-            # Add processed filings to the data (strip large text blobs to save storage)
-            slim_filings = []
-            for pf in processed_filings:
-                slim = {k: v for k, v in pf.items() if k not in ('html_content',)}
-                if 'text_content' in slim:
-                    slim['text_content'] = slim['text_content'][:500]
-                slim_filings.append(slim)
-            filings_data['processed_filings'] = slim_filings
+            # Use pre-processed filings if available (avoids re-downloading HTML)
+            pre_processed = filings_data.get('sec_processed_filings') or filings_data.get('processed_filings')
+            if pre_processed:
+                slim_filings = []
+                for pf in pre_processed:
+                    slim = {k: v for k, v in pf.items() if k not in ('html_content',)}
+                    if 'text_content' in slim:
+                        slim['text_content'] = slim['text_content'][:500]
+                    slim_filings.append(slim)
+                filings_data['processed_filings'] = slim_filings
+            else:
+                # Fallback: process filings from categorized_filings
+                processed_filings = []
+                for category, filings in filings_data.get("categorized_filings", {}).items():
+                    for filing in filings:
+                        html_url = filing.get("html_url") or filing.get("html")
+                        if html_url:
+                            try:
+                                response = requests.get(html_url, timeout=30)
+                                response.raise_for_status()
+                                text_content = self._extract_text_from_html(response.text)
+                                sentiment_score = self._analyze_sentiment(text_content)
+                                processed_filing = {
+                                    'form_type': self._normalize_form_type(filing.get('Form', filing.get('type', ''))),
+                                    'filing_date': filing.get('Date', filing.get('fillingDate', '')),
+                                    'text_content': text_content[:500] if text_content else '',
+                                    'sentiment_score': sentiment_score,
+                                    'html_url': html_url,
+                                    'acc': filing.get('acc', '')
+                                }
+                                processed_filings.append(processed_filing)
+                            except Exception as e:
+                                logger.error(f"Error processing filing {filing.get('acc', '')}: {str(e)}")
+                                continue
+                filings_data['processed_filings'] = processed_filings
+                slim_filings = processed_filings
             
             # Remove bulky categorized_filings before persisting (metadata is kept via processed_filings)
             store_data = {k: v for k, v in filings_data.items() if k != 'categorized_filings'}
@@ -719,15 +715,19 @@ class SECFilingsAnalyzer:
                             "error": "No filings found"
                         }
                     
+                    # Normalize form types and filter
+                    for filing in filings:
+                        filing['Form'] = self._normalize_form_type(filing.get('Form', ''))
+                    excluded_forms = ['UPLOAD', 'CORRESP']
+                    filings = [f for f in filings if f['Form'] not in excluded_forms]
+                    total_filings = len(filings)
+                    
                     # Process each filing
                     sentiments = []
+                    processed_filings = []
                     for filing in filings:
-                        # Skip non-relevant forms
-                        if filing['Form'] in ['UPLOAD', 'CORRESP']:
-                            continue
-                            
                         # Get filing content from HTML URL
-                        html_url = filing['html']
+                        html_url = filing.get('html', '') or filing.get('html_url', '')
                         if not html_url:
                             continue
                             
@@ -735,14 +735,20 @@ class SECFilingsAnalyzer:
                             async with session.get(html_url) as html_response:
                                 if html_response.status == 200:
                                     html_content = await html_response.text()
-                                    # Extract text content from HTML
                                     text_content = self._extract_text_from_html(html_content)
                                     if text_content:
-                                        # Analyze sentiment
                                         sentiment = self._analyze_sentiment(text_content)
                                         sentiments.append(sentiment)
+                                        processed_filings.append({
+                                            'form_type': filing['Form'],
+                                            'filing_date': filing.get('Date', ''),
+                                            'text_content': text_content[:500],
+                                            'sentiment_score': sentiment,
+                                            'html_url': html_url,
+                                            'acc': filing.get('acc', '')
+                                        })
                         except Exception as e:
-                            logger.warning(f"Error processing filing {filing['acc']}: {str(e)}")
+                            logger.warning(f"Error processing filing {filing.get('acc', 'unknown')}: {str(e)}")
                             continue
                     
                     if not sentiments:
@@ -782,10 +788,11 @@ class SECFilingsAnalyzer:
                         "sec_filings_sentiment": round(avg_sentiment, 4),
                         "sec_filings_volume": total_filings,
                         "sec_filings_confidence": round(confidence, 4),
-                        "sec_filings_sentiment_std": round(sentiment_std, 4)
+                        "sec_filings_sentiment_std": round(sentiment_std, 4),
+                        "sec_processed_filings": processed_filings
                     }
             
-                    # Store in MongoDB
+                    # Store in MongoDB (uses pre-processed filings to avoid re-downloading)
                     self._store_filings_in_mongodb(ticker, result)
             
                     return result
@@ -962,8 +969,10 @@ class SECFilingsAnalyzer:
                         return await self._analyze_fmp_filings_sentiment(ticker, lookback_days)
                     
                     filings = data['data']
-                    # Filter out only insider transactions and administrative forms
-                    # Keep more forms for better sentiment analysis
+                    # Normalize form types before filtering
+                    for f in filings:
+                        f['Form'] = self._normalize_form_type(f.get('Form', ''))
+                    # Filter out insider transactions and administrative forms
                     excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K', 'SC 13D/A', 'SC 13G/A']
                     filings = [f for f in filings if f['Form'] not in excluded_forms]
                     total_filings = len(filings)
@@ -999,7 +1008,7 @@ class SECFilingsAnalyzer:
                     
                     for i, filing in enumerate(filings):
                         # Get filing content from HTML URL
-                        html_url = filing['html']
+                        html_url = filing.get('html', '') or filing.get('html_url', '')
                         form_type = filing.get('Form', 'Unknown')
                         filing_date = filing.get('Date', 'Unknown')
                         company_name = filing.get('Company Name', 'Unknown')

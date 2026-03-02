@@ -246,6 +246,11 @@ class MongoDBClient:
             # This becomes part of the upsert key so re-runs on the same day
             # update in-place but different days accumulate history.
             asof_date = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Sentiment freshness: whether sentiment cron succeeded before this run.
+            # Allows downstream consumers to discount predictions made with stale data.
+            _sentiment_fresh_env = os.environ.get("SENTIMENT_FRESH", "").lower()
+            sentiment_fresh = _sentiment_fresh_env == "true" if _sentiment_fresh_env else None
             
             for window, data in predictions.items():
                 # Skip _meta — it's metadata, not a prediction window
@@ -274,7 +279,10 @@ class MongoDBClient:
                     "ensemble_weights": data.get("ensemble_weight", data.get("ensemble_weights", {})),
                     
                     # prediction must remain the model signal (log-return), not dollars
-                    "prediction": float(data.get("prediction", data.get("alpha", 0.0)))
+                    "prediction": float(data.get("prediction", data.get("alpha", 0.0))),
+                    
+                    # Sentiment freshness flag — True if sentiment cron succeeded
+                    "sentiment_fresh": sentiment_fresh,
                 }
                 
                 # Add any additional fields that might be present, excluding duplicates

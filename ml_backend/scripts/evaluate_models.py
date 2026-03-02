@@ -111,15 +111,36 @@ def compute_all_metrics(
     y_pred: np.ndarray,
     prob_pos: Optional[np.ndarray] = None,
 ) -> Dict[str, float]:
-    """Compute a dict of all evaluation metrics."""
+    """Compute a dict of all evaluation metrics with statistical significance."""
+    n = len(y_true)
+    da = directional_accuracy(y_true, y_pred)
     metrics = {
-        "n_samples": len(y_true),
-        "directional_accuracy": directional_accuracy(y_true, y_pred),
+        "n_samples": n,
+        "directional_accuracy": da,
         "rank_corr": rank_correlation(y_true, y_pred),
-        "mae": float(np.mean(np.abs(y_true - y_pred))) if len(y_true) > 0 else float("nan"),
-        "rmse": float(np.sqrt(np.mean((y_true - y_pred) ** 2))) if len(y_true) > 0 else float("nan"),
+        "mae": float(np.mean(np.abs(y_true - y_pred))) if n > 0 else float("nan"),
+        "rmse": float(np.sqrt(np.mean((y_true - y_pred) ** 2))) if n > 0 else float("nan"),
         "top10_hit_rate": top_k_hit_rate(y_true, y_pred, 0.10),
     }
+    # Statistical significance: binomial test for directional accuracy vs 50%
+    if n >= 10 and not math.isnan(da):
+        try:
+            from scipy.stats import binomtest
+            n_correct = int(round(da * n))
+            result = binomtest(n_correct, n, 0.5, alternative="greater")
+            metrics["dir_acc_pvalue"] = float(result.pvalue)
+            ci = result.proportion_ci(confidence_level=0.95)
+            metrics["dir_acc_ci_low"] = float(ci.low)
+            metrics["dir_acc_ci_high"] = float(ci.high)
+            metrics["dir_acc_significant"] = result.pvalue < 0.05
+        except ImportError:
+            # scipy.stats.binomtest not available
+            metrics["dir_acc_pvalue"] = float("nan")
+            metrics["dir_acc_significant"] = False
+    else:
+        metrics["dir_acc_pvalue"] = float("nan")
+        metrics["dir_acc_significant"] = False
+
     if prob_pos is not None and len(prob_pos) > 0:
         y_binary = (y_true > 0).astype(float)
         metrics["brier_score"] = brier_score(y_binary, prob_pos)
@@ -349,6 +370,15 @@ def _print_metrics(results: Dict, title: str) -> None:
             print("    No samples.")
             continue
         print(f"    Directional accuracy : {m.get('directional_accuracy', float('nan')):.1%}")
+        pval = m.get('dir_acc_pvalue', float('nan'))
+        sig = m.get('dir_acc_significant', False)
+        ci_lo = m.get('dir_acc_ci_low', float('nan'))
+        ci_hi = m.get('dir_acc_ci_high', float('nan'))
+        sig_str = "YES" if sig else "NO"
+        if not math.isnan(pval):
+            print(f"      p-value vs 50%%     : {pval:.4f} (significant: {sig_str})")
+            if not math.isnan(ci_lo):
+                print(f"      95%% CI            : [{ci_lo:.1%}, {ci_hi:.1%}]")
         print(f"    Rank correlation     : {m.get('rank_corr', float('nan')):.4f}")
         print(f"    MAE                  : {m.get('mae', float('nan')):.6f}")
         print(f"    RMSE                 : {m.get('rmse', float('nan')):.6f}")
@@ -413,7 +443,7 @@ def main():
     parser.add_argument("--ab", action="store_true", help="Run A/B comparison (with/without sentiment)")
     parser.add_argument("--stored", action="store_true", help="Evaluate stored predictions vs realized")
     parser.add_argument("--tickers", nargs="+", default=None, help="Tickers for evaluation")
-    parser.add_argument("--days", type=int, default=60, help="Lookback days for stored eval")
+    parser.add_argument("--days", type=int, default=180, help="Lookback days for stored eval (default: 180)")
     args = parser.parse_args()
 
     if not args.ab and not args.stored:

@@ -146,9 +146,14 @@ TICKER_SUBREDDITS = {
     "TGT": ["Target", "stocks", "investing"]
 }
 
-# Deterministic ticker_id for pooled models (stable across runs; Python hash() is salted)
+# Deterministic ticker_id for pooled models — HASH-BASED for stability.
+# Sequential IDs shift when tickers are added/removed, corrupting trained models.
+import hashlib as _hashlib
 _ALL_TICKERS = sorted(set(TOP_100_TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
-TICKER_TO_ID = {ticker: i for i, ticker in enumerate(_ALL_TICKERS)}
+TICKER_TO_ID = {
+    ticker: int(_hashlib.sha256(ticker.encode()).hexdigest()[:6], 16)
+    for ticker in _ALL_TICKERS
+}
 
 
 # Prediction Windows

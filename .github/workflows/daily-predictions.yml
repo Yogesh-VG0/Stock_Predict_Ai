@@ -19,7 +19,7 @@ env:
 jobs:
   update-predictions:
     runs-on: ubuntu-latest
-    timeout-minutes: 135
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -52,8 +52,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running sentiment cron ====="
-          python -m ml_backend.sentiment_cron || {
+          python -m ml_backend.sentiment_cron && {
+            echo "SENTIMENT_FRESH=true" >> $GITHUB_ENV
+          } || {
             echo "::warning::Sentiment cron failed — predictions will use stale sentiment data"
+            echo "SENTIMENT_FRESH=false" >> $GITHUB_ENV
           }
 
       - name: Train pooled model on all 75 tickers
@@ -96,6 +99,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
           GITHUB_SHA: ${{ github.sha }}
           RUN_ID: ${{ github.run_id }}
+          SENTIMENT_FRESH: ${{ env.SENTIMENT_FRESH }}
         run: |
           set -e
 
@@ -155,8 +159,8 @@ jobs:
           if [ "${#FAILED_BATCHES[@]}" -gt 0 ]; then
             echo "Failed batch numbers: ${FAILED_BATCHES[*]}"
             # Fail the job if more than 25% of batches failed (2 of 8)
-            if [ "${#FAILED_BATCHES[@]}" -gt 2 ]; then
-              echo "Too many failures — failing job."
+            if [ "${#FAILED_BATCHES[@]}" -gt 1 ]; then
+              echo "Too many failures (${#FAILED_BATCHES[@]}/8 batches failed) — failing job."
               exit 1
             fi
             echo "Partial success — continuing."
@@ -177,11 +181,13 @@ jobs:
 
           client = MongoClient(uri, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000)
           client.admin.command("ping")
+          # Use the same database name as MongoDBClient ("stock_predictor")
           db = client["stock_predictor"]
           col = db["stock_predictions"]
 
-          # Use naive UTC (matches MongoDB's naive datetime storage)
-          now = datetime.utcnow()
+          from datetime import timezone
+          # Naive-UTC for MongoDB comparison (avoids deprecated utcnow)
+          now = datetime.now(timezone.utc).replace(tzinfo=None)
           cutoff = now - timedelta(hours=3)
 
           horizons = ["next_day", "7_day", "30_day"]
@@ -226,7 +232,12 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running SHAP analysis for all 75 tickers ====="
-          # Process in batches of ~10 with per-ticker timeout
+          # Wall-clock budget: reserve 20 min for AI explanations + evaluate + drift + retention
+          SHAP_BUDGET_SEC=$((55 * 60))   # 55 minutes max for entire SHAP step
+          SHAP_START=$SECONDS
+          # Per-batch budget (each batch gets up to 8 min)
+          BATCH_MAX_MIN=8
+
           TICKER_BATCHES=(
             "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
             "CSCO ADBE QCOM TXN INTU AMAT IBM PYPL PLTR"
@@ -238,13 +249,20 @@ jobs:
             "CMCSA VZ T CHTR TMUS LIN NEE AMT"
           )
           SHAP_FAILED=0
+          SHAP_SKIPPED=0
           for batch in "${TICKER_BATCHES[@]}"; do
-            python -m ml_backend.explain.shap_analysis --tickers $batch || {
+            ELAPSED=$((SECONDS - SHAP_START))
+            if [ "$ELAPSED" -gt "$SHAP_BUDGET_SEC" ]; then
+              echo "::warning::SHAP time budget exhausted (${ELAPSED}s > ${SHAP_BUDGET_SEC}s) — skipping remaining batches"
+              SHAP_SKIPPED=$((SHAP_SKIPPED + 1))
+              continue
+            fi
+            python -m ml_backend.explain.shap_analysis --tickers $batch --max-minutes $BATCH_MAX_MIN || {
               echo "SHAP batch failed: $batch"
               SHAP_FAILED=$((SHAP_FAILED + 1))
             }
           done
-          echo "SHAP batches failed: $SHAP_FAILED / ${#TICKER_BATCHES[@]}"
+          echo "SHAP batches failed: $SHAP_FAILED / ${#TICKER_BATCHES[@]}, skipped: $SHAP_SKIPPED"
           if [ "$SHAP_FAILED" -gt 3 ]; then
             echo "Too many SHAP failures"
             exit 1
@@ -269,7 +287,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running evaluate_models --stored ====="
-          python -m ml_backend.scripts.evaluate_models --stored --days 60 \
+          python -m ml_backend.scripts.evaluate_models --stored --days 180 \\
             | tee eval_report.txt || echo "Evaluation failed (non-fatal)"
 
       - name: Run drift monitor

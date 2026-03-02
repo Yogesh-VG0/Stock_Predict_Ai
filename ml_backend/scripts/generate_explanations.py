@@ -434,7 +434,7 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
                 )},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7,
+            temperature=0.2,
             max_tokens=2048,
         )
         

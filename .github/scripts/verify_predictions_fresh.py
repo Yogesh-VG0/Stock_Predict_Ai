@@ -1,7 +1,6 @@
 """Verify stock_predictions has fresh docs (last 3h). Used by run-daily-pipeline-local.ps1."""
 import os
-from datetime import datetime, timedelta
-from pymongo import MongoClient
+from datetime import datetime, timedelta, timezone
 
 uri = os.getenv("MONGODB_URI")
 if not uri:
@@ -11,7 +10,8 @@ client = MongoClient(uri, serverSelectionTimeoutMS=8000)
 client.admin.command("ping")
 db = client["stock_predictor"]
 col = db["stock_predictions"]
-now = datetime.utcnow()
+# Naive-UTC for MongoDB comparison (avoids deprecated utcnow)
+now = datetime.now(timezone.utc).replace(tzinfo=None)
 cutoff = now - timedelta(hours=3)
 canary = ["AAPL", "AMZN", "JPM", "XOM", "WMT", "CAT", "CMCSA", "PLTR"]
 missing = []

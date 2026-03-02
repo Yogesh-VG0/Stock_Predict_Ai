@@ -207,8 +207,12 @@ def make_insider_features(
             (feat["insider_buy_count_30d"] >= 3) & (feat["insider_sell_count_30d"] == 0)
         ).astype(float)
 
-        # --- Missingness indicator: data exists for this date range ---
-        feat["insider_available"] = 1.0
+        # --- Missingness indicator: 1.0 only when insider data exists within
+        # the 90-day lookback, so the model can distinguish "no filings" from
+        # "no data coverage" for this ticker/date.
+        feat["insider_available"] = (
+            daily["txn_count"].rolling(90, min_periods=1).sum().gt(0).astype(float)
+        )
 
         # --- Align to price dates ---
         feat = feat.reset_index().rename(columns={"index": "date"})
