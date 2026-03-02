@@ -578,15 +578,22 @@ class StockPredictor:
             # --- Sign classifier (calibrated P(up)) ---
             try:
                 sign_y = (y_all > 0).astype(int)
+                # Balance classes — market-neutral targets drift slightly negative,
+                # causing P(up) < 50% in training data.  is_unbalance rescales
+                # so the classifier doesn't simply learn the prior.
+                n_pos = int(sign_y[:train_end].sum())
+                n_neg = int(len(sign_y[:train_end]) - n_pos)
+                spw = n_neg / max(n_pos, 1)  # scale_pos_weight
                 sign_params = {
                     "objective": "binary",
                     "metric": "binary_logloss",
                     "boosting_type": "gbdt",
-                    "n_estimators": 100,
-                    "max_depth": 3,
-                    "learning_rate": 0.05,
-                    "num_leaves": 8,
-                    "min_child_samples": 50,
+                    "n_estimators": 500,
+                    "max_depth": 4,
+                    "learning_rate": 0.03,
+                    "num_leaves": 15,
+                    "min_child_samples": 30,
+                    "scale_pos_weight": spw,
                     "reg_alpha": 0.3,
                     "reg_lambda": 0.3,
                     "subsample": 0.8,
@@ -595,6 +602,7 @@ class StockPredictor:
                     "verbosity": -1,
                     "n_jobs": -1,
                 }
+                _SIGN_MIN_TREES = 30  # safety net — never stop below this many rounds
                 # Reuse the same time-based split as the last fold
                 if val_start < val_end and val_start < n:
                     sign_X_train = X_all[:train_end]
@@ -612,18 +620,35 @@ class StockPredictor:
                             sample_weight=w_sign,
                             eval_set=[(sign_X_val_df, sign_y_val)],
                             callbacks=[
-                                lgb.early_stopping(15, verbose=False),
+                                lgb.early_stopping(50, verbose=False),
                                 lgb.log_evaluation(0),
                             ],
                         )
+                        # Safety net: if early stopping killed the model too soon,
+                        # retrain with a guaranteed minimum number of trees.
+                        n_trees = sign_clf.booster_.num_trees()
+                        if n_trees < _SIGN_MIN_TREES:
+                            logger.info(
+                                "POOLED-%s sign clf stopped at %d trees (< %d); "
+                                "retraining with fixed %d rounds",
+                                window_name, n_trees, _SIGN_MIN_TREES, _SIGN_MIN_TREES,
+                            )
+                            sign_params_fixed = {**sign_params, "n_estimators": _SIGN_MIN_TREES}
+                            sign_clf = lgb.LGBMClassifier(**sign_params_fixed)
+                            sign_clf.fit(
+                                sign_X_train_df,
+                                sign_y_train,
+                                sample_weight=w_sign,
+                            )
                         self.pooled_sign_models[window_name] = sign_clf
                         # Evaluate on val set
                         sign_proba = sign_clf.predict_proba(sign_X_val_df)[:, 1]
                         sign_acc = float(np.mean((sign_proba > 0.5) == sign_y_val))
                         pooled_meta["sign_classifier_accuracy"] = sign_acc
+                        n_final_trees = sign_clf.booster_.num_trees()
                         logger.info(
-                            "POOLED-%s sign classifier: accuracy=%.1f%%",
-                            window_name, sign_acc * 100,
+                            "POOLED-%s sign classifier: accuracy=%.1f%% trees=%d spw=%.3f",
+                            window_name, sign_acc * 100, n_final_trees, spw,
                         )
             except Exception as e:
                 logger.warning("Could not train pooled sign classifier for %s: %s", window_name, e)
@@ -813,20 +838,31 @@ class StockPredictor:
                 sign_y_train = (y_train > 0).astype(int)
                 sign_y_val = (y_val > 0).astype(int)
                 if len(np.unique(sign_y_train)) == 2 and len(X_train) >= 60:
+                    n_pos_tk = int(sign_y_train.sum())
+                    n_neg_tk = int(len(sign_y_train) - n_pos_tk)
+                    spw_tk = n_neg_tk / max(n_pos_tk, 1)
                     sign_params_tk = {
                         "objective": "binary", "metric": "binary_logloss",
-                        "boosting_type": "gbdt", "n_estimators": 80,
-                        "max_depth": 3, "learning_rate": 0.05, "num_leaves": 8,
-                        "min_child_samples": 30, "reg_alpha": 0.3, "reg_lambda": 0.3,
+                        "boosting_type": "gbdt", "n_estimators": 300,
+                        "max_depth": 4, "learning_rate": 0.03, "num_leaves": 12,
+                        "min_child_samples": 20, "scale_pos_weight": spw_tk,
+                        "reg_alpha": 0.3, "reg_lambda": 0.3,
                         "subsample": 0.8, "colsample_bytree": 0.8,
                         "random_state": 42, "verbosity": -1, "n_jobs": -1,
                     }
+                    _SIGN_MIN_TREES_TK = 20
                     sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk)
                     sign_clf_tk.fit(
                         X_train_df, sign_y_train, sample_weight=w,
                         eval_set=[(X_val_df, sign_y_val)],
-                        callbacks=[lgb.early_stopping(15, verbose=False), lgb.log_evaluation(0)],
+                        callbacks=[lgb.early_stopping(30, verbose=False), lgb.log_evaluation(0)],
                     )
+                    # Safety net: retrain with fixed rounds if too few trees
+                    n_trees_tk = sign_clf_tk.booster_.num_trees()
+                    if n_trees_tk < _SIGN_MIN_TREES_TK:
+                        sign_params_tk_fixed = {**sign_params_tk, "n_estimators": _SIGN_MIN_TREES_TK}
+                        sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk_fixed)
+                        sign_clf_tk.fit(X_train_df, sign_y_train, sample_weight=w)
                     self.sign_models[key] = sign_clf_tk
             except Exception as e:
                 logger.debug("Could not train sign classifier for %s-%s: %s", ticker, window_name, e)
@@ -1076,22 +1112,43 @@ class StockPredictor:
             
             sigma = float(meta_w.get("val_rmse", 0.0))
             # --- Calibrated P(up) from sign classifier, fallback to Gaussian CDF ---
+            # Prefer per-ticker sign model whenever available (even if regression
+            # model isn't production_ready) — per-ticker sign models capture
+            # ticker-specific directional patterns that the pooled model misses.
             sign_model = self.pooled_sign_models.get(window_name)
-            if ticker_meta is not None and ticker_meta.get("production_ready", False):
-                sign_model = self.sign_models.get(key, sign_model)
+            tk_sign = self.sign_models.get(key)
+            if tk_sign is not None:
+                sign_model = tk_sign
+            # Gaussian CDF fallback
+            gauss_prob = (
+                0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
+            )
             if sign_model is not None:
                 try:
-                    prob_positive = float(sign_model.predict_proba(X_pred_df)[0, 1])
+                    clf_prob = float(sign_model.predict_proba(X_pred_df)[0, 1])
+                    # Blend: if sign model is undertrained (few trees), mix with
+                    # Gaussian CDF so a near-constant classifier doesn't dominate.
+                    n_sign_trees = getattr(sign_model, "n_iter_", 0) or 0
+                    if n_sign_trees == 0:
+                        try:
+                            n_sign_trees = sign_model.booster_.num_trees()
+                        except Exception:
+                            n_sign_trees = 50  # assume decent if we can't check
+                    if n_sign_trees < 15:
+                        blend_w = n_sign_trees / 15.0  # gradually trust more trees
+                        prob_positive = blend_w * clf_prob + (1 - blend_w) * gauss_prob
+                    else:
+                        prob_positive = clf_prob
                 except Exception:
-                    prob_positive = (
-                        0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
-                    )
+                    prob_positive = gauss_prob
             else:
-                prob_positive = (
-                    0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
-                )
+                prob_positive = gauss_prob
             confidence = prob_positive
-            
+            # Clip extreme confidence — short-term alpha prediction can never be
+            # > ~80% or < ~20% certain; prevents per-ticker overfit edge cases.
+            prob_positive = max(0.20, min(0.80, prob_positive))
+            confidence = prob_positive
+
             # Restore price range — use conformal q90 for calibrated interval
             conformal_q = float(meta_w.get("conformal_q90", 0.0))
             if conformal_q <= 0:

@@ -1337,7 +1337,7 @@ def generate_explanations(
     MAX_QUOTA_FAILURES = 3
 
     for i, ticker in enumerate(ticker_list, 1):
-        logger.info("[%d/%d] Processing %s…", i, len(ticker_list), ticker)
+        logger.info("[%d/%d] Processing %s...", i, len(ticker_list), ticker)
 
         if quota_failures >= MAX_QUOTA_FAILURES:
             remaining = len(ticker_list) - i + 1
@@ -1453,7 +1453,7 @@ def generate_explanations(
         if recent_news:
             logger.info("  Found %d recent news articles for %s", len(recent_news), ticker)
 
-        # 10. Build prompt & call Gemini
+        # 10. Build prompt & call LLM API
         prompt = _build_prompt(
             ticker, target_date, predictions, sentiment, technicals, shap_data,
             macro_context=macro_context,
@@ -1463,7 +1463,13 @@ def generate_explanations(
             fmp_context=fmp_context,
             recent_news=recent_news,
         )
-        explanation_text, error_type = _call_llm_api(prompt, ticker)
+        try:
+            explanation_text, error_type = _call_llm_api(prompt, ticker)
+        except Exception as exc:
+            logger.error("  Unexpected error calling LLM for %s: %s", ticker, exc)
+            results["failed"] += 1
+            results["details"].append({"ticker": ticker, "status": "failed", "reason": f"unexpected: {exc}"})
+            continue
 
         if error_type == "quota_exceeded":
             quota_failures += 1
@@ -1477,7 +1483,7 @@ def generate_explanations(
                 remaining = len(ticker_list) - i
                 provider_name = "Groq" if API_PROVIDER == "groq" else "Gemini"
                 logger.error(
-                    "  ⚠️  %s QUOTA EXHAUSTED: Stopping explanation generation after %d consecutive failures. "
+                    "  [!] %s QUOTA EXHAUSTED: Stopping explanation generation after %d consecutive failures. "
                     "Remaining %d tickers will be skipped. Consider enabling billing, switching API provider, or reducing max_tickers.",
                     provider_name, quota_failures, remaining
                 )
@@ -1491,7 +1497,7 @@ def generate_explanations(
             
             # Brief backoff before trying next ticker (kept very short to avoid stalling CI)
             backoff_time = min(5 * (2 ** (quota_failures - 1)), 15)  # 5s, 10s, 15s max
-            logger.info("  Sleeping %ds before retrying next ticker…", backoff_time)
+            logger.info("  Sleeping %ds before retrying next ticker...", backoff_time)
             time.sleep(backoff_time)
             continue
 
@@ -1623,7 +1629,7 @@ def main():
     # Fail CI if more than half failed
     total_attempted = results["success"] + results["failed"]
     if total_attempted > 0 and results["failed"] > total_attempted * 0.5:
-        print("Too many failures — exiting with error")
+        print("Too many failures -- exiting with error")
         sys.exit(1)
 
 

@@ -59,10 +59,14 @@ RETENTION_CONFIG: Dict[str, Tuple[int, str]] = {
     "short_interest_data":           (12, "fetched_at"),
     "economic_events":               (12, "timestamp"),
     "sec_filings":                   (18, "timestamp"),
+    "sec_filings_raw":               (3,  "processed_at"),
     "finnhub_basic_financials":      (6,  "fetched_at"),
     "finnhub_recommendation_trends": (12, "fetched_at"),
     "finnhub_company_peers":         (6,  "fetched_at"),
     "alpha_vantage_data":            (12, "timestamp"),
+    "macro_data_processed":          (12, "date"),
+    "api_cache":                     (1,  "timestamp"),
+    "llm_explanations":              (6,  "timestamp"),
 }
 
 # Collections that should NEVER be pruned (small, cumulative, or critical)

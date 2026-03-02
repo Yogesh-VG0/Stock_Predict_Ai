@@ -61,7 +61,7 @@ class PipelineHealthSummary:
         print(f"  Backtest status:          {self.backtest_status}")
         stored_horizons = f" x {len(self.horizons_used)} horizons" if self.horizons_used else ""
         if self.predictions_stored == 0 and self.predictions_failed == 0 and self.predictions_skipped == 0:
-            print(f"  Predictions stored:       — (--no-predict mode)")
+            print(f"  Predictions stored:       -- (--no-predict mode)")
         else:
             print(f"  Predictions stored:       {self.predictions_stored} tickers{stored_horizons}")
         if self.predictions_failed:
@@ -70,7 +70,7 @@ class PipelineHealthSummary:
             print(f"  Predictions skipped:      {self.predictions_skipped} (insufficient data)")
 
         print(f"  Gemini explanations:      {self.gemini_explanations}")
-        eval_note = " (none yet — predictions need 1+ day to become evaluable)" if self.evaluation_samples == 0 else ""
+        eval_note = " (none yet -- predictions need 1+ day to become evaluable)" if self.evaluation_samples == 0 else ""
         print(f"  Evaluation samples found: {self.evaluation_samples}{eval_note}")
         print("=" * 56 + "\n")
 
@@ -111,11 +111,11 @@ class PipelineHealthSummary:
             print("\n" + "!" * 56)
             print("  QUALITY GATE: FAILED")
             for r in reasons:
-                print(f"  • {r}")
+                print(f"  - {r}")
             print("!" * 56 + "\n")
             return False
 
-        print("  QUALITY GATE: PASSED ✓")
+        print("  QUALITY GATE: PASSED")
         return True
 
 
@@ -155,6 +155,25 @@ def main():
         except Exception as e:
             logger.warning("MongoDB unavailable: %s. Falling back to yfinance.", e)
             args.no_mongo = True
+
+    # --- Quota pre-check: run data retention BEFORE any heavy writes ----
+    if not args.no_mongo and mongo_client and mongo_client.db is not None:
+        try:
+            stats = mongo_client.db.command("dbStats")
+            data_mb = stats.get("dataSize", 0) / (1024 * 1024)
+            storage_mb = stats.get("storageSize", 0) / (1024 * 1024)
+            logger.info(f"MongoDB storage: dataSize={data_mb:.1f} MB, storageSize={storage_mb:.1f} MB")
+            if data_mb > 400:  # >400 MB → proactively run retention cleanup
+                logger.warning("Storage above 400 MB — running data retention cleanup before pipeline continues...")
+                try:
+                    from ml_backend.scripts.data_retention import run_retention
+                    retention_results = run_retention(dry_run=False)
+                    total_deleted = sum(v for v in retention_results.values() if v > 0)
+                    logger.info(f"Data retention cleanup deleted {total_deleted} documents")
+                except Exception as ret_exc:
+                    logger.warning(f"Data retention cleanup failed: {ret_exc}")
+        except Exception as e:
+            logger.warning(f"Could not check MongoDB storage stats: {e}")
             
     # 2. Initialize Components
     predictor = StockPredictor(mongo_client)
@@ -360,7 +379,7 @@ def main():
                     "model may be broken or data degraded",
                     hz, sharpe, win_rate * 100,
                 )
-                print(f"  ⚠ SANITY WARNING: poor performance (Sharpe={sharpe:.2f}, win_rate={win_rate:.1%})")
+                print(f"  [!] SANITY WARNING: poor performance (Sharpe={sharpe:.2f}, win_rate={win_rate:.1%})")
             print("=" * 40)
 
         if not any_backtest_ok:
@@ -378,6 +397,7 @@ def main():
     elif not args.no_mongo and mongo_client:
         logger.info("Generating and storing live predictions...")
         horizons_seen = set()
+        consecutive_failures = 0
         for ticker in tickers:
             try:
                 df = historical_data.get(ticker)
@@ -397,15 +417,24 @@ def main():
                     success = mongo_client.store_predictions(ticker, preds)
                     if success:
                         health.predictions_stored += 1
+                        consecutive_failures = 0
                         logger.info(f"Stored predictions for {ticker}")
                     else:
                         health.predictions_failed += 1
+                        consecutive_failures += 1
                         logger.error(f"Failed to store predictions for {ticker}")
+                        if consecutive_failures >= 3:
+                            logger.error("3 consecutive storage failures (likely quota exceeded) — aborting prediction loop to save CI time")
+                            break
                 else:
                     health.predictions_failed += 1
             except Exception as e:
                 health.predictions_failed += 1
+                consecutive_failures += 1
                 logger.error(f"Error generating/storing predictions for {ticker}: {e}")
+                if consecutive_failures >= 3:
+                    logger.error("3 consecutive storage failures — aborting prediction loop")
+                    break
         health.horizons_used = sorted(horizons_seen)
 
 

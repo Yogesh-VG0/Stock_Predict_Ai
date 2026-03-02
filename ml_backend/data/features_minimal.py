@@ -777,6 +777,9 @@ class MinimalFeatureEngineer:
                 # Staleness guard: ignore docs older than 180 days
                 doc_ts = doc.get("timestamp")
                 if doc_ts and hasattr(doc_ts, "timestamp"):
+                    # MongoDB returns naive datetimes (UTC); make aware for safe subtraction
+                    if doc_ts.tzinfo is None:
+                        doc_ts = doc_ts.replace(tzinfo=timezone.utc)
                     age_days = (datetime.now(timezone.utc) - doc_ts).days
                     if age_days > 180:
                         logger.debug("Skipping stale %s doc for %s (%d days old)", coll_name, ticker, age_days)
@@ -792,13 +795,21 @@ class MinimalFeatureEngineer:
                 ed = ev.get("date") or ev.get("reportedDate")
                 if ed:
                     try:
-                        earnings_dates.append(pd.to_datetime(ed).normalize())
+                        parsed = pd.to_datetime(ed)
+                        # Strip timezone info to keep everything naive-UTC
+                        if parsed.tzinfo is not None:
+                            parsed = parsed.tz_convert('UTC').tz_localize(None)
+                        earnings_dates.append(parsed.normalize())
                     except Exception:
                         pass
             if not earnings_dates:
                 return df
             earnings_dates = np.array(sorted(set(earnings_dates)), dtype="datetime64[D]")
-            df_dates = pd.to_datetime(df["date"]).dt.normalize().values.astype("datetime64[D]")
+            # Strip timezone from df["date"] to match naive-UTC earnings_dates
+            _dates_series = pd.to_datetime(df["date"])
+            if _dates_series.dt.tz is not None:
+                _dates_series = _dates_series.dt.tz_convert("UTC").dt.tz_localize(None)
+            df_dates = _dates_series.dt.normalize().values.astype("datetime64[D]")
             idx = np.searchsorted(earnings_dates, df_dates, side="right") - 1
             days_since = np.full(len(df), 90, dtype=int)
             mask = idx >= 0

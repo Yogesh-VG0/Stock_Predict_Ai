@@ -12,6 +12,7 @@ concurrency:
 
 env:
   MONGODB_URI: ${{ secrets.MONGODB_URI }}
+  PYTHONIOENCODING: utf-8
   # SKIP_SEC_FMP removed — Kaleidoscope (SEC) and FMP are now enabled.
   # The code gracefully handles missing/failing API keys with fallbacks.
 

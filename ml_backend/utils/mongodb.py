@@ -912,33 +912,44 @@ class MongoDBClient:
             return False
 
     def store_macro_data(self, indicator: str, data: dict, source: str = 'AlphaVantage') -> bool:
-        """Store macroeconomic data with proper validation"""
+        """Store macroeconomic data with proper validation.
+
+        Expects *data* to contain ``{'date': '<YYYY-MM-DD>', 'value': <num>}``.
+        The date is converted to a datetime so range queries in
+        ``get_macro_data`` match correctly.
+        """
         try:
             if not indicator or not data:
                 return False
-                
-            # Store raw data
+
+            # Normalise the date to a real datetime for consistent querying
+            date_val = data.get('date')
+            if isinstance(date_val, str):
+                date_val = pd.to_datetime(date_val)
+
+            doc = {**data, 'indicator': indicator, 'source': source, 'date': date_val}
+
+            # Store in macro_data (the collection that get_macro_data reads)
+            self.db['macro_data'].update_one(
+                {
+                    'indicator': indicator,
+                    'source': source,
+                    'date': date_val,
+                },
+                {'$set': doc},
+                upsert=True,
+            )
+
+            # Also keep a copy in macro_data_raw for audit
             self.db['macro_data_raw'].update_one(
                 {
                     'indicator': indicator,
                     'source': source,
-                    'date': data.get('date')
+                    'date': date_val,
                 },
-                {'$set': data},
-                upsert=True
+                {'$set': doc},
+                upsert=True,
             )
-            
-            # Store processed data
-            if 'processed' in data:
-                self.db['macro_data_processed'].update_one(
-                    {
-                        'indicator': indicator,
-                        'source': source,
-                        'date': data.get('date')
-                    },
-                    {'$set': data['processed']},
-                    upsert=True
-                )
                 
             return True
             
