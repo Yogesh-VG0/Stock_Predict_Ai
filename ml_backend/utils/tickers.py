@@ -34,13 +34,28 @@ TICKER_SUBREDDITS = {
     "NVDA": ["NVDA_Stock", "NVDA", "stocks", "wallstreetbets"],
 }
 
-# Deterministic ticker_id for pooled models
+# Deterministic ticker_id for pooled models — HASH-BASED for stability.
+# Sequential IDs (enumerate) shift when tickers are added/removed, silently
+# corrupting the pooled model's learned ticker associations.  Hash-based IDs
+# are stable across ticker list changes.
 _ALL_TICKERS = sorted(set(TOP_100_TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
-TICKER_TO_ID = {ticker: i for i, ticker in enumerate(_ALL_TICKERS)}
+
+
+def _stable_ticker_hash(ticker: str) -> int:
+    """Compute a stable, deterministic integer ID from a ticker string.
+
+    Uses SHA-256 (truncated to 6 hex chars → 0..16_777_215) so that IDs
+    never change when the ticker list is modified.
+    """
+    return int(hashlib.sha256(ticker.encode()).hexdigest()[:6], 16)
+
+
+TICKER_TO_ID = {ticker: _stable_ticker_hash(ticker) for ticker in _ALL_TICKERS}
+
 
 def get_ticker_id(ticker: str) -> int:
-    """Return deterministic ticker_id. Unknown tickers use md5 fallback."""
+    """Return deterministic, stable ticker_id.  Safe across ticker list changes."""
     key = (ticker or "UNK").upper()
     if key in TICKER_TO_ID:
         return TICKER_TO_ID[key]
-    return int(hashlib.md5(key.encode()).hexdigest()[:8], 16) % 100000
+    return _stable_ticker_hash(key)

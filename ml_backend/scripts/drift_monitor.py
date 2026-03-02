@@ -103,7 +103,13 @@ def run_drift_monitor(
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days + 30)  # extra buffer for horizon alignment
     baseline_cutoff = end - timedelta(days=days)
-    midpoint = baseline_cutoff + timedelta(days=days // 2)
+
+    # Use a 2/3 vs 1/3 split instead of calendar midpoint.
+    # The first 2/3 of the window is baseline; the last 1/3 is "recent".
+    # This better separates "old behavior" from "current behavior" and is
+    # less sensitive to when the model was retrained.
+    split_days = int(days * 2 / 3)
+    midpoint = baseline_cutoff + timedelta(days=split_days)
 
     for window_name, tcfg in TARGET_CONFIG.items():
         horizon = tcfg["horizon"]
@@ -259,10 +265,90 @@ def check_sentiment_coverage(mongo_client: MongoDBClient, tickers: List[str], da
 
 
 # ---------------------------------------------------------------------------
+# Feature-level drift detection
+# ---------------------------------------------------------------------------
+
+def check_feature_group_coverage(
+    mongo_client: MongoDBClient,
+    tickers: List[str],
+    days: int = 7,
+) -> Dict:
+    """Check per-feature-group coverage from recent predictions.
+
+    Queries stored feature_importance documents to see which feature groups
+    have non-zero SHAP contributions.  If an entire group (e.g., sentiment,
+    insider, fundamental) has zero contributions across all tickers, it
+    likely indicates a broken data pipeline.
+
+    Returns dict of {group_name: {coverage_pct, n_tickers_checked, status}}
+    """
+    end = datetime.now(timezone.utc)
+    cutoff = (end - timedelta(days=days)).strftime("%Y-%m-%d")
+
+    _FEATURE_GROUPS = {
+        "sentiment": ["sent_mean_1d", "sent_mean_7d", "sent_mean_30d", "sent_momentum",
+                       "news_count_7d", "news_spike_1d"],
+        "insider": ["insider_net_value_30d", "insider_buy_ratio_30d", "insider_cluster_buying",
+                     "insider_net_shares_30d"],
+        "fundamental": ["fund_pe_ratio", "fund_pb_ratio", "fund_dividend_yield",
+                         "fund_roe", "fund_beta"],
+        "short_interest": ["si_short_float_pct", "si_days_to_cover", "si_available"],
+        "earnings": ["earnings_surprise", "earnings_beat", "earnings_recency",
+                      "earnings_surprise_pct"],
+        "macro": ["macro_spread_2y10y", "macro_fed_funds"],
+    }
+
+    results = {}
+    try:
+        coll = mongo_client.db["feature_importance"]
+        if coll is None:
+            return results
+
+        for group_name, feature_names in _FEATURE_GROUPS.items():
+            n_checked = 0
+            n_nonzero = 0
+
+            for ticker in tickers[:20]:  # Sample up to 20 tickers
+                doc = coll.find_one(
+                    {"ticker": ticker, "date": {"$gte": cutoff}},
+                    sort=[("date", -1)],
+                )
+                if not doc:
+                    continue
+                n_checked += 1
+                # Check if any feature in this group has non-zero SHAP
+                shap_all = doc.get("shap_top_features", {})
+                top_pos = [d.get("feature", "") for d in doc.get("top_positive_contrib", [])]
+                top_neg = [d.get("feature", "") for d in doc.get("top_negative_contrib", [])]
+                all_active = set(shap_all.keys()) | set(top_pos) | set(top_neg)
+
+                if any(f in all_active for f in feature_names):
+                    n_nonzero += 1
+
+            coverage = (n_nonzero / max(n_checked, 1)) * 100
+            status = "OK" if coverage >= 30 else "LOW" if coverage > 0 else "EMPTY"
+            if n_checked == 0:
+                status = "NO_DATA"
+
+            results[group_name] = {
+                "coverage_pct": round(coverage, 1),
+                "n_tickers_checked": n_checked,
+                "n_tickers_active": n_nonzero,
+                "features": feature_names,
+                "status": status,
+            }
+
+    except Exception as e:
+        logger.warning("Feature group coverage check failed: %s", e)
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Pretty print
 # ---------------------------------------------------------------------------
 
-def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
+def _print_drift_report(results: Dict, sent_coverage: Dict, feature_coverage: Optional[Dict] = None) -> None:
     print(f"\n{'='*70}")
     print("  DRIFT MONITORING REPORT")
     print(f"  Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
@@ -301,6 +387,17 @@ def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
         print(f"    {icon} {ticker:6s}: {sc['rows_returned']:3d} rows / {sc['days_checked']}d "
               f"({sc['coverage_pct']:.0f}%%), nonzero={sc['nonzero_sentiment']}")
 
+    # Feature group coverage
+    if feature_coverage:
+        print(f"\n  {'─'*50}")
+        print("  Feature Group Coverage (from recent SHAP docs):")
+        for group, info in sorted(feature_coverage.items()):
+            st = info.get("status", "?")
+            icon = "[OK]" if st == "OK" else "[!]" if st in ("LOW", "EMPTY") else "[?]"
+            print(f"    {icon} {group:16s}: {info['coverage_pct']:5.1f}%  "
+                  f"({info['n_tickers_active']}/{info['n_tickers_checked']} tickers active)  "
+                  f"[{st}]")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Drift monitoring report")
@@ -322,7 +419,8 @@ def main():
     logger.info("Running drift monitor for %d tickers over %d days...", len(tickers), args.days)
     drift_results = run_drift_monitor(mongo_client, tickers, args.days)
     sent_coverage = check_sentiment_coverage(mongo_client, tickers, min(args.days, 30))
-    _print_drift_report(drift_results, sent_coverage)
+    feature_coverage = check_feature_group_coverage(mongo_client, tickers, days=7)
+    _print_drift_report(drift_results, sent_coverage, feature_coverage)
 
     print("\nDone.")
 

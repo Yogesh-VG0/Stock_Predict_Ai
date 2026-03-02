@@ -4,6 +4,7 @@ Leakage-proof, time-based splits, proper evaluation.
 """
 
 import json
+import hashlib
 import math
 import os
 import logging
@@ -443,12 +444,39 @@ class StockPredictor:
                     break
                 val_end = min(val_start + int(n * 0.1), n)
 
-                X_train, X_val = X_all[:train_end], X_all[val_start:val_end]
-                y_train, y_val = y_all[:train_end], y_all[val_start:val_end]
+                # --- Cross-sectional purge ---
+                # In pooled training, multiple tickers share the same date.
+                # The temporal purge/embargo gap only removes samples ±gap
+                # indices apart, but since data is sorted by date (with same-
+                # date tickers adjacent), we must also exclude all samples
+                # from dates that fall within the purge window of the val set.
+                train_dates = dates_all[:train_end]
+                val_dates = dates_all[val_start:val_end]
+                if len(val_dates) > 0 and len(train_dates) > 0:
+                    val_min_date = val_dates.min()
+                    # Remove training samples whose date is within `gap` trading
+                    # days of val_min_date (cross-sectional contamination).
+                    purge_cutoff = val_min_date - np.timedelta64(gap, 'D')
+                    cross_sect_mask = train_dates <= purge_cutoff
+                    n_purged = int((~cross_sect_mask).sum())
+                    if n_purged > 0:
+                        logger.debug(
+                            "POOLED-%s fold %d: cross-sectional purge removed %d/%d train samples",
+                            window_name, fold, n_purged, train_end,
+                        )
+                    X_train = X_all[:train_end][cross_sect_mask]
+                    y_train = y_all[:train_end][cross_sect_mask]
+                else:
+                    X_train = X_all[:train_end]
+                    y_train = y_all[:train_end]
+
+                X_val = X_all[val_start:val_end]
+                y_val = y_all[val_start:val_end]
                 if len(y_train) < 200 or len(y_val) < 20:
                     break
 
-                w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
+                # Moderate recency weighting: ~2.7x ratio (exp(-1) to exp(0))
+                w = np.exp(np.linspace(-1.0, 0.0, len(y_train))).astype(np.float32)
                 fold_model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
                 X_train_df = pd.DataFrame(X_train, columns=active_cols)
                 X_val_df = pd.DataFrame(X_val, columns=active_cols)
@@ -610,7 +638,8 @@ class StockPredictor:
                     sign_X_val = X_all[val_start:val_end]
                     sign_y_val = sign_y[val_start:val_end]
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
-                        w_sign = np.exp(np.linspace(-2.0, 0.0, len(sign_y_train))).astype(np.float32)
+                        # Moderate recency weighting: ~2.7x ratio
+                        w_sign = np.exp(np.linspace(-1.0, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
                         sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
                         sign_X_val_df = pd.DataFrame(sign_X_val, columns=active_cols)
@@ -813,8 +842,8 @@ class StockPredictor:
                 logger.warning(f"Skipping {ticker}-{window_name}: not enough samples")
                 continue
 
-            # Recency weighting + no scaling for tree models
-            w = np.exp(np.linspace(-2.0, 0.0, len(y_train))).astype(np.float32)
+            # Moderate recency weighting: ~2.7x ratio (exp(-1) to exp(0))
+            w = np.exp(np.linspace(-1.0, 0.0, len(y_train))).astype(np.float32)
             model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
             X_train_df = pd.DataFrame(X_train, columns=active_cols)
             X_val_df = pd.DataFrame(X_val, columns=active_cols)
@@ -1334,26 +1363,60 @@ class StockPredictor:
         return pd.concat(results_list, ignore_index=True)
 
     def load_models(self) -> None:
-        """Load models from disk (per-ticker + pooled)."""
+        """Load models from disk (per-ticker + pooled) with SHA-256 integrity verification."""
         base = os.path.join(MODEL_DIR, "v1")
         if not os.path.exists(base):
             logger.info("No v1 models found to load")
             return
+
+        # Load expected hashes for integrity verification
+        _expected_hashes = {}
+        _meta_json_path = os.path.join(base, "model_metadata.json")
+        if os.path.exists(_meta_json_path):
+            try:
+                with open(_meta_json_path) as _mf:
+                    _model_meta = json.load(_mf)
+                _expected_hashes = _model_meta.get("model_hashes", {})
+            except Exception:
+                pass
+
+        def _verify_hash(filepath: str) -> bool:
+            """Verify a model file's SHA-256 against the expected hash."""
+            if not _expected_hashes:
+                return True  # No hashes stored — skip verification (backward compat)
+            rel = os.path.relpath(filepath, base)
+            expected = _expected_hashes.get(rel)
+            if expected is None:
+                return True  # No hash for this specific file — skip
+            h = hashlib.sha256()
+            with open(filepath, "rb") as fh:
+                for chunk in iter(lambda: fh.read(8192), b""):
+                    h.update(chunk)
+            actual = h.hexdigest()
+            if actual != expected:
+                logger.error(
+                    "INTEGRITY FAILURE: %s hash mismatch (expected=%s, got=%s). "
+                    "Model file may be corrupted.",
+                    rel, expected[:12], actual[:12],
+                )
+                return False
+            return True
+
         pooled_path = os.path.join(base, "_pooled")
         if os.path.isdir(pooled_path):
             for f in os.listdir(pooled_path):
                 if f.endswith(".joblib"):
                     for w in self.prediction_windows:
                         if w in f:
+                            fpath = os.path.join(pooled_path, f)
                             try:
+                                if not _verify_hash(fpath):
+                                    logger.warning("Skipping corrupted pooled model: %s", f)
+                                    continue
                                 if f.startswith("sign_"):
-                                    self.pooled_sign_models[w] = joblib.load(
-                                        os.path.join(pooled_path, f)
-                                    )
+                                    self.pooled_sign_models[w] = joblib.load(fpath)
                                 elif f.startswith("lgb_"):
-                                    self.pooled_models[w] = joblib.load(
-                                        os.path.join(pooled_path, f)
-                                    )
+                                    self.pooled_models[w] = joblib.load(fpath)
                             except Exception as e:
                                 logger.warning("Could not load pooled %s: %s", f, e)
             if self.pooled_models:
@@ -1396,6 +1459,9 @@ class StockPredictor:
                             key = (ticker, w)
                             path = os.path.join(ticker_path, f)
                             try:
+                                if not _verify_hash(path):
+                                    logger.warning("Skipping corrupted model: %s", path)
+                                    continue
                                 if f.startswith("sign_"):
                                     self.sign_models[key] = joblib.load(path)
                                 elif f.startswith("lgb_"):
@@ -1408,20 +1474,32 @@ class StockPredictor:
         logger.info(f"Loaded {len(self.models)} models + {len(self.sign_models)} sign classifiers")
 
     def save_models(self) -> None:
-        """Save models to disk (per-ticker + pooled)."""
+        """Save models to disk (per-ticker + pooled) with SHA-256 integrity hashes."""
         base = os.path.join(MODEL_DIR, "v1")
         pooled_path = os.path.join(base, "_pooled")
+        model_hashes = {}  # {filename: sha256_hex}
+
+        def _save_and_hash(model_obj, filepath: str) -> None:
+            """Save a joblib model and record its SHA-256 hash."""
+            joblib.dump(model_obj, filepath)
+            h = hashlib.sha256()
+            with open(filepath, "rb") as fh:
+                for chunk in iter(lambda: fh.read(8192), b""):
+                    h.update(chunk)
+            rel = os.path.relpath(filepath, base)
+            model_hashes[rel] = h.hexdigest()
+
         if self.pooled_models:
             os.makedirs(pooled_path, exist_ok=True)
             for window, model in self.pooled_models.items():
                 try:
-                    joblib.dump(model, os.path.join(pooled_path, f"lgb_{window}.joblib"))
+                    _save_and_hash(model, os.path.join(pooled_path, f"lgb_{window}.joblib"))
                 except Exception as e:
                     logger.warning("Could not save pooled %s: %s", window, e)
             # Save pooled sign classifiers
             for window, sign_clf in self.pooled_sign_models.items():
                 try:
-                    joblib.dump(sign_clf, os.path.join(pooled_path, f"sign_{window}.joblib"))
+                    _save_and_hash(sign_clf, os.path.join(pooled_path, f"sign_{window}.joblib"))
                 except Exception as e:
                     logger.warning("Could not save pooled sign %s: %s", window, e)
             if self.pooled_metadata:
@@ -1441,14 +1519,14 @@ class StockPredictor:
             path = os.path.join(base, ticker)
             os.makedirs(path, exist_ok=True)
             try:
-                joblib.dump(model, os.path.join(path, f"lgb_{window}.joblib"))
+                _save_and_hash(model, os.path.join(path, f"lgb_{window}.joblib"))
                 scaler = self.scalers.get((ticker, window))
                 if scaler is not None:
-                    joblib.dump(scaler, os.path.join(path, f"lgb_{window}_scaler.joblib"))
+                    _save_and_hash(scaler, os.path.join(path, f"lgb_{window}_scaler.joblib"))
                 # Save per-ticker sign classifier
                 sign_clf = self.sign_models.get((ticker, window))
                 if sign_clf is not None:
-                    joblib.dump(sign_clf, os.path.join(path, f"sign_{window}.joblib"))
+                    _save_and_hash(sign_clf, os.path.join(path, f"sign_{window}.joblib"))
             except Exception as e:
                 logger.warning(f"Could not save {ticker}-{window}: {e}")
         # Save per-ticker metadata
@@ -1479,11 +1557,15 @@ class StockPredictor:
                     w: len(m.get("feature_columns", []))
                     for w, m in self.pooled_metadata.items()
                 },
+                "model_hashes": model_hashes,
             }
             meta_path = os.path.join(base, "model_metadata.json")
             with open(meta_path, "w") as f:
                 json.dump(model_meta, f, indent=2)
-            logger.info("Saved model_metadata.json (version=%s)", MODEL_VERSION)
+            logger.info(
+                "Saved model_metadata.json (version=%s, %d hashes)",
+                MODEL_VERSION, len(model_hashes),
+            )
         except Exception as e:
             logger.warning("Could not save model_metadata.json: %s", e)
 

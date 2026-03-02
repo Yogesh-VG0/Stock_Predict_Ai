@@ -22,6 +22,7 @@ import math
 import signal
 import sys
 import os
+import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -32,11 +33,17 @@ logger = logging.getLogger(__name__)
 
 # Per-ticker timeout for SHAP analysis (seconds).
 # Prevents a single slow yfinance download from eating the whole budget.
-_PER_TICKER_TIMEOUT = 90
+_PER_TICKER_TIMEOUT = 60
 
 
-class _ShapTickerTimeout(Exception):
-    """Raised when a single ticker's SHAP analysis exceeds the timeout."""
+class _ShapTickerTimeout(BaseException):
+    """Raised when a single ticker's SHAP analysis exceeds the timeout.
+
+    Inherits from BaseException (not Exception) so that ``except Exception``
+    handlers in third-party / data-layer code cannot swallow the alarm.
+    Only the explicit ``except _ShapTickerTimeout`` in run_shap_analysis
+    will catch it.
+    """
 
 
 def _timeout_handler(signum, frame):
@@ -296,6 +303,7 @@ def run_shap_analysis(
     tickers: List[str],
     horizons: Optional[List[str]] = None,
     store_to_mongo: bool = True,
+    max_minutes: float = 0,
 ) -> Dict:
     """
     Run full SHAP + feature importance analysis.
@@ -329,7 +337,18 @@ def run_shap_analysis(
     horizons = horizons or list(predictor.prediction_windows)
     all_results = {}
 
+    # Wall-clock budget: stop accepting new tickers when time runs out
+    _deadline = (time.monotonic() + max_minutes * 60) if max_minutes > 0 else 0
+
     for ticker in tickers:
+        if _deadline and time.monotonic() > _deadline:
+            logger.warning(
+                "SHAP wall-clock budget exhausted (%.0f min) — "
+                "skipping remaining %d ticker(s)",
+                max_minutes,
+                len(tickers) - len(all_results),
+            )
+            break
         logger.info("Analyzing %s ...", ticker)
         ticker_results = {}
 
@@ -370,22 +389,39 @@ def _analyze_single_ticker(
     """Analyze a single ticker (extracted for timeout wrapping)."""
     ticker_results = {}
 
-    # -- Fetch historical data via yfinance --
+    # -- Fetch historical data: MongoDB first (matches prediction pipeline), yfinance fallback --
+    df = None
     try:
-        import yfinance as yf
-        df = yf.download(ticker, period="10y", progress=False)
-        if df is not None and not df.empty:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df = df.reset_index()
-            if "Date" in df.columns:
-                df = df.rename(columns={"Date": "date"})
-        else:
-            logger.warning("No data for %s", ticker)
-            return {}
+        if mongo_client is not None and mongo_client.db is not None:
+            from datetime import timedelta as _td
+            _end = datetime.now(timezone.utc)
+            _start = _end - _td(days=365 * 10)
+            df = mongo_client.get_historical_data(ticker, _start, _end)
+            if df is not None and not df.empty:
+                logger.info("SHAP: using MongoDB data for %s (%d rows)", ticker, len(df))
+            else:
+                df = None
     except Exception as e:
-        logger.warning("Could not fetch %s: %s", ticker, e)
-        return {}
+        logger.debug("SHAP: MongoDB fetch failed for %s: %s — trying yfinance", ticker, e)
+        df = None
+
+    if df is None:
+        try:
+            import yfinance as yf
+            df = yf.download(ticker, period="10y", progress=False)
+            if df is not None and not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df.reset_index()
+                if "Date" in df.columns:
+                    df = df.rename(columns={"Date": "date"})
+                logger.info("SHAP: using yfinance fallback for %s (%d rows)", ticker, len(df))
+            else:
+                logger.warning("No data for %s", ticker)
+                return {}
+        except Exception as e:
+            logger.warning("Could not fetch %s: %s", ticker, e)
+            return {}
 
     # -- Prepare features (same path as predict_all_windows) --
     if predictor.feature_engineer is None:
@@ -579,6 +615,8 @@ def main():
                         help="Horizons to analyze (default: all)")
     parser.add_argument("--no-mongo", action="store_true",
                         help="Skip storing results to MongoDB")
+    parser.add_argument("--max-minutes", type=float, default=0,
+                        help="Wall-clock budget in minutes (0=unlimited)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -590,6 +628,7 @@ def main():
         tickers=args.tickers,
         horizons=args.horizon,
         store_to_mongo=not args.no_mongo,
+        max_minutes=args.max_minutes,
     )
 
     if not results:
