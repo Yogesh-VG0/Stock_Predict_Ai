@@ -8,7 +8,7 @@ out/
 build/
 
 # Python
-.venv/
+.venv*/
 venv/
 __pycache__/
 *.pyc
@@ -84,3 +84,6 @@ batch_*_attempt_*.log
 eval_report.txt
 drift_report.txt
 retention_report.txt
+
+# MongoDB exports
+stock_predictor.*.json

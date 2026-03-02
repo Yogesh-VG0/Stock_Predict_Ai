@@ -633,16 +633,25 @@ class SECFilingsAnalyzer:
                             logger.error(f"Error processing filing {filing.get('acc', '')}: {str(e)}")
                             continue
             
-            # Add processed filings to the data
-            filings_data['processed_filings'] = processed_filings
+            # Add processed filings to the data (strip large text blobs to save storage)
+            slim_filings = []
+            for pf in processed_filings:
+                slim = {k: v for k, v in pf.items() if k not in ('html_content',)}
+                if 'text_content' in slim:
+                    slim['text_content'] = slim['text_content'][:500]
+                slim_filings.append(slim)
+            filings_data['processed_filings'] = slim_filings
             
-            # Store the complete data
+            # Remove bulky categorized_filings before persisting (metadata is kept via processed_filings)
+            store_data = {k: v for k, v in filings_data.items() if k != 'categorized_filings'}
+            
+            # Store the complete data — upsert by ticker so we replace the previous run's doc
             collection.replace_one(
-                {'ticker': ticker, 'fetched_at': datetime.now(timezone.utc)},
-                {**filings_data, 'ticker': ticker, 'fetched_at': datetime.now(timezone.utc)},
+                {'ticker': ticker},
+                {**store_data, 'ticker': ticker, 'fetched_at': datetime.now(timezone.utc)},
                 upsert=True
             )
-            logger.info(f"Stored SEC filings for {ticker} in MongoDB with {len(processed_filings)} processed filings")
+            logger.info(f"Stored SEC filings for {ticker} in MongoDB with {len(slim_filings)} processed filings")
             
         except Exception as e:
             logger.error(f"Error storing SEC filings in MongoDB: {str(e)}")
@@ -1013,20 +1022,20 @@ class SECFilingsAnalyzer:
                                         sentiments.append(sentiment)
                                         
                                         # Store processed filing for MongoDB
+                                        # NOTE: html_content omitted to save storage (~500KB per filing)
+                                        # text_content truncated to 500 chars for reference
                                         processed_filing = {
                                             'form_type': form_type,
                                             'filing_date': filing_date,
                                             'company_name': company_name,
                                             'html_url': html_url,
-                                            'html_content': html_content,
-                                            'text_content': text_content,
+                                            'text_content': text_content[:500] if text_content else '',
+                                            'text_length': len(text_content) if text_content else 0,
                                             'sentiment_score': sentiment,
                                             'acc': filing.get('acc', ''),
                                             'cik': filing.get('CIK', ''),
                                             'filer': filing.get('Filer', ''),
                                             'form_desc': filing.get('Form_Desc', ''),
-                                            'pdf_url': filing.get('pdf', ''),
-                                            'word_url': filing.get('word', ''),
                                             'processed_at': datetime.now(timezone.utc).isoformat()
                                         }
                                         processed_filings.append(processed_filing)
@@ -1118,7 +1127,9 @@ class SECFilingsAnalyzer:
         """Check if a filing date is within the last 30 days."""
         try:
             filing_date = datetime.strptime(date_str, "%Y-%m-%d")
-            return (datetime.now(timezone.utc) - filing_date).days <= 30
+            # Compare both as naive UTC to avoid naive/aware mismatch
+            now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+            return (now_naive - filing_date).days <= 30
         except Exception:
             return False 
 

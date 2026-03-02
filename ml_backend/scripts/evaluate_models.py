@@ -395,11 +395,11 @@ def _print_ab_comparison(results: Dict) -> None:
             if math.isnan(delta):
                 arrow = ""
             elif (higher_better and delta > 0) or (not higher_better and delta < 0):
-                arrow = " ↑"
+                arrow = " (+)"
             elif delta == 0:
-                arrow = " ="
+                arrow = " (=)"
             else:
-                arrow = " ↓"
+                arrow = " (-)"
 
             print(f"  {key:25s} {format(v_w, fmt):>18s} {format(v_wo, fmt):>18s} {format(delta, fmt):>10s}{arrow}")
 

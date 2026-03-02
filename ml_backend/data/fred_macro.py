@@ -92,7 +92,9 @@ def fetch_and_store_fred_indicator(indicator, start_date, end_date, mongo_client
     data = fetch_fred_series(series_code, start_date, end_date)
     data_dict = {d.strftime('%Y-%m-%d'): float(v) for d, v in data.items()}
     if mongo_client is not None:
-        mongo_client.store_macro_data(indicator, data_dict, source='FRED')
+        # Store one document per date so store_macro_data upsert keys work correctly
+        for date_str, value in data_dict.items():
+            mongo_client.store_macro_data(indicator, {'date': date_str, 'value': value}, source='FRED')
     return data_dict
 
 

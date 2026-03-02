@@ -155,22 +155,46 @@ def _map_sentiment_label(label):
     logger.warning(f"Unknown sentiment label: {label}, defaulting to 0.0")
     return 0.0
 
+def _to_naive_utc(dt_obj):
+    """Convert any datetime-like object to a naive UTC datetime.
+    
+    Handles: datetime.datetime (naive/aware), pd.Timestamp (naive/aware), strings.
+    Returns None on failure.
+    """
+    if dt_obj is None:
+        return None
+    # Convert strings first
+    if isinstance(dt_obj, str):
+        try:
+            dt_obj = pd.to_datetime(dt_obj, errors='coerce')
+            if dt_obj is pd.NaT or dt_obj is None:
+                return None
+        except Exception:
+            return None
+    # pd.Timestamp (tz-aware) → convert to UTC then strip
+    if isinstance(dt_obj, pd.Timestamp):
+        if dt_obj.tzinfo is not None:
+            dt_obj = dt_obj.tz_convert('UTC').tz_localize(None)
+        return dt_obj.to_pydatetime()
+    # Plain datetime
+    if isinstance(dt_obj, datetime):
+        if dt_obj.tzinfo is not None:
+            dt_obj = dt_obj.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt_obj
+    return None
+
+
 def _is_recent(date_obj):
     if not date_obj:
         return False
-    now = datetime.now(timezone.utc)
-    # Always make both timezone-naive (UTC)
-    if hasattr(date_obj, 'tz_localize') or hasattr(date_obj, 'tzinfo'):
-        if getattr(date_obj, 'tzinfo', None) is not None:
-            date_obj = date_obj.tz_convert(None) if hasattr(date_obj, 'tz_convert') else date_obj.tz_localize(None)
-    if hasattr(now, 'tzinfo') and now.tzinfo is not None:
-        now = now.tz_convert(None) if hasattr(now, 'tz_convert') else now.tz_localize(None)
-    if isinstance(date_obj, str):
-        try:
-            date_obj = pd.to_datetime(date_obj).tz_localize(None)
-        except Exception:
-            return False
-    return (now - date_obj).days < RECENT_DAYS
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC
+    date_obj = _to_naive_utc(date_obj)
+    if date_obj is None:
+        return False
+    try:
+        return (now - date_obj).days < RECENT_DAYS
+    except Exception:
+        return False
 
 class SentimentAnalyzer:
     _macro_data_fetched = False  # Class variable to ensure macro data is fetched only once per process
@@ -219,7 +243,7 @@ class SentimentAnalyzer:
                 # Get macro data once and store in MongoDB
                 from .fred_macro import fetch_and_store_all_fred_indicators
                 from datetime import datetime, timedelta
-                end_date = datetime.now()
+                end_date = datetime.now(timezone.utc)
                 start_date = end_date - timedelta(days=365 * 2)  # 2 years of data
                 
                 logger.info("Fetching macro data (one-time initialization)...")
@@ -410,8 +434,9 @@ class SentimentAnalyzer:
                             try:
                                 date_obj = pd.to_datetime(getattr(entry, date_field), errors='coerce')
                                 if date_obj is not None and pd.notnull(date_obj):
-                                    date_obj = date_obj.tz_localize(None)
-                                    break  # success — stop trying other fields
+                                    date_obj = _to_naive_utc(date_obj)
+                                    if date_obj is not None:
+                                        break  # success — stop trying other fields
                                 else:
                                     date_obj = None
                             except Exception:
@@ -1101,7 +1126,7 @@ class SentimentAnalyzer:
                 start_date=utc_today_str, end_date=utc_today_str
             )
             if (not today_schedule.empty
-                    and utc_now.replace(tzinfo=None) < today_schedule.iloc[0]["market_close"].tz_localize(None)):
+                    and utc_now.replace(tzinfo=None) < today_schedule.iloc[0]["market_close"].tz_convert('UTC').tz_localize(None)):
                 # Market hasn't closed yet — use the *previous* trading day
                 prev_day = utc_now - pd.Timedelta(days=1)
                 trading_day_str = get_previous_trading_day(prev_day.strftime("%Y-%m-%d"))

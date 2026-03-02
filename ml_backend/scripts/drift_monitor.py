@@ -270,9 +270,9 @@ def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
 
     for window, m in results.items():
         status = m.get("status", "UNKNOWN")
-        status_icon = "✓" if status == "OK" else "⚠" if status == "WARNING" else "?"
+        status_icon = "[OK]" if status == "OK" else "[!]" if status == "WARNING" else "[?]"
         n = m.get("n_samples", 0)
-        print(f"\n  {status_icon} {window} (n={n}) — {status}")
+        print(f"\n  {status_icon} {window} (n={n}) -- {status}")
 
         if n == 0:
             print("    Insufficient data.")
@@ -280,7 +280,7 @@ def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
 
         alerts = m.get("alerts", [])
         for a in alerts:
-            print(f"    ⚠ ALERT: {a}")
+            print(f"    [!] ALERT: {a}")
 
         psi = m.get("psi", float("nan"))
         psi_label = "stable" if psi < 0.10 else "moderate" if psi < 0.25 else "HIGH"
@@ -289,7 +289,7 @@ def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
         print(f"      Baseline / Recent     : {m.get('dir_acc_baseline', float('nan')):.1%} / {m.get('dir_acc_recent', float('nan')):.1%}")
         print(f"    Brier score             : {m.get('brier_score', float('nan')):.4f}")
         print(f"      Baseline / Recent     : {m.get('brier_baseline', float('nan')):.4f} / {m.get('brier_recent', float('nan')):.4f}")
-        print(f"    Alpha magnitude         : {m.get('alpha_magnitude_baseline', float('nan')):.6f} → {m.get('alpha_magnitude_recent', float('nan')):.6f}")
+        print(f"    Alpha magnitude         : {m.get('alpha_magnitude_baseline', float('nan')):.6f} -> {m.get('alpha_magnitude_recent', float('nan')):.6f}")
         print(f"    MAE / RMSE              : {m.get('mae', float('nan')):.6f} / {m.get('rmse', float('nan')):.6f}")
 
     # Sentiment coverage
@@ -297,7 +297,7 @@ def _print_drift_report(results: Dict, sent_coverage: Dict) -> None:
     print("  Sentiment Data Coverage:")
     for ticker, sc in sent_coverage.items():
         st = sc.get("status", "?")
-        icon = "✓" if st == "OK" else "⚠" if st == "LOW" else "✗"
+        icon = "[OK]" if st == "OK" else "[!]" if st == "LOW" else "[X]"
         print(f"    {icon} {ticker:6s}: {sc['rows_returned']:3d} rows / {sc['days_checked']}d "
               f"({sc['coverage_pct']:.0f}%%), nonzero={sc['nonzero_sentiment']}")
 

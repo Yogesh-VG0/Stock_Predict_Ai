@@ -166,7 +166,7 @@ async def _run_pipeline(tickers: list[str]) -> tuple[int, int]:
             pass
 
         if zero_news > len(tickers) * 0.5:
-            logger.warning("  ⚠ >50%% of tickers have zero news — check API keys")
+            logger.warning("  [!] >50%% of tickers have zero news -- check API keys")
     except Exception as e:
         logger.warning("Health check query failed: %s", e)
 
