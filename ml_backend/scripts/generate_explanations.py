@@ -41,19 +41,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ── S&P 100 tickers (same list as run_pipeline) ──────────────────────────
-TOP_100_TICKERS: List[str] = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "ORCL", "CRM", "AMD", "INTC",
-    "CSCO", "ADBE", "QCOM", "TXN", "NOW", "INTU", "AMZN", "TSLA", "HD", "NFLX",
-    "LOW", "SBUX", "NKE", "MCD", "DIS", "BKNG", "TGT", "JPM", "V", "MA",
-    "BAC", "WFC", "GS", "MS", "AXP", "BLK", "SCHW", "C", "COF", "BK",
-    "MET", "AIG", "USB", "XOM", "CVX", "COP", "JNJ", "UNH", "LLY", "PFE",
-    "ABBV", "ABT", "TMO", "DHR", "MRK", "AMGN", "GILD", "ISRG", "MDT", "BMY",
-    "CVS", "WMT", "COST", "PG", "KO", "PEP", "MDLZ", "CL", "MO", "CAT",
-    "HON", "UNP", "BA", "RTX", "LMT", "DE", "GE", "GD", "EMR", "FDX",
-    "UPS", "MMM", "CMCSA", "VZ", "T", "CHTR", "BRK-B", "ACN", "IBM", "PYPL",
-    "LIN", "NEE", "SO", "DUK", "AMT", "SPG", "PLTR", "TMUS", "PM", "AMAT",
-]
+# ── Import canonical ticker list (single source of truth) ─────────────
+from ml_backend.config.constants import TOP_100_TICKERS
 
 # ── Human-readable feature name mapping ──
 FEATURE_DISPLAY_NAMES = {
@@ -303,12 +292,12 @@ USE_GROQ = os.getenv("GROQ_API_KEY") is not None
 USE_GEMINI = os.getenv("GOOGLE_API_KEY") is not None
 
 # Groq models — prioritize by token budget, not quality.
-# Free tier TPD limits are the binding constraint for 100 tickers:
-#   llama-3.1-8b-instant:      500K TPD, 14.4K RPD  ← primary
-#   llama-3.3-70b-versatile:   100K TPD, 1K RPD     ← exhausts after ~40 tickers
+# Free tier limits are the binding constraint for 75 tickers:
+#   llama-3.1-8b-instant:      30 RPM, 14.4K RPD, 6K TPM ← primary (high RPD)
+#   llama-3.3-70b-versatile:   30 RPM, 1K RPD, 12K TPM   ← better quality, tight RPD
 GROQ_MODEL_FALLBACK_CHAIN = [
-    "llama-3.1-8b-instant",      # Primary: 500K TPD, 14.4K RPD
-    "llama-3.3-70b-versatile",   # Fallback: 100K TPD, 1K RPD
+    "llama-3.1-8b-instant",      # Primary: 14.4K RPD — handles full 75 tickers
+    "llama-3.3-70b-versatile",   # Fallback: 1K RPD — exhausts after ~100 calls
 ]
 
 # Gemini models (free tier: 20 RPD max)
@@ -345,8 +334,8 @@ _MIN_CALL_INTERVAL = 8.0  # Minimum seconds between ANY API call (≈7.5 RPM; ra
 _model_rpd_count: Dict[str, int] = {}
 _MODEL_RPD_LIMITS: Dict[str, int] = {
     # Groq models — conservative limits (leave headroom for rate safety)
-    "llama-3.1-8b-instant": 500,       # Primary: 14.4K RPD limit, cap at 500 for CI
-    "llama-3.3-70b-versatile": 100,    # Fallback: 1K RPD limit, cap at 100 for CI
+    "llama-3.1-8b-instant": 500,       # Free tier: 14.4K RPD, cap at 500 for CI
+    "llama-3.3-70b-versatile": 100,    # Free tier: 1K RPD, cap at 100 for CI
     # Gemini models (very low free tier limits)
     "gemini-2.5-pro": 0,               # Free tier: 0 RPD (not available)
     "gemini-2.5-flash": 18,             # leave headroom vs 20 limit
@@ -436,7 +425,13 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
         response = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": "You are a financial analyst providing clear, concise stock market explanations."},
+                {"role": "system", "content": (
+                    "You are a senior equity analyst at a fintech platform writing concise "
+                    "market intelligence briefings for retail investors. Your style is "
+                    "Bloomberg-professional but accessible. You ONLY cite data provided in "
+                    "the prompt — never fabricate numbers, headlines, or analyst targets. "
+                    "Translate all ML/quantitative jargon into plain English."
+                )},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.7,

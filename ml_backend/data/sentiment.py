@@ -301,7 +301,7 @@ class SentimentAnalyzer:
         logger.info(f"    VADER: {self.vader is not None}")
         logger.info(f"    SEC Analyzer: {self.sec_analyzer is not None}")
         logger.info("  Disabled: transformers models (CI-incompatible), SeekingAlpha (needs Playwright)")
-        logger.info("  Disabled: alphavantage_news (free tier: 25 req/day insufficient for 100 tickers)")
+        logger.info("  Disabled: alphavantage_news (free tier: 25 req/day insufficient for 75 tickers)")
         
     def _check_api_health(self, api_name: str) -> bool:
         """Check if an API is healthy and not in cooldown."""
@@ -317,13 +317,24 @@ class SentimentAnalyzer:
         return True
     
     def _mark_api_error(self, api_name: str, error: str, cooldown_minutes: int = 15):
-        """Mark an API as having an error and set cooldown period."""
+        """Mark an API as having an error and set cooldown period.
+
+        Per-source cooldowns — Finnhub & SEC are shortened because a single
+        timeout should not skip the remaining 90+ tickers.
+        """
+        # Source-specific defaults (override generic 15 min)
+        _source_cooldowns = {
+            "finnhub": 3,           # 60 req/min free tier; recovers fast
+            "sec": 3,               # Kaleidoscope intermittent timeouts
+            "fmp": 5,               # FMP free tier — modest cooldown
+        }
+        effective_cd = _source_cooldowns.get(api_name, cooldown_minutes)
         self.api_status[api_name] = {
             'working': False,
             'last_error': error,
-            'cooldown_until': datetime.now(timezone.utc) + timedelta(minutes=cooldown_minutes)
+            'cooldown_until': datetime.now(timezone.utc) + timedelta(minutes=effective_cd)
         }
-        logger.warning(f"API {api_name} marked as down for {cooldown_minutes} minutes due to: {error}")
+        logger.warning(f"API {api_name} marked as down for {effective_cd} minutes due to: {error}")
     
     def _mark_api_success(self, api_name: str):
         """Mark an API as working successfully."""
@@ -502,15 +513,18 @@ class SentimentAnalyzer:
         # Dead (alphavantage, alpha_earnings_call) and phantom
         # (economic_event, short_interest) entries have been removed so they
         # cannot distort the normalization.
+        #
+        # FMP re-enabled (v1.6) — uses price-target-consensus + ratings-snapshot
+        # for free-tier tickers.  Weight kept modest since coverage is partial.
         weights = {
             'rss_news_sentiment':              0.22,
-            'marketaux_sentiment':             0.15,
-            'reddit_sentiment':                0.10,
+            'marketaux_sentiment':             0.18,
+            'reddit_sentiment':                0.12,
             'finnhub_sentiment':               0.10,
             'finnhub_insider_sentiment':       0.10,
             'sec_sentiment':                   0.10,
-            'fmp_sentiment':                   0.08,
-            'finviz_sentiment':                0.05,
+            'fmp_sentiment':                   0.10,
+            'finviz_sentiment':                0.08,
         }
 
         total_score = 0.0
@@ -2873,7 +2887,14 @@ class FMPAPIManager:
         return {"price_target_consensus": data if isinstance(data, list) else []}
     
     async def get_all_fmp_data(self, ticker: str) -> dict:
-        """Get all FMP data for a ticker using correct stable endpoints."""
+        """Get all FMP data for a ticker using correct stable endpoints.
+
+        Budget: FMP free tier allows ~250 calls/day.  With 75 tickers
+        and 2 endpoints each, that's 150 calls — well within budget.
+        We pick the two highest-signal endpoints:
+          1. price-target-consensus  (analyst consensus)
+          2. ratings-snapshot        (overall rating)
+        """
         logger.info(f"  Fetching consolidated FMP STABLE data for {ticker}")
         
         # Check if ticker is supported
@@ -2886,15 +2907,23 @@ class FMPAPIManager:
             logger.warning(f"  FMP API not working, returning empty data for {ticker}")
             return {}
         
-        # Reduced to 4 high-value endpoints to stay within FMP free-tier
-        # budget (250 total calls). Dividends/earnings calendar data adds
-        # minimal sentiment signal vs cost.
-        #
-        # Note: Analyst estimates and ratings endpoints require FMP premium access.
-        # Returning empty to prevent log spam for free tier users.
-        return {}
-        
-        return {}
+        all_data = {}
+        try:
+            # 1. Price target consensus
+            ptc = await self.get_price_target_consensus(ticker)
+            if ptc:
+                all_data.update(ptc)
+            # 2. Ratings snapshot
+            rat = await self.get_ratings_snapshot(ticker)
+            if rat:
+                all_data.update(rat)
+        except Exception as e:
+            logger.warning(f"  FMP data fetch failed for {ticker}: {e}")
+            self.api_working = False
+            self._last_error_time = datetime.now(timezone.utc)
+            return {}
+
+        return all_data
 
 # Add FMP manager to SentimentAnalyzer
 # ... existing code ...

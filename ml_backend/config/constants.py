@@ -9,32 +9,34 @@ import os
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
 MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
 
-# S&P 100 Tickers (full list — 100 large-cap US equities)
+# S&P 75 Tickers — trimmed from 100 to improve pipeline reliability.
+# Removed 25 tickers with worst API coverage (both FMP unsupported AND
+# Nasdaq short-interest unavailable): ACN, AIG, ABT, BK, BLK, BMY, CL,
+# COF, COP, DHR, DUK, EMR, GD, MDT, MET, MMM, MO, NOW, PM, SCHW, SO,
+# SPG, TMO, UNP, USB.
 TOP_100_TICKERS = [
-    # Technology
+    # Technology (19)
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "ORCL", "CRM",
-    "AMD", "INTC", "CSCO", "ADBE", "QCOM", "TXN", "NOW", "INTU", "AMAT",
-    # Consumer Discretionary
+    "AMD", "INTC", "CSCO", "ADBE", "QCOM", "TXN", "INTU", "AMAT",
+    "IBM", "PYPL", "PLTR",
+    # Consumer Discretionary (11)
     "AMZN", "TSLA", "HD", "NFLX", "LOW", "SBUX", "NKE", "MCD",
     "DIS", "BKNG", "TGT",
-    # Financials
-    "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "AXP",
-    "BLK", "SCHW", "C", "COF", "BK", "MET", "AIG", "USB",
-    # Energy
-    "XOM", "CVX", "COP",
-    # Healthcare
-    "JNJ", "UNH", "LLY", "PFE", "ABBV", "ABT", "TMO", "DHR",
-    "MRK", "AMGN", "GILD", "ISRG", "MDT", "BMY", "CVS",
-    # Consumer Staples
-    "WMT", "COST", "PG", "KO", "PEP", "MDLZ", "CL", "MO",
-    # Industrials
-    "CAT", "HON", "UNP", "BA", "RTX", "LMT", "DE", "GE",
-    "GD", "EMR", "FDX", "UPS", "MMM",
-    # Communication
-    "CMCSA", "VZ", "T", "CHTR",
-    # Conglomerates / Other
-    "BRK-B", "ACN", "IBM", "PYPL", "LIN", "NEE", "SO",
-    "DUK", "AMT", "SPG", "PLTR", "TMUS", "PM",
+    # Financials (10)
+    "JPM", "V", "MA", "BAC", "WFC", "GS", "MS", "AXP", "C", "BRK-B",
+    # Energy (2)
+    "XOM", "CVX",
+    # Healthcare (10)
+    "JNJ", "UNH", "LLY", "PFE", "ABBV", "MRK", "AMGN", "GILD",
+    "ISRG", "CVS",
+    # Consumer Staples (6)
+    "WMT", "COST", "PG", "KO", "PEP", "MDLZ",
+    # Industrials (9)
+    "CAT", "HON", "BA", "RTX", "LMT", "DE", "GE", "FDX", "UPS",
+    # Communication (5)
+    "CMCSA", "VZ", "T", "CHTR", "TMUS",
+    # Other (3)
+    "LIN", "NEE", "AMT",
 ]
 
 # API Configuration
@@ -91,20 +93,17 @@ TICKER_SUBREDDITS = {
     "BAC": ["stocks", "investing"],
     "TMUS": ["tmobile", "stocks", "investing"],
     "PLTR": ["PLTR", "wallstreetbets", "stocks"],
-    "PM": ["stocks", "investing"],
     "CRM": ["salesforce", "stocks", "investing"],
     "CVX": ["stocks", "investing"],
     "WFC": ["stocks", "investing"],
     "CSCO": ["cisco", "stocks", "investing"],
     "MCD": ["McDonalds", "stocks", "investing"],
-    "ABT": ["stocks", "investing"],
     "IBM": ["IBM", "stocks", "investing"],
     "GE": ["GeneralElectric", "stocks", "investing"],
     "MRK": ["stocks", "investing"],
     "LIN": ["stocks", "investing"],
     "T": ["ATT", "stocks", "investing"],
-    "NOW": ["servicenow", "stocks", "investing"],
-    "ACN": ["Accenture", "stocks", "investing"],
+
     "AXP": ["stocks", "investing"],
     "MS": ["stocks", "investing"],
     "PEP": ["Pepsi", "stocks", "investing"],
@@ -116,52 +115,34 @@ TICKER_SUBREDDITS = {
     "BKNG": ["Booking", "stocks", "investing"],
     "DIS": ["Disney", "stocks", "investing"],
     "QCOM": ["Qualcomm", "stocks", "investing"],
-    "TMO": ["ThermoFisher", "stocks", "investing"],
     "ADBE": ["Adobe", "stocks", "investing"],
     "AMD": ["AMD_Stock", "AMD", "stocks", "wallstreetbets"],
     "AMGN": ["stocks", "investing"],
-    "SCHW": ["CharlesSchwab", "stocks", "investing"],
     "CAT": ["Caterpillar", "stocks", "investing"],
     "TXN": ["TexasInstruments", "stocks", "investing"],
-    "DHR": ["stocks", "investing"],
-    "BLK": ["stocks", "investing"],
+
     "PFE": ["Pfizer", "stocks", "investing"],
     "BA": ["boeing", "stocks", "investing"],
     "NEE": ["stocks", "investing"],
     "HON": ["Honeywell", "stocks", "investing"],
     "GILD": ["stocks", "investing"],
-    "UNP": ["UnionPacific", "stocks", "investing"],
     "C": ["Citigroup", "stocks", "investing"],
     "CMCSA": ["Comcast", "stocks", "investing"],
     "DE": ["JohnDeere", "stocks", "investing"],
     "LOW": ["Lowes", "stocks", "investing"],
-    "COP": ["stocks", "investing"],
     "LMT": ["LockheedMartin", "stocks", "investing"],
     "CHTR": ["Charter", "stocks", "investing"],
-    "MDT": ["Medtronic", "stocks", "investing"],
     "AMT": ["stocks", "investing"],
-    "BMY": ["BMS", "stocks", "investing"],
-    "SO": ["utilities", "stocks", "investing"],
-    "MO": ["Altria", "stocks", "investing"],
-    "DUK": ["utilities", "stocks", "investing"],
     "SBUX": ["starbucks", "stocks", "investing"],
     "MDLZ": ["stocks", "investing"],
     "INTC": ["Intel", "stocks", "investing"],
     "CVS": ["CVS", "stocks", "investing"],
     "NKE": ["Nike", "stocks", "investing"],
     "UPS": ["UPS", "stocks", "investing"],
-    "MMM": ["manufacturing", "stocks", "investing"],
-    "CL": ["Colgate", "stocks", "investing"],
-    "GD": ["GeneralDynamics", "stocks", "investing"],
-    "COF": ["CapitalOne", "stocks", "investing"],
+
     "PYPL": ["PayPal", "stocks", "investing"],
-    "USB": ["USBank", "stocks", "investing"],
-    "EMR": ["industrials", "stocks", "investing"],
-    "BK": ["banking", "stocks", "investing"],
-    "SPG": ["realestateinvesting", "stocks", "investing"],
-    "MET": ["insurance", "stocks", "investing"],
+
     "FDX": ["FedEx", "stocks", "investing"],
-    "AIG": ["AIG", "stocks", "investing"],
     "TGT": ["Target", "stocks", "investing"]
 }
 

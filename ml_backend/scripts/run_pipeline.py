@@ -130,16 +130,16 @@ def main():
     parser.add_argument("--predict-only", action="store_true",
                         help="Skip training; load saved models and only generate predictions")
     parser.add_argument("--all-tickers", action="store_true",
-                        help="Train on ALL 100 tickers (pooled model uses full cross-section)")
+                        help="Train on ALL tickers (pooled model uses full cross-section)")
     parser.add_argument("--no-predict", action="store_true",
                         help="Train only — skip prediction storage (used for training step)")
     args = parser.parse_args()
 
     health = PipelineHealthSummary()
     tickers = args.tickers or DEFAULT_BACKTEST_TICKERS
-    # When --all-tickers is set, training uses all 100 tickers but prediction
+    # When --all-tickers is set, training uses all tickers but prediction
     # uses only --tickers (or defaults).  This ensures the pooled model is
-    # trained on the full S&P 100 cross-section instead of a small batch.
+    # trained on the full cross-section instead of a small batch.
     train_tickers = list(TOP_100_TICKERS) if args.all_tickers else tickers
     mongo_client = None
     
