@@ -13,13 +13,14 @@ concurrency:
 env:
   MONGODB_URI: ${{ secrets.MONGODB_URI }}
   PYTHONIOENCODING: utf-8
-  # SKIP_SEC_FMP removed — Kaleidoscope (SEC) and FMP are now enabled.
-  # The code gracefully handles missing/failing API keys with fallbacks.
+  # FMP free tier returns 403 on /api/v3/sec_filings — skip FMP SEC fallback
+  # to avoid noisy errors. Kaleidoscope is the primary SEC filings source.
+  SKIP_SEC_FMP: "true"
 
 jobs:
   update-predictions:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 225
 
     steps:
       - name: Checkout repository
@@ -279,10 +280,18 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}
+          AI_EXPLANATION_BUDGET_MIN: "45"
         run: |
           echo "===== Generating AI explanations (Groq preferred, Gemini fallback) ====="
-          python -m ml_backend.scripts.generate_explanations || {
-            echo "::warning::AI explanation generation failed — predictions will lack AI commentary"
+          echo "Time budget: ${AI_EXPLANATION_BUDGET_MIN:-35} minutes"
+          timeout "${AI_EXPLANATION_BUDGET_MIN:-35}m" \
+            python -m ml_backend.scripts.generate_explanations || {
+            RC=$?
+            if [ "$RC" -eq 124 ]; then
+              echo "::warning::AI explanations hit time budget (${AI_EXPLANATION_BUDGET_MIN:-35}m) — partial explanations generated"
+            else
+              echo "::warning::AI explanation generation failed (exit $RC) — predictions will lack AI commentary"
+            fi
           }
 
       - name: Evaluate stored predictions (last 60 days)
