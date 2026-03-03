@@ -96,10 +96,13 @@ def make_short_interest_features(
                         dtc_val = float(dtc) if dtc is not None else None
                     except (ValueError, TypeError):
                         dtc_val = None
-                    if sfp_val is not None:
+                    # Accept record if we have EITHER short-float-pct or
+                    # days-to-cover.  Nasdaq API records typically only
+                    # have days-to-cover; Finviz records have both.
+                    if sfp_val is not None or dtc_val is not None:
                         si_records.append({
                             "date": pd.to_datetime(settle_date).normalize(),
-                            "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0),
+                            "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0) if sfp_val is not None else _NAN,
                             "si_days_to_cover": np.clip(dtc_val, 0.0, 60.0) if dtc_val is not None else _NAN,
                         })
         except Exception as e:
@@ -132,11 +135,11 @@ def make_short_interest_features(
                                     dtc_val = float(dtc)
                                 except (ValueError, TypeError):
                                     pass
-                            if sfp_val is not None:
+                            if sfp_val is not None or dtc_val is not None:
                                 doc_date = pd.to_datetime(doc.get("date", datetime.now(timezone.utc))).normalize()
                                 si_records.append({
                                     "date": doc_date,
-                                    "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0),
+                                    "si_short_float_pct": np.clip(sfp_val, 0.0, 100.0) if sfp_val is not None else _NAN,
                                     "si_days_to_cover": np.clip(dtc_val, 0.0, 60.0) if dtc_val is not None else _NAN,
                                 })
             except Exception as e:
