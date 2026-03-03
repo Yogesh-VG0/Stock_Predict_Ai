@@ -324,8 +324,8 @@ class SentimentAnalyzer:
         """
         # Source-specific defaults (override generic 15 min)
         _source_cooldowns = {
-            "finnhub": 5,           # 60 req/min free tier; 5 min cooldown on timeout
-            "sec": 5,               # Kaleidoscope intermittent timeouts
+            "finnhub": 2,           # 60 req/min free tier; 2 min cooldown on timeout (was 5 — too aggressive)
+            "sec": 3,               # Kaleidoscope intermittent timeouts
             "fmp": 5,               # FMP free tier — modest cooldown
             "marketaux": 60,        # If 401/402/403, likely billing — skip rest of run
         }

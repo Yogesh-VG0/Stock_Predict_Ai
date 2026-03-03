@@ -194,9 +194,9 @@ class DailyBudgetLimiter:
 # ---------------------------------------------------------------------------
 
 # Finnhub: 60 calls/min overall, 30 calls/sec global cap
-# Use 55/min and 25/sec for safety margin
+# Use 50/min and 10/sec burst to prevent 429 cascades
 finnhub_limiter = AsyncRateLimiter(
-    max_calls=55, period_seconds=60, burst_limit=25, name="Finnhub"
+    max_calls=50, period_seconds=60, burst_limit=10, name="Finnhub"
 )
 
 # FMP: 4 requests/sec on free tier

@@ -328,7 +328,7 @@ BASE_BACKOFF = 2         # Exponential base
 
 # Global rate limiter: track last API call time (GLOBAL, not per-model) to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
-_MIN_CALL_INTERVAL = 8.0  # Minimum seconds between ANY API call (≈7.5 RPM; raised from 6s to reduce 429s)
+_MIN_CALL_INTERVAL = 12.0  # Minimum seconds between ANY API call (≈5 RPM; raised from 8s to eliminate 429s)
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
@@ -1328,11 +1328,26 @@ def generate_explanations(
     macro_context = _get_macro_context(mongo)
     logger.info("Fetched macro context: %d indicators", len(macro_context))
 
+    # Time budget: stop gracefully before CI timeout (env var in minutes, default 0 = no limit)
+    budget_min = int(os.getenv("AI_EXPLANATION_BUDGET_MIN", "0"))
+    budget_deadline = time.time() + budget_min * 60 if budget_min > 0 else float("inf")
+    if budget_min > 0:
+        logger.info("Time budget: %d minutes (deadline in %.0f seconds)", budget_min, budget_min * 60)
+
     quota_failures = 0
     MAX_QUOTA_FAILURES = 3
 
     for i, ticker in enumerate(ticker_list, 1):
         logger.info("[%d/%d] Processing %s...", i, len(ticker_list), ticker)
+
+        # Check time budget before each ticker
+        if time.time() > budget_deadline:
+            remaining = len(ticker_list) - i + 1
+            logger.warning("Time budget exhausted — skipping remaining %d tickers", remaining)
+            results["skipped"] += remaining
+            for remaining_ticker in ticker_list[i-1:]:
+                results["details"].append({"ticker": remaining_ticker, "status": "skipped", "reason": "time_budget"})
+            break
 
         if quota_failures >= MAX_QUOTA_FAILURES:
             remaining = len(ticker_list) - i + 1
@@ -1584,9 +1599,10 @@ def generate_explanations(
             results["details"].append({"ticker": ticker, "status": "failed", "reason": "mongo store failed"})
             logger.error("  MongoDB store failed for %s", ticker)
 
-        # Rate limit: gemini-2.5-pro free tier ~15 RPM, 1.5K RPD; flash ~5 RPM, 20 RPD
+        # Rate limit: the global _MIN_CALL_INTERVAL already spaces API calls;
+        # only add extra sleep for Gemini pro (very low free tier RPM).
         current_model = _pick_model()
-        sleep_secs = 5 if "pro" in current_model else 3
+        sleep_secs = 5 if current_model and "pro" in current_model else 1
         time.sleep(sleep_secs)
 
     # Log RPD usage summary

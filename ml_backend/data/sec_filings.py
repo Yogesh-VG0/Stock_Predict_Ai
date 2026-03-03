@@ -839,6 +839,17 @@ class SECFilingsAnalyzer:
             # Make API request
             response = requests.get("https://financialmodelingprep.com/api/v3/sec_filings", 
                                 params=params, timeout=30)
+
+            # Handle FMP free tier 403 gracefully (SEC filings not available on free plan)
+            if response.status_code == 403:
+                logger.info(f"FMP 403 for {ticker} — SEC filings endpoint not available on free tier, skipping")
+                self.skip_sec_fmp = True  # Auto-disable further FMP SEC calls this session
+                return {
+                    "status": "skipped",
+                    "source": "fmp",
+                    "error": "FMP free tier does not support SEC filings endpoint"
+                }
+
             response.raise_for_status()
             filings = response.json()
             
@@ -849,8 +860,16 @@ class SECFilingsAnalyzer:
                     "error": "No filings found"
                 }
                 
-            # Filter out insider transactions and non-relevant forms
-            excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K', 'SC 13D/A', 'SC 13G/A']
+            # Filter out insider transactions, administrative, and non-narrative forms
+            excluded_forms = [
+                '4', '4/A', '144', '3', '5',
+                'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K',
+                'SC 13D/A', 'SC 13G/A', 'SCHEDULE 13G/A',
+                '13F-HR', 'IRANNOTICE', 'CERT',
+                'S-8', 'S-8 POS', 'S-3ASR', 'POSASR',
+                '424B2', '424B5', '424B7', 'FWP',
+                '8-A12B', 'ARS',
+            ]
             filings = [f for f in filings if f.get('type', '') not in excluded_forms]
             logger.info(f"FMP returned {len(filings)} total filings, processing {len(filings)} after filtering")
             total_filings = len(filings)
@@ -972,8 +991,19 @@ class SECFilingsAnalyzer:
                     # Normalize form types before filtering
                     for f in filings:
                         f['Form'] = self._normalize_form_type(f.get('Form', ''))
-                    # Filter out insider transactions and administrative forms
-                    excluded_forms = ['4', '144', 'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K', 'SC 13D/A', 'SC 13G/A']
+                    # Filter out insider transactions, administrative, and non-narrative forms
+                    # that consistently yield no extractable text (tabular/XML only).
+                    excluded_forms = [
+                        '4', '4/A', '144', '3', '5',              # Insider transaction forms
+                        'UPLOAD', 'CORRESP', 'NT 10-Q', 'NT 10-K',  # Administrative
+                        'SC 13D/A', 'SC 13G/A', 'SCHEDULE 13G/A',   # Ownership schedules
+                        '13F-HR',                                     # Institutional holdings (tabular)
+                        'IRANNOTICE', 'CERT',                         # Compliance notices
+                        'S-8', 'S-8 POS', 'S-3ASR', 'POSASR',       # Registration statements (boilerplate)
+                        '424B2', '424B5', '424B7', 'FWP',            # Prospectus supplements (dense legal)
+                        '8-A12B',                                     # Exchange registration (non-narrative)
+                        'ARS',                                        # Annual report to shareholders (usually PDF redirect)
+                    ]
                     filings = [f for f in filings if f['Form'] not in excluded_forms]
                     total_filings = len(filings)
                     
@@ -1059,7 +1089,7 @@ class SECFilingsAnalyzer:
                             continue
                     
                     if no_text_count:
-                        logger.info(f"SEC text extraction: {no_text_count}/{total_filings} filings had no extractable text for {ticker}")
+                        logger.debug(f"SEC text extraction: {no_text_count}/{total_filings} filings had no extractable text for {ticker}")
                     
                     if not sentiments:
                         return {
