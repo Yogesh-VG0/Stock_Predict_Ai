@@ -7,7 +7,7 @@ import os
 
 # MongoDB Configuration
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stockpredict_ai")
+MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stock_predictor")
 
 # S&P 75 Tickers — trimmed from 100 to improve pipeline reliability.
 # Removed 25 tickers with worst API coverage (both FMP unsupported AND

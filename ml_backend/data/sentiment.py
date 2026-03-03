@@ -324,9 +324,10 @@ class SentimentAnalyzer:
         """
         # Source-specific defaults (override generic 15 min)
         _source_cooldowns = {
-            "finnhub": 3,           # 60 req/min free tier; recovers fast
-            "sec": 3,               # Kaleidoscope intermittent timeouts
+            "finnhub": 5,           # 60 req/min free tier; 5 min cooldown on timeout
+            "sec": 5,               # Kaleidoscope intermittent timeouts
             "fmp": 5,               # FMP free tier — modest cooldown
+            "marketaux": 60,        # If 401/402/403, likely billing — skip rest of run
         }
         effective_cd = _source_cooldowns.get(api_name, cooldown_minutes)
         self.api_status[api_name] = {
@@ -776,21 +777,12 @@ class SentimentAnalyzer:
         logger.warning(f"_analyze_yahoo_news_sentiment_sync REMOVED for {ticker} - use RSS news instead")
         return {"yahoo_news_sentiment": 0.0, "yahoo_news_volume": 0, "yahoo_news_confidence": 0.0}
 
-    # Top 50 tickers to receive Marketaux data (daily budget = 95 calls)
-    _MARKETAUX_TICKERS = {
-        "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "AVGO",
-        "JPM", "V", "MA", "UNH", "LLY", "HD", "NFLX", "JNJ", "XOM",
-        "PG", "COST", "ABBV", "BAC", "CRM", "WMT", "CVX", "MRK",
-        "KO", "PEP", "ORCL", "AMD", "ADBE", "TMO", "CSCO", "MCD",
-        "ABT", "INTC", "DIS", "NKE", "PFE", "QCOM", "GS", "CAT",
-        "BA", "GE", "HON", "AMGN", "TXN", "BLK", "ISRG", "NOW", "PLTR",
-    }
-
     async def analyze_marketaux_sentiment(self, ticker: str) -> dict:
-        """Analyze sentiment from Marketaux (daily budget limited to top 50 tickers)."""
-        if ticker not in self._MARKETAUX_TICKERS:
-            logger.info(f"Skipping Marketaux for {ticker} — not in top-50 budget")
-            return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0}
+        """Analyze sentiment from Marketaux (FREE tier: 100 req/day, 3 articles/req).
+
+        All 75 tickers are eligible.  75 calls/day is within the 100/day
+        free-tier limit.  The DailyBudgetLimiter (95 cap) is the only gate.
+        """
         try:
             await marketaux_limiter.acquire()
             # Run in threadpool since this is a blocking operation
@@ -813,12 +805,23 @@ class SentimentAnalyzer:
             "symbols": ticker,
             "filter_entities": "true",
             "language": "en",
-            "sentiment_gte": -1,  # get all articles with sentiment >= -1
-            "sentiment_lte": 1,   # get all articles with sentiment <= 1
+            "limit": 3,            # FREE tier max: 3 articles per request
+            "sentiment_gte": -1,   # get all articles with sentiment >= -1
+            "sentiment_lte": 1,    # get all articles with sentiment <= 1
             "api_token": api_key
             }
         try:
             resp = requests.get(url, params=params, timeout=10)
+            if resp.status_code in (401, 402, 403):
+                # 402 = daily free-tier limit reached (100 req/day).
+                # 401/403 = bad API key or permissions.
+                # Mark API down and skip all subsequent tickers.
+                logger.warning(
+                    f"Marketaux returned HTTP {resp.status_code} for {ticker} "
+                    f"(daily limit or auth issue) — disabling for rest of run"
+                )
+                self._mark_api_error("marketaux", f"HTTP {resp.status_code}")
+                return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0, "marketaux_raw_data": [], "marketaux_nlp_results": []}
             if resp.status_code != 200:
                 logger.warning(f"Marketaux returned status {resp.status_code} for {ticker}")
                 return {"marketaux_sentiment": 0.0, "marketaux_volume": 0, "marketaux_confidence": 0.0, "marketaux_raw_data": [], "marketaux_nlp_results": []}

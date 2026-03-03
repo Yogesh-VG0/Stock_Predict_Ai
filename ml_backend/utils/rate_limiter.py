@@ -205,7 +205,9 @@ fmp_limiter = AsyncRateLimiter(
     max_calls=3, period_seconds=1, name="FMP"
 )
 
-# Marketaux: 100 requests/day — use 95 for 5% margin
+# Marketaux FREE tier: 100 requests/day, 3 articles per request.
+# All 75 tickers are eligible (75 calls).  Budget = 95 to leave
+# 5 calls headroom for retries or manual testing.
 marketaux_limiter = DailyBudgetLimiter(daily_limit=95, name="Marketaux")
 
 # Reddit: 100 QPM per OAuth client (10-min rolling window)

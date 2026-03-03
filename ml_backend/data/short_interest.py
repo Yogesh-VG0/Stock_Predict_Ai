@@ -886,6 +886,18 @@ class ShortInterestAnalyzer:
                 
                 data_source = latest_data.get('source', 'nasdaq_api')
                 confidence = 0.9  # High confidence in Nasdaq API data
+
+                # Persist short_float_pct back into the stored record so
+                # short_interest_features.py can pick it up later.
+                if short_float and self.mongo_client:
+                    try:
+                        col = self.mongo_client.db["short_interest_data"]
+                        col.update_one(
+                            {"ticker": ticker.upper(), "settlementDate": latest_data.get("settlementDate", "")},
+                            {"$set": {"shortFloatPercentage": round(short_float, 4)}},
+                        )
+                    except Exception:
+                        pass  # non-critical
             else:
                 logger.warning(f"❌ No short interest data found for {ticker} from Nasdaq API")
                 return {

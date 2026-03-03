@@ -9,6 +9,7 @@ from pymongo.errors import (
     AutoReconnect,
     ConnectionFailure,
     NetworkTimeout,
+    OperationFailure,
 )
 import time
 import random
@@ -24,6 +25,7 @@ from dotenv import load_dotenv
 try:
     from ml_backend.config.constants import (
         MONGO_COLLECTIONS,
+        MONGODB_DATABASE,
         RETRY_CONFIG,
         PREDICTION_WINDOWS,
         ARTICLE_COUNT_VOLUME_KEYS,
@@ -37,6 +39,7 @@ except ImportError:
         sys.path.insert(0, config_dir)
     from constants import (
         MONGO_COLLECTIONS,
+        MONGODB_DATABASE,
         RETRY_CONFIG,
         PREDICTION_WINDOWS,
         ARTICLE_COUNT_VOLUME_KEYS,
@@ -55,7 +58,7 @@ class MongoDBClient:
         if not self.connection_string:
             raise ValueError("MongoDB connection string not provided and MONGODB_URI environment variable not set")
             
-        self.database_name = "stock_predictor"
+        self.database_name = MONGODB_DATABASE
         self.client = None
         self.db = None
         self.collections = {}
@@ -85,7 +88,7 @@ class MongoDBClient:
                 # Timeouts — relaxed for Atlas under CI load
                 serverSelectionTimeoutMS=15000,
                 connectTimeoutMS=20000,
-                socketTimeoutMS=45000,
+                socketTimeoutMS=90000,
                 # Reliability
                 retryWrites=True,
                 retryReads=True,
@@ -148,22 +151,34 @@ class MongoDBClient:
             logger.error(f"Error initializing collections: {str(e)}")
 
     def create_indexes(self) -> None:
-        """Create indexes on frequently queried fields."""
+        """Create indexes on frequently queried fields.
+
+        Each index is created independently so a timeout on one
+        does not prevent the others from being set up.
+        """
+        def _safe_create(collection, keys, **kwargs):
+            """Create a single index, swallowing timeout errors."""
+            idx_name = kwargs.get("name", str(keys))
+            try:
+                collection.create_index(keys, **kwargs)
+            except Exception as exc:
+                logger.warning("Index %s skipped (non-fatal): %s", idx_name, exc)
+
         try:
             preds = self.collections[MONGO_COLLECTIONS["predictions"]]
-            preds.create_index(
+            _safe_create(preds,
                 [("ticker", ASCENDING), ("timestamp", DESCENDING)],
                 name="idx_ticker_timestamp",
             )
-            preds.create_index(
+            _safe_create(preds,
                 [("ticker", ASCENDING), ("window", ASCENDING), ("timestamp", DESCENDING)],
                 name="idx_ticker_window_timestamp",
             )
-            # History index: one prediction per ticker-window-day (asof_date upsert key)
-            preds.create_index(
+            _safe_create(preds,
                 [("ticker", ASCENDING), ("window", ASCENDING), ("asof_date", DESCENDING)],
                 name="idx_ticker_window_asof",
             )
+
             hist = self.collections[MONGO_COLLECTIONS["historical_data"]]
             try:
                 hist.create_index(
@@ -172,37 +187,41 @@ class MongoDBClient:
                     unique=True,
                 )
             except Exception as idx_err:
-                # Fallback if duplicates exist: create non-unique index
                 logger.warning(
                     "Could not create unique index on historical_data (duplicates may exist): %s. "
                     "Creating non-unique index. Run deduplication to enable upsert.",
                     idx_err,
                 )
-                hist.create_index(
+                _safe_create(hist,
                     [("ticker", ASCENDING), ("date", ASCENDING)],
                     name="idx_ticker_date",
                 )
+
             sent = self.db["sentiment"]
-            sent.create_index(
+            _safe_create(sent,
                 [("ticker", ASCENDING), ("last_updated", DESCENDING)],
                 name="idx_ticker_last_updated",
             )
-            # Sentiment timeseries index (for ML feature queries by date range)
-            sent.create_index(
+            _safe_create(sent,
                 [("ticker", ASCENDING), ("date", ASCENDING)],
                 name="idx_ticker_date_sent",
             )
+
             model_versions = self.collections[MONGO_COLLECTIONS["model_versions"]]
-            model_versions.create_index(
+            _safe_create(model_versions,
                 [("ticker", ASCENDING), ("window", ASCENDING), ("version", DESCENDING)],
                 name="idx_ticker_window_version",
             )
-            logger.info("Created indexes on collections")
+            logger.info("Index creation pass completed")
         except Exception as e:
             logger.warning(f"Could not create indexes: {e}")
 
     def setup_historical_data_schema(self):
-        """Set up JSON schema validation for the historical_data collection."""
+        """Set up JSON schema validation for the historical_data collection.
+
+        Gracefully handles the case where the collection does not yet exist
+        (NamespaceNotFound) by creating it first with the validator.
+        """
         schema = {
             "bsonType": "object",
             "required": ["ticker", "date", "Open", "High", "Low", "Close", "Volume"],
@@ -216,13 +235,28 @@ class MongoDBClient:
                 "Volume": {"bsonType": ["double", "int", "decimal", "long"]}
             }
         }
+        col_name = MONGO_COLLECTIONS["historical_data"]
         try:
             self.db.command({
-                "collMod": MONGO_COLLECTIONS["historical_data"],
+                "collMod": col_name,
                 "validator": {"$jsonSchema": schema},
                 "validationLevel": "moderate"
             })
             logger.info("Set up schema validation for historical_data collection")
+        except OperationFailure as e:
+            # NamespaceNotFound (code 26) — collection doesn't exist yet.
+            if e.code == 26:
+                try:
+                    self.db.create_collection(
+                        col_name,
+                        validator={"$jsonSchema": schema},
+                        validationLevel="moderate",
+                    )
+                    logger.info("Created historical_data collection with schema validation")
+                except Exception as create_err:
+                    logger.warning("Could not create historical_data collection with schema: %s", create_err)
+            else:
+                logger.warning(f"Could not set up schema validation: {e}")
         except Exception as e:
             logger.warning(f"Could not set up schema validation: {e}")
 

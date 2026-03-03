@@ -486,7 +486,7 @@ class StockPredictor:
                     sample_weight=w,
                     eval_set=[(X_val_df, y_val)],
                     callbacks=[
-                        lgb.early_stopping(15, verbose=False),
+                        lgb.early_stopping(30, verbose=False),
                         lgb.log_evaluation(0),
                     ],
                 )
@@ -494,7 +494,11 @@ class StockPredictor:
                 fold_rmses.append(float(np.sqrt(np.mean((y_val - pred) ** 2))))
                 fold_maes.append(float(np.mean(np.abs(y_val - pred))))
                 fold_hits.append(float(np.mean((y_val > 0) == (pred > 0))))
-                c = np.corrcoef(y_val, pred)[0, 1] if len(y_val) > 1 else 0.0
+                # Guard: np.corrcoef raises RuntimeWarning on constant input
+                if len(y_val) > 1 and np.std(pred) > 1e-12 and np.std(y_val) > 1e-12:
+                    c = np.corrcoef(y_val, pred)[0, 1]
+                else:
+                    c = 0.0
                 fold_corrs.append(float(c) if not np.isnan(c) else 0.0)
                 # Conformal: absolute residual quantiles for calibrated intervals
                 abs_resid = np.abs(y_val - pred)
@@ -528,7 +532,11 @@ class StockPredictor:
                 holdout_rmse = float(np.sqrt(np.mean((y_holdout - holdout_pred) ** 2)))
                 holdout_mae = float(np.mean(np.abs(y_holdout - holdout_pred)))
                 holdout_hit = float(np.mean((y_holdout > 0) == (holdout_pred > 0)))
-                h_c = np.corrcoef(y_holdout, holdout_pred)[0, 1] if len(y_holdout) > 1 else 0.0
+                # Guard: np.corrcoef raises RuntimeWarning on constant input
+                if len(y_holdout) > 1 and np.std(holdout_pred) > 1e-12 and np.std(y_holdout) > 1e-12:
+                    h_c = np.corrcoef(y_holdout, holdout_pred)[0, 1]
+                else:
+                    h_c = 0.0
                 holdout_corr = float(h_c) if not np.isnan(h_c) else 0.0
                 # Conformal from holdout residuals (truest calibration)
                 abs_resid_ho = np.abs(y_holdout - holdout_pred)
@@ -853,7 +861,7 @@ class StockPredictor:
                 sample_weight=w,
                 eval_set=[(X_val_df, y_val)],
                 callbacks=[
-                    lgb.early_stopping(stopping_rounds=15, verbose=False),
+                    lgb.early_stopping(stopping_rounds=30, verbose=False),
                     lgb.log_evaluation(0),
                 ],
             )
@@ -976,7 +984,11 @@ class StockPredictor:
                 beats_last = test_rmse < baseline_last_rmse
                 # Direction metrics (important for trading usefulness)
                 hit_rate = float(np.mean((y_test > 0) == (test_pred > 0)))
-                correlation = float(np.corrcoef(y_test, test_pred)[0, 1]) if len(y_test) > 1 else 0.0
+                # Guard: np.corrcoef raises RuntimeWarning on constant input
+                if len(y_test) > 1 and np.std(test_pred) > 1e-12 and np.std(y_test) > 1e-12:
+                    correlation = float(np.corrcoef(y_test, test_pred)[0, 1])
+                else:
+                    correlation = 0.0
                 if np.isnan(correlation):
                     correlation = 0.0
                 production_ready = (

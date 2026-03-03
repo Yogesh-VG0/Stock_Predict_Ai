@@ -413,7 +413,8 @@ def main():
                 preds = predictor.predict_all_windows(ticker, df)
                 
                 if preds:
-                    horizons_seen.update(preds.keys())
+                    # Only count actual prediction horizons, not metadata keys like _meta
+                    horizons_seen.update(k for k in preds.keys() if k != "_meta")
                     success = mongo_client.store_predictions(ticker, preds)
                     if success:
                         health.predictions_stored += 1

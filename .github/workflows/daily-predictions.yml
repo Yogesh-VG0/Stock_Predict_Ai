@@ -232,11 +232,11 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running SHAP analysis for all 75 tickers ====="
-          # Wall-clock budget: reserve 20 min for AI explanations + evaluate + drift + retention
-          SHAP_BUDGET_SEC=$((55 * 60))   # 55 minutes max for entire SHAP step
+          # Wall-clock budget: reserve 25 min for AI explanations + evaluate + drift + retention
+          SHAP_BUDGET_SEC=$((50 * 60))   # 50 minutes max for entire SHAP step
           SHAP_START=$SECONDS
-          # Per-batch budget (each batch gets up to 8 min)
-          BATCH_MAX_MIN=8
+          # Per-batch budget (each batch gets up to 12 min — increased from 8)
+          BATCH_MAX_MIN=12
 
           TICKER_BATCHES=(
             "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
@@ -250,6 +250,7 @@ jobs:
           )
           SHAP_FAILED=0
           SHAP_SKIPPED=0
+          SHAP_OK=0
           for batch in "${TICKER_BATCHES[@]}"; do
             ELAPSED=$((SECONDS - SHAP_START))
             if [ "$ELAPSED" -gt "$SHAP_BUDGET_SEC" ]; then
@@ -257,15 +258,18 @@ jobs:
               SHAP_SKIPPED=$((SHAP_SKIPPED + 1))
               continue
             fi
-            python -m ml_backend.explain.shap_analysis --tickers $batch --max-minutes $BATCH_MAX_MIN || {
-              echo "SHAP batch failed: $batch"
+            if python -m ml_backend.explain.shap_analysis --tickers $batch --max-minutes $BATCH_MAX_MIN; then
+              SHAP_OK=$((SHAP_OK + 1))
+            else
+              echo "::warning::SHAP batch failed: $batch"
               SHAP_FAILED=$((SHAP_FAILED + 1))
-            }
+            fi
           done
-          echo "SHAP batches failed: $SHAP_FAILED / ${#TICKER_BATCHES[@]}, skipped: $SHAP_SKIPPED"
-          if [ "$SHAP_FAILED" -gt 3 ]; then
-            echo "Too many SHAP failures"
-            exit 1
+          echo "SHAP batches: OK=$SHAP_OK, failed=$SHAP_FAILED / ${#TICKER_BATCHES[@]}, skipped=$SHAP_SKIPPED"
+          # SHAP is non-fatal — always continue to AI explanations, evaluation, drift, retention.
+          # Log a warning if most batches failed so we can investigate, but don't exit 1.
+          if [ "$SHAP_FAILED" -gt 5 ]; then
+            echo "::warning::Most SHAP batches failed ($SHAP_FAILED/${#TICKER_BATCHES[@]}) — feature importance may be stale"
           fi
 
       - name: Generate AI explanations (Groq/Gemini)
