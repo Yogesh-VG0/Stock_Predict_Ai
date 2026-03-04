@@ -624,16 +624,16 @@ class StockPredictor:
                     "objective": "binary",
                     "metric": "binary_logloss",
                     "boosting_type": "gbdt",
-                    "n_estimators": 500,
-                    "max_depth": 4,
-                    "learning_rate": 0.03,
-                    "num_leaves": 15,
-                    "min_child_samples": 30,
+                    "n_estimators": 300,        # reduced from 500; early stopping handles the rest
+                    "max_depth": 3,             # reduced from 4 — shallower trees for weak signal
+                    "learning_rate": 0.02,      # slower learning for better generalization
+                    "num_leaves": 8,            # reduced from 15 — tighter constraint for depth-3
+                    "min_child_samples": 50,    # increased from 30 — need large leaves for noisy binary label
                     "scale_pos_weight": spw,
-                    "reg_alpha": 0.3,
-                    "reg_lambda": 0.3,
-                    "subsample": 0.8,
-                    "colsample_bytree": 0.8,
+                    "reg_alpha": 0.5,           # increased L1 from 0.3
+                    "reg_lambda": 1.0,          # increased L2 from 0.3 — prevent overfit on sign noise
+                    "subsample": 0.7,           # reduced from 0.8
+                    "colsample_bytree": 0.7,    # reduced from 0.8
                     "random_state": 42,
                     "verbosity": -1,
                     "n_jobs": -1,
@@ -657,12 +657,13 @@ class StockPredictor:
                             sample_weight=w_sign,
                             eval_set=[(sign_X_val_df, sign_y_val)],
                             callbacks=[
-                                lgb.early_stopping(50, verbose=False),
+                                lgb.early_stopping(30, verbose=False),
                                 lgb.log_evaluation(0),
                             ],
                         )
                         # Safety net: if early stopping killed the model too soon,
                         # retrain with a guaranteed minimum number of trees.
+                        # Still use eval_set to avoid overfitting on fixed rounds.
                         n_trees = sign_clf.booster_.num_trees()
                         if n_trees < _SIGN_MIN_TREES:
                             logger.info(
@@ -676,6 +677,8 @@ class StockPredictor:
                                 sign_X_train_df,
                                 sign_y_train,
                                 sample_weight=w_sign,
+                                eval_set=[(sign_X_val_df, sign_y_val)],
+                                callbacks=[lgb.log_evaluation(0)],
                             )
                         self.pooled_sign_models[window_name] = sign_clf
                         # Evaluate on val set
@@ -880,11 +883,11 @@ class StockPredictor:
                     spw_tk = n_neg_tk / max(n_pos_tk, 1)
                     sign_params_tk = {
                         "objective": "binary", "metric": "binary_logloss",
-                        "boosting_type": "gbdt", "n_estimators": 300,
-                        "max_depth": 4, "learning_rate": 0.03, "num_leaves": 12,
-                        "min_child_samples": 20, "scale_pos_weight": spw_tk,
-                        "reg_alpha": 0.3, "reg_lambda": 0.3,
-                        "subsample": 0.8, "colsample_bytree": 0.8,
+                        "boosting_type": "gbdt", "n_estimators": 200,
+                        "max_depth": 3, "learning_rate": 0.02, "num_leaves": 8,
+                        "min_child_samples": 30, "scale_pos_weight": spw_tk,
+                        "reg_alpha": 0.5, "reg_lambda": 1.0,
+                        "subsample": 0.7, "colsample_bytree": 0.7,
                         "random_state": 42, "verbosity": -1, "n_jobs": -1,
                     }
                     _SIGN_MIN_TREES_TK = 20
@@ -899,7 +902,11 @@ class StockPredictor:
                     if n_trees_tk < _SIGN_MIN_TREES_TK:
                         sign_params_tk_fixed = {**sign_params_tk, "n_estimators": _SIGN_MIN_TREES_TK}
                         sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk_fixed)
-                        sign_clf_tk.fit(X_train_df, sign_y_train, sample_weight=w)
+                        sign_clf_tk.fit(
+                            X_train_df, sign_y_train, sample_weight=w,
+                            eval_set=[(X_val_df, sign_y_val)],
+                            callbacks=[lgb.log_evaluation(0)],
+                        )
                     self.sign_models[key] = sign_clf_tk
             except Exception as e:
                 logger.debug("Could not train sign classifier for %s-%s: %s", ticker, window_name, e)
@@ -1347,6 +1354,9 @@ class StockPredictor:
                         probs = np.array([0.5 * (1 + math.erf(p / (sigma * sqrt2))) for p in preds_ret])
                 else:
                     probs = np.full(len(preds_ret), 0.5)
+
+            # Clip probabilities to [0.20, 0.80] — consistent with single-prediction path
+            probs = np.clip(probs, 0.20, 0.80)
 
             # Trade recommended mask
             trade_mask = (preds_ret >= min_alpha) & (probs >= TRADE_MIN_PROB_POSITIVE)

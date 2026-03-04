@@ -43,9 +43,9 @@
 
 StockPredict AI is a **full-stack stock market prediction and analysis platform** that:
 
-- **Predicts** stock prices for 100 S&P 100 stocks across 3 time horizons (1 day, 1 week, 1 month) using machine learning (LightGBM)
+- **Predicts** stock prices for 75 S&P stocks across 3 time horizons (1 day, 1 week, 1 month) using machine learning (LightGBM)
 - **Analyzes** market sentiment from 10+ news/social sources using NLP models (FinBERT, RoBERTa, VADER)
-- **Explains** predictions in plain English using Google Gemini AI
+- **Explains** predictions in plain English using Groq AI (Llama-3.1-8b) with Google Gemini as fallback
 - **Displays** real-time stock prices, TradingView charts, technical indicators, Sankey financial flow charts, and news
 - **Manages** user watchlists with real-time price alerts
 - **Visualizes** income statement flows as interactive Sankey diagrams showing revenue breakdown, expenses, and profit paths
@@ -78,15 +78,15 @@ This project uses the word "model" for three very different things. Beginners of
 
 This is the **only** component that actually predicts stock prices. Everything else supports it.
 
-### 2. The Explainer — SHAP + Google Gemini (translates numbers into English)
+### 2. The Explainer — SHAP + Groq / Google Gemini (translates numbers into English)
 
 - **What SHAP does**: Takes the LightGBM prediction and breaks it into "which feature pushed the price up, which pushed it down" — purely mathematical decomposition
-- **What Gemini does**: Takes SHAP results + sentiment + news + technicals and writes a human-readable paragraph explaining the prediction
+- **What Groq/Gemini does**: Takes SHAP results + sentiment + news + technicals and writes a human-readable paragraph explaining the prediction
 - **Output**: Plain-English text like "Apple's short-term outlook is weak because..."
-- **Where it runs**: Python ML backend (SHAP) + Google Gemini API (text generation)
+- **Where it runs**: Python ML backend (SHAP) + Groq API (primary, Llama-3.1-8b-instant) / Google Gemini API (fallback)
 - **Files**: `ml_backend/explain/shap_analysis.py`, `ml_backend/scripts/generate_explanations.py`
 
-Gemini does NOT predict prices. It reads the LightGBM prediction and explains it in words.
+Groq/Gemini do NOT predict prices. They read the LightGBM prediction and explain it in words.
 
 ### 3. The Sentiment Scorers — FinBERT, RoBERTa, VADER (produce input features)
 
@@ -116,7 +116,7 @@ Price history    →  Feature engineering     →  42+ features (NUMBERS)
                                     feature contributions
                                           │
                                           ▼
-                                    Gemini AI Explainer
+                                    Groq / Gemini AI Explainer
                                           │
                                     plain-English explanation (TEXT)
                                           │
@@ -150,7 +150,7 @@ Price history    →  Feature engineering     →  42+ features (NUMBERS)
 │  Sentiment Analysis   │             └──────────────────────┘
 │  Model Training       │
 │  SHAP Explanations    │
-│  Gemini AI            │
+│  Groq / Gemini AI     │
 └─────────┬────────────┘
           │
           ▼
@@ -199,7 +199,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 ║  CHAPTER 1: "Gather the News" (~5 min)                        ║
 ║                                                                ║
 ║  The sentiment cron fires up. It goes through each of the      ║
-║  100 stocks and asks every news source: "What are people       ║
+║  75 stocks and asks every news source: "What are people        ║
 ║  saying about AAPL today?" It asks Finviz, Yahoo RSS, Reddit,  ║
 ║  Marketaux, Finnhub, FMP, SEC filings, and Seeking Alpha.      ║
 ║                                                                ║
@@ -220,7 +220,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 ║  sentiment, insider activity, earnings, fundamentals, SI...     ║
 ║                                                                ║
 ║  Then it trains ONE LightGBM model per horizon (1-day, 7-day,   ║
-║  30-day) across all 100 tickers. The models are saved to disk.  ║
+║  30-day) across all 75 tickers. The models are saved to disk.   ║
 ║                                                                ║
 ║  If this step fails, THE ENTIRE JOB FAILS. No predictions       ║
 ║  without trained models.                                        ║
@@ -228,7 +228,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 ║  CHAPTER 3: "Make Predictions" (~20 min)                      ║
 ║                                                                ║
 ║  The pipeline loads the freshly trained models and runs them     ║
-║  on each of the 100 stocks, in 10 batches of 10.               ║
+║  on each of the 75 stocks, in batches of 10.                   ║
 ║                                                                ║
 ║  For each stock: predicted return, predicted price, confidence,  ║
 ║  trade recommendation. Stored in MongoDB.                       ║
@@ -243,7 +243,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 ║  LightGBM prediction into "which features pushed up, which      ║
 ║  pushed down." Stored in MongoDB.                               ║
 ║                                                                ║
-║  Then Gemini AI reads ALL the data — predictions, SHAP,         ║
+║  Then Groq AI reads ALL the data — predictions, SHAP,           ║
 ║  sentiment, news headlines, macro indicators, insider trades,   ║
 ║  short interest — and writes a plain-English explanation.       ║
 ║  Stored in MongoDB.                                             ║
@@ -286,7 +286,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **ML pipeline (training)** | GitHub Actions runner | Python | Yahoo Finance, FRED, Finnhub, FMP, Reddit, etc. | MongoDB (all collections) |
 | **Sentiment cron** | GitHub Actions runner | Python | 10+ news/social APIs | MongoDB (sentiment, insider_transactions) |
 | **SHAP analysis** | GitHub Actions runner | Python | MongoDB (predictions, historical_data) | MongoDB (feature_importance) |
-| **Gemini explanations** | GitHub Actions runner | Python | MongoDB (all data) + Google Gemini API | MongoDB (prediction_explanations) |
+| **AI explanations** | GitHub Actions runner | Python | MongoDB (all data) + Groq API (primary) / Google Gemini API (fallback) | MongoDB (prediction_explanations) |
 | **Evaluation/Drift** | GitHub Actions runner | Python | MongoDB (predictions, historical_data) | GitHub Actions artifacts (.txt reports) |
 
 ---
@@ -436,7 +436,7 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
 - **Runs in**: ML backend (`sentiment.py`)
 - **Fields used**: `data[].filingDate`, `data[].transactionDate`, `data[].name`, `data[].share`, `data[].change`, `data[].transactionCode` (P=purchase, S=sale, M=multiple, A=award, D=disposition), `data[].transactionPrice`
 - **Stored**: MongoDB `insider_transactions` collection
-- **Used by**: `insider_features.py` (11 insider ML features), `generate_explanations.py` (Gemini prompt context)
+- **Used by**: `insider_features.py` (11 insider ML features), `generate_explanations.py` (AI explanation prompt context)
 
 #### Finnhub — Recommendation Trends
 
@@ -536,7 +536,7 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
   - `DURABLES` → `UMDMNO`
   - `NONFARM_PAYROLL` → `PAYEMS`
 - **Stored**: MongoDB `macro_data_raw` / `macro_data` collections (date-keyed: `{"indicator": "FEDERAL_FUNDS_RATE", "2024-01-01": 5.33, ...}`)
-- **Used by**: Feature engineering (`macro_spread_2y10y`, `macro_fed_funds`), Gemini explanation context
+- **Used by**: Feature engineering (`macro_spread_2y10y`, `macro_fed_funds`), AI explanation context
 
 #### FMP — Dividends
 
@@ -632,7 +632,7 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
 - **Runs in**: ML backend (`short_interest.py`)
 - **Fields used**: `data.shortInterestTable.rows[].settlementDate`, `.interest` (short interest count), `.avgDailyShareVolume`, `.daysToCover`
 - **Stored**: Within MongoDB `sentiment` collection (short interest data)
-- **Used by**: Short interest sentiment analysis, Gemini explanation context
+- **Used by**: Short interest sentiment analysis, AI explanation context
 
 #### Finviz — News Headlines + Short Interest (Fallback)
 
@@ -666,9 +666,10 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
 - **Stored**: MongoDB `seeking_alpha_comments` (raw) + `seeking_alpha_sentiment` (scored)
 - **Used by**: Sentiment scoring within `sentiment.py`
 
-#### Google Gemini — AI Explanation
+#### Groq / Google Gemini — AI Explanation
 
-- **Endpoint**: `client.models.generate_content(model="gemini-2.5-flash", contents=prompt)`
+- **Primary endpoint**: Groq API `chat.completions.create(model="llama-3.1-8b-instant", ...)`
+- **Fallback endpoint**: `client.models.generate_content(model="gemini-2.5-flash", contents=prompt)`
 - **Runs in**: ML backend, GitHub Actions (`generate_explanations.py`)
 - **Request**: Comprehensive prompt with predictions, technicals, sentiment, SHAP, macro, insider data, short interest, news headlines (~1500 char budget)
 - **Response fields used**: Full generated text (structured sections: OUTLOOK, SUMMARY, KEY_DRIVERS, etc.)
@@ -743,7 +744,7 @@ This table traces how external data becomes a number that LightGBM uses to predi
 | SEC Filings | **Daily** | Sentiment cron (Step 4) | Low — filings appear on EDGAR within hours |
 | Short Interest (Nasdaq/Finviz) | **Bi-weekly** (settlement cycle) | Sentiment cron (Step 4) | Medium — data is 2 weeks old by nature |
 | SHAP Values | **Daily** | GitHub Actions Step 8 | Low — regenerated each run |
-| Gemini AI Explanations | **Daily** | GitHub Actions Step 9 | Low — regenerated each run |
+| Gemini / Groq AI Explanations | **Daily** | GitHub Actions Step 9 | Low — regenerated each run |
 | Fear & Greed Index | **On request** | Node backend (live) | Low — fetched when user visits page |
 | Calendarific Holidays | **Yearly** | Node backend (cached 1 year) | None — holidays are static |
 | financialdata.net Prices | **On request** | Node backend (cached 24hr) | Low — used for indicators only |
@@ -801,7 +802,7 @@ This removes all ambiguity about exactly what fields are written to each collect
   "finviz_sentiment":     0.4,               // per-source scores
   "finviz_volume":        10,                // per-source article count
   "finviz_confidence":    0.7,
-  "finviz_raw_data":      ["headline1", ...],// raw headlines for Gemini context
+  "finviz_raw_data":      ["headline1", ...],// raw headlines for AI explanation context
   "rss_news_sentiment":   0.3,
   "rss_news_volume":      8,
   "reddit_sentiment":     0.2,
@@ -869,7 +870,7 @@ This removes all ambiguity about exactly what fields are written to each collect
 }
 ```
 
-**`prediction_explanations`** (from Gemini explainer):
+**`prediction_explanations`** (from Groq/Gemini AI explainer):
 ```
 {
   "ticker":           "AAPL",
@@ -961,7 +962,7 @@ DATA SOURCES  ├─── Finnhub (insider trades, recommendations, peers, fina
               ┌─────────────────────┐
               │  stock_predictions   │ ← Stored predictions
               │  feature_importance  │ ← SHAP decompositions
-              │  prediction_         │ ← Gemini AI explanations
+              │  prediction_         │ ← Groq/Gemini AI explanations
               │   explanations       │
               └─────────────────────┘
 ```
@@ -970,7 +971,7 @@ DATA SOURCES  ├─── Finnhub (insider trades, recommendations, peers, fina
 
 Every piece of data fetched from APIs is stored in MongoDB so it can be reused for:
 1. **Feature engineering** — Historical sentiment, insider data, and macro data feed into ML features
-2. **AI explanation context** — Gemini uses all stored data to generate rich explanations
+2. **AI explanation context** — Groq/Gemini uses all stored data to generate rich explanations
 3. **Historical tracking** — Enables backtesting and drift monitoring
 
 ---
@@ -979,9 +980,9 @@ Every piece of data fetched from APIs is stored in MongoDB so it can be reused f
 
 ### Overview
 
-The ML pipeline predicts **stock price returns** (not absolute prices) for 100 S&P 100 stocks across 3 time horizons. It uses **market-neutral alpha** — meaning it predicts how much a stock will outperform or underperform the S&P 500 (SPY), not just whether the stock goes up or down.
+The ML pipeline predicts **stock price returns** (not absolute prices) for 75 S&P stocks across 3 time horizons. It uses **market-neutral alpha** — meaning it predicts how much a stock will outperform or underperform the S&P 500 (SPY), not just whether the stock goes up or down.
 
-> **Remember**: LightGBM is the ONLY model that predicts prices. FinBERT/RoBERTa/VADER produce input features. Gemini writes explanations.
+> **Remember**: LightGBM is the ONLY model that predicts prices. FinBERT/RoBERTa/VADER produce input features. Groq/Gemini writes explanations.
 
 ### Step-by-Step Pipeline
 
@@ -1119,7 +1120,7 @@ This means the model predicts how much the stock will beat or lag the market, no
 **Algorithm**: LightGBM (gradient boosted decision trees) — the ONLY price predictor
 
 **Why LightGBM?**
-- Fast training (handles 100 stocks quickly)
+- Fast training (handles 75 stocks quickly)
 - Handles missing values natively
 - Built-in feature importance
 - Supports Huber loss (robust to outliers)
@@ -1128,20 +1129,21 @@ This means the model predicts how much the stock will beat or lag the market, no
 - Tabular cross-sectional features (many tickers, many numeric features) suit tree models better than sequential RNNs; LSTMs excel at long raw sequences (e.g. tick-by-tick), not pre-engineered panel data.
 - LightGBM needs less data and compute, is easier to tune and deploy in CI, and gives interpretable feature importance and fast TreeSHAP for explanations.
 
-**Hyperparameters** (v2.0):
+**Hyperparameters** (v3.1 — stronger regularization to combat holdout degradation):
 ```
 Objective:        huber (robust to outlier returns)
-Learning rate:    0.03 (v2.0: slower for expanded feature set)
-Max depth:        4 (prevents overfitting)
-Num leaves:       20 (v2.0: slightly more complex for interactions)
-N estimators:     200 (v2.0: more rounds for more features)
-Min child samples: 25
-Regularization:   L1=0.1, L2=0.1
-Subsampling:      80% rows, 80% columns
+Learning rate:    0.01 (very slow learning — best generalization with 400 rounds)
+Max depth:        5 (reduced from 6 to prevent overfitting)
+Num leaves:       24 (reduced from 31; tighter constraint for depth-5)
+N estimators:     400 (early stopping patience 30 prevents overfit)
+Min child samples: 30 (increased from 20 for stronger regularization)
+Min split gain:   0.02 (filter out more noise splits)
+Regularization:   L1=0.5, L2=2.0 (increased for feature sparsity and weight stability)
+Subsampling:      75% rows, 70% columns (more diversity per tree)
 ```
 
 **Training Strategy — Pooled Model:**
-1. Combine data from all 100 tickers
+1. Combine data from all 75 tickers
 2. Train ONE model per horizon (3 models total)
 3. Uses walk-forward validation with purge/embargo gaps
 4. Feature pruning: Keep top 35 features per horizon (protected features always kept)
@@ -1150,15 +1152,15 @@ Subsampling:      80% rows, 80% columns
 A pooled model sees patterns across all stocks (e.g., "when VIX spikes, tech stocks drop"), making it more robust than per-ticker models which have limited data.
 
 **Sign Classifier:**
-A separate LightGBM binary classifier predicts P(return > 0), used for the confidence score shown to users.
+A separate LightGBM binary classifier predicts P(return > 0), used for the confidence score shown to users. The sign classifier uses stronger regularization (max_depth=3, num_leaves=8, min_child_samples=50 for pooled / 30 for per-ticker) to avoid overconfident probability estimates.
 
 #### Step 6: Prediction Generation
 
-For each of the 100 tickers:
+For each of the 75 tickers:
 1. Fetch latest features
 2. Run through the trained LightGBM model (the predictor)
 3. Compute: predicted return, predicted price, confidence, price range
-4. Determine if trade is recommended (alpha > 0.1%, P(up) > 52%)
+4. Determine if trade is recommended (alpha > 0.02%, P(up) > 50%)
 5. Store in `stock_predictions` collection
 
 #### Step 7: SHAP Explanation (`explain/shap_analysis.py`)
@@ -1174,11 +1176,11 @@ This is a mathematical decomposition, not a language model. For each ticker:
 
 #### Step 8: AI Explanation (`scripts/generate_explanations.py`)
 
-This step uses Google Gemini (a language model) to translate all the numeric data into plain English. Gemini does NOT predict prices — it reads the LightGBM prediction and explains it.
+This step uses Groq (preferred) or Google Gemini (fallback) to translate all the numeric data into plain English. The AI does NOT predict prices — it reads the LightGBM prediction and explains it.
 
-**Stock-Specific Prompts**: Each prompt is tailored to the individual stock using a `STOCK_META` lookup table that provides the company name, sector, and industry for all 100 S&P 100 tickers. The prompt includes sector-specific analysis guidance (e.g., interest rate sensitivity for financials, pipeline catalysts for healthcare, AI/cloud narratives for tech).
+**Stock-Specific Prompts**: Each prompt is tailored to the individual stock using a `STOCK_META` lookup table that provides the company name, sector, and industry for all 75 S&P tickers. The prompt includes sector-specific analysis guidance (e.g., interest rate sensitivity for financials, pipeline catalysts for healthcare, AI/cloud narratives for tech).
 
-**Data fed to Gemini (11 sources):**
+**Data fed to AI explainer (11 sources):**
 - LightGBM predictions (all 3 horizons with confidence, alpha vs SPY, price ranges)
 - Technical analysis (RSI, MACD, Bollinger, SMAs, EMAs, volume ratio, 52-week range, performance)
 - News headlines (Finviz, RSS, Reddit, Marketaux + aggregated news from MongoDB)
@@ -1191,12 +1193,18 @@ This step uses Google Gemini (a language model) to translate all the numeric dat
 - FMP earnings data (EPS actual vs estimated, earnings surprise)
 - FMP analyst ratings and price targets
 
-**Gemini Model Fallback Chain**: The script automatically selects the best available model based on in-process RPD tracking:
-1. `gemini-2.5-pro` (1.5K RPD) — preferred for quality and headroom
-2. `gemini-2.5-flash` (20 RPD) — first fallback
+**AI Model Fallback Chain**: The script automatically selects the best available model based on in-process RPD tracking.
+
+*Groq (primary — much better free tier: 14.4K RPD vs 20 RPD):*
+1. `llama-3.1-8b-instant` (14.4K RPD) — primary, handles full 75 tickers
+2. `llama-3.3-70b-versatile` (1K RPD) — higher quality fallback
+
+*Gemini (fallback — only used if Groq unavailable):*
+1. `gemini-2.5-pro` (1.5K RPD) — preferred for quality
+2. `gemini-2.5-flash` (20 RPD) — first Gemini fallback
 3. `gemini-2.5-flash-lite` (20 RPD) — last resort
 
-If `GEMINI_MODEL` env var is explicitly set, it locks to that model (no fallback). The workflow does NOT set this variable, allowing automatic fallback.
+Provider selection: If `GROQ_API_KEY` is set, Groq is used. Otherwise falls back to Gemini via `GOOGLE_API_KEY`. The workflow does NOT force a specific model, allowing automatic fallback.
 
 **Output format (structured sections):**
 - `OVERALL_OUTLOOK`: Bullish/Bearish/Neutral/Slightly Bullish/Slightly Bearish
@@ -1277,9 +1285,9 @@ The training process uses **walk-forward validation** to prevent overfitting:
 |       70%         |  gap  |      15%          |  gap  |     15%         |
 ```
 
-- **Purge gap**: 5 days between train and validation to prevent label leakage
-- **Embargo**: 2 additional days after purge
-- **Walk-forward folds**: 3 rolling folds, report median metrics
+- **Purge gap**: 7 days between train and validation to prevent label leakage (increased from 5)
+- **Embargo**: 3 additional days after purge (increased from 2)
+- **Walk-forward folds**: 4 rolling folds, report median metrics
 
 ---
 
@@ -1323,9 +1331,10 @@ The confidence score displayed to users is **P(return > 0)** — the probability
 ### Trade Recommendation Filters
 
 A prediction only generates a `trade_recommended = True` signal when:
-- Predicted alpha > 0.1% (`TRADE_MIN_ALPHA`)
-- P(return > 0) > 52% (`TRADE_MIN_PROB_POSITIVE`)
+- Predicted alpha > 0.02% (`TRADE_MIN_ALPHA = 0.0002`) — lowered to allow more trades in market-neutral regime
+- P(return > 0) > 50% (`TRADE_MIN_PROB_POSITIVE = 0.50`) — lowered from 0.51 (sign classifiers ~50% accuracy)
 - Predicted return exceeds transaction costs (10 basis points)
+- Adaptive threshold: `TRADE_SIGMA_MULT = 0.3` (lowered from 0.5 to prevent pred_std from killing trades)
 
 ---
 
@@ -1355,14 +1364,14 @@ Step 3: INSTALL DEPENDENCIES
 
 Step 4: RUN SENTIMENT CRON (non-fatal if fails)
   → python -m ml_backend.sentiment_cron
-  → Fetches sentiment for all 100 tickers from all sources
+  → Fetches sentiment for all 75 tickers from all sources
   → Stores in MongoDB sentiment collection
   → Env vars: MONGODB_URI, FINNHUB_API_KEY, FMP_API_KEY, MARKETAUX_API_KEY,
               GOOGLE_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
 
 Step 5: TRAIN POOLED MODEL
   → python -m ml_backend.scripts.run_pipeline --all-tickers --no-predict
-  → Fetches historical data for all 100 tickers
+  → Fetches historical data for all 75 tickers
   → Engineers features
   → Trains ONE pooled LightGBM model per horizon (3 models)
   → Models saved to disk (models/v1/_pooled/)
@@ -1390,10 +1399,10 @@ Step 8: GENERATE SHAP FEATURE IMPORTANCE (10 batches x 10 tickers)
   → Stores in MongoDB feature_importance collection
   → Non-fatal: fails if > 5 batches fail
 
-Step 9: GENERATE AI EXPLANATIONS (Gemini)
+Step 9: GENERATE AI EXPLANATIONS (Groq / Gemini)
   → python -m ml_backend.scripts.generate_explanations
   → Uses all MongoDB data (predictions, sentiment, technicals, SHAP, macro, insider, short interest)
-  → Calls Gemini API (auto-fallback: pro→flash→flash-lite) to EXPLAIN (not predict) each ticker with stock-specific prompts
+  → Calls Groq API (primary: llama-3.1-8b-instant, 14.4K RPD) or Gemini API (fallback: pro→flash→flash-lite) to EXPLAIN (not predict) each ticker with stock-specific prompts
   → Stores in MongoDB prediction_explanations collection
   → Non-fatal if fails
 
@@ -1485,7 +1494,7 @@ Removing React Router and using the App Router as the sole routing system yields
 
 | Component | Purpose |
 |-----------|---------|
-| `AIExplanationWidget` | Displays Gemini-generated AI market intelligence (the EXPLAINER output) |
+| `AIExplanationWidget` | Displays Groq/Gemini-generated AI market intelligence (the EXPLAINER output) |
 | `EnhancedQuickPredictionWidget` | Quick stock price prediction lookup (the PREDICTOR output) |
 | `MarketSentimentBanner` | Fear & Greed Index banner |
 | `SankeyChart` | Apache ECharts-based financial flow visualization; displays income statement as interactive Sankey diagram (revenue → expenses → profit) |
@@ -1534,7 +1543,7 @@ Removing React Router and using the App Router as the sole routing system yields
 /api/stock/batch/available  GET  → Stocks with stored explanations
 /api/stock/:symbol          GET  → Stock details (profile, quote)
 /api/stock/:symbol/predictions   GET  → ML predictions (from LightGBM predictor)
-/api/stock/:symbol/explanation   GET  → Stored AI explanation (from Gemini explainer)
+/api/stock/:symbol/explanation   GET  → Stored AI explanation (from Groq/Gemini explainer)
 /api/stock/:symbol/indicators    GET  → Technical indicators
 /api/stock/:symbol/sankey        GET  → Sankey financial flow data (from FMP income statement)
 
@@ -1578,7 +1587,7 @@ POST /api/v1/predictions/batch        → Batch predictions (1-10 tickers)
 GET  /api/v1/sentiment/{ticker}       → Get sentiment analysis (from FinBERT/RoBERTa/VADER scorers)
 POST /api/v1/train                    → Start training (background)
 POST /api/v1/ingest                   → Ingest historical data
-GET  /api/v1/explain/{ticker}/{date}  → Get AI explanation (from Gemini explainer)
+GET  /api/v1/explain/{ticker}/{date}  → Get AI explanation (from Groq/Gemini explainer)
 POST /api/v1/explain/batch            → Batch generate explanations
 ```
 
@@ -1635,7 +1644,7 @@ POST /api/v1/explain/batch            → Batch generate explanations
 ```
 - **Index**: `(ticker, date)`, `(ticker, last_updated)`
 - **Written by**: `sentiment_cron.py` (every 4h)
-- **Read by**: `sentiment_features.py` (ML features), `generate_explanations.py` (Gemini prompt)
+- **Read by**: `sentiment_features.py` (ML features), `generate_explanations.py` (AI explanation prompt)
 
 #### `stock_predictions`
 ```json
@@ -1694,7 +1703,7 @@ POST /api/v1/explain/batch            → Batch generate explanations
 }
 ```
 - **Written by**: `shap_analysis.py` (daily via GitHub Actions)
-- **Read by**: `generate_explanations.py` (Gemini prompt context)
+- **Read by**: `generate_explanations.py` (AI explanation prompt context)
 
 #### `prediction_explanations`
 ```json
@@ -1735,7 +1744,7 @@ POST /api/v1/explain/batch            → Batch generate explanations
 }
 ```
 - **Written by**: `sentiment.py` (via Finnhub insider API)
-- **Read by**: `insider_features.py` (ML features), `generate_explanations.py` (Gemini prompt)
+- **Read by**: `insider_features.py` (ML features), `generate_explanations.py` (AI explanation prompt)
 
 #### `macro_data_raw`
 ```json
@@ -1749,7 +1758,7 @@ POST /api/v1/explain/batch            → Batch generate explanations
 }
 ```
 - **Written by**: `fred_macro.py`, `macro.py`
-- **Read by**: `features_minimal.py` (ML features), `generate_explanations.py` (Gemini prompt)
+- **Read by**: `features_minimal.py` (ML features), `generate_explanations.py` (AI explanation prompt)
 
 #### `alpha_vantage_data`
 ```json
@@ -1817,11 +1826,11 @@ POST /api/v1/explain/batch            → Batch generate explanations
 }
 ```
 - **Written by**: `short_interest.py` `_store_short_interest_raw()` (added in this review)
-- **Read by**: `generate_explanations.py` (Gemini prompt context)
+- **Read by**: `generate_explanations.py` (AI explanation prompt context)
 
 #### `finnhub_basic_financials`, `finnhub_company_peers`, `finnhub_insider_sentiment`
 - **Written by**: `sentiment.py` (now called during sentiment pipeline — fixed in this review)
-- **Read by**: Sentiment pipeline (internal use), available for future Gemini context
+- **Read by**: Sentiment pipeline (internal use), available for future AI explanation context
 
 ---
 
@@ -1958,7 +1967,7 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 | `components/layout/layout.tsx` | Main layout wrapper | `Layout` |
 | `components/layout/navbar.tsx` | Top navigation | `Navbar` |
 | `components/layout/sidebar.tsx` | Side navigation | `Sidebar` |
-| `components/market/AIExplanationWidget.tsx` | Gemini-generated intelligence | `AIExplanationWidget` |
+| `components/market/AIExplanationWidget.tsx` | Groq/Gemini-generated intelligence | `AIExplanationWidget` |
 | `components/market/market-sentiment-banner.tsx` | Fear & Greed display | `MarketSentimentBanner` |
 | `components/market/NotificationWidget.tsx` | Realtime alerts | `NotificationWidget` |
 | `components/market/SankeyChart.tsx` | ECharts-based financial flow Sankey diagram | `SankeyChart` |
@@ -2042,7 +2051,8 @@ FINANCIALDATA_API_KEY=your_financialdata_key
 # API Keys (ML Backend)
 FRED_API_KEY=your_fred_key
 FMP_API_KEY=your_fmp_key
-GOOGLE_API_KEY=your_google_gemini_key
+GROQ_API_KEY=your_groq_key               # primary AI explainer
+GOOGLE_API_KEY=your_google_gemini_key  # fallback only; Groq is primary
 KALEIDOSCOPE_API_KEY=your_kaleidoscope_key
 REDDIT_CLIENT_ID=your_reddit_id
 REDDIT_CLIENT_SECRET=your_reddit_secret
@@ -2188,25 +2198,33 @@ React Router DOM has been fully removed and routing consolidated to Next.js App 
 | Frontend polling every 5s | Battery/bandwidth on mobile | Use true WebSocket or Server-Sent Events |
 | TradingView widgets not code-split | Heavy load on homepage | Load only visible widgets |
 
-### Gemini API Rate Limits (Free Tier)
+### Groq & Gemini API Rate Limits
 
-**Problem**: Google Gemini API free tier has strict rate limits that can block explanation generation for all 100 tickers:
+**Groq (Primary Provider)**: Groq's free tier is far more generous than Gemini, making it the preferred provider for explanation generation:
 
 | Model | Free Tier Limits | Impact |
 |-------|------------------|--------|
-| **gemini-2.5-flash** | 5 RPM, 250K TPM, **20 RPD** | ❌ Only 20 requests/day — insufficient for 100 tickers |
-| **gemini-2.5-pro** | 15 RPM, Unlimited TPM, **1.5K RPD** | ✅ 1,500 requests/day — sufficient for daily batch (100 tickers) |
+| **llama-3.1-8b-instant** | 30 RPM, 14.4K RPD, 6K TPM | ✅ Easily handles all 75 tickers daily |
+| **llama-3.3-70b-versatile** | 30 RPM, 1K RPD, 12K TPM | ✅ Sufficient as fallback (1K calls/day) |
+
+**Gemini (Fallback Provider)**: Only used when `GROQ_API_KEY` is not available. Google Gemini API free tier has strict rate limits:
+
+| Model | Free Tier Limits | Impact |
+|-------|------------------|--------|
+| **gemini-2.5-flash** | 5 RPM, 250K TPM, **20 RPD** | ❌ Only 20 requests/day — insufficient for 75 tickers |
+| **gemini-2.5-pro** | 15 RPM, Unlimited TPM, **1.5K RPD** | ✅ 1,500 requests/day — sufficient for daily batch |
 | **gemini-2.5-flash-lite** | 10 RPM, 250K TPM, **20 RPD** | ❌ Only 20 requests/day — last-resort fallback |
 
-**Solutions implemented** (Feb 2026):
+**Solutions implemented** (Feb-Mar 2026):
 
-1. **Automatic model fallback chain** (`_pick_model()`) — Cycles through `gemini-2.5-pro` → `gemini-2.5-flash` → `gemini-2.5-flash-lite` based on in-process RPD usage tracking. Each model has a headroom buffer (e.g., 1,400 of 1,500 for pro) to avoid hitting hard limits.
-2. **RPD tracking** (`_model_rpd_count`) — Tracks per-model request counts within a single pipeline run. When a model approaches its limit, the script automatically falls back to the next model.
-3. **Check for existing explanations** — Script now checks MongoDB for existing explanations for today's date before calling Gemini API, avoiding redundant API calls
-4. **Quota exceeded handling** — After 3 consecutive quota failures, script stops processing remaining tickers gracefully (no wasted API calls)
-5. **GitHub Actions workflow** — Does NOT force `GEMINI_MODEL`, allowing the automatic fallback chain to work. Previously was locked to `gemini-2.5-flash` (20 RPD), now uses the full chain starting with pro.
+1. **Groq as primary provider** — Switched from Gemini to Groq (llama-3.1-8b-instant, 14.4K RPD) as the primary AI explanation provider. Groq's free tier easily handles all 75 tickers daily.
+2. **Automatic model fallback chain** (`_pick_model()`) — For Groq: cycles through `llama-3.1-8b-instant` → `llama-3.3-70b-versatile`. For Gemini (fallback): cycles through `gemini-2.5-pro` → `gemini-2.5-flash` → `gemini-2.5-flash-lite` based on in-process RPD usage tracking.
+3. **RPD tracking** (`_model_rpd_count`) — Tracks per-model request counts within a single pipeline run. When a model approaches its limit, the script automatically falls back to the next model.
+4. **Check for existing explanations** — Script now checks MongoDB for existing explanations for today's date before calling the AI API, avoiding redundant API calls
+5. **Quota exceeded handling** — After 3 consecutive quota failures, script stops processing remaining tickers gracefully (no wasted API calls)
+6. **GitHub Actions workflow** — Does NOT force model env vars, allowing the automatic fallback chain to work.
 
-**For production**: Consider upgrading to Gemini API paid tier for:
+**For production**: Consider upgrading to Groq or Gemini API paid tier for:
 - Higher rate limits (unlimited RPD on paid tier)
 - Better reliability
 - Priority support
@@ -2248,12 +2266,12 @@ The `PipelineHealthSummary` class tracks the status of every pipeline stage and 
   PIPELINE HEALTH SUMMARY
 ========================================================
   MongoDB connected:        YES
-  Historical data fetched:  100 tickers
-  Training status:          success (100 tickers)
+  Historical data fetched:  75 tickers
+  Training status:          success (75 tickers)
   Backtest status:          skipped
-  Predictions stored:       100 tickers x 3 horizons
+  Predictions stored:       75 tickers x 3 horizons
   SeekingAlpha scraped:     SKIPPED (not in pipeline)
-  Gemini explanations:      not run (separate script)
+  Gemini explanations:      not run (Groq is primary; Gemini only if GROQ_API_KEY absent)
   Evaluation samples found: 0 (expected early)
 ========================================================
 ```
@@ -2277,14 +2295,28 @@ The following code changes were made to address data storage gaps and pipeline i
 | **Gemini reads Finnhub financials** | `ml_backend/scripts/generate_explanations.py` | Added `_get_financials_context()` — reads P/E, P/B, dividend yield, ROE, market cap, beta from `finnhub_basic_financials` collection |
 | **Gemini reads FMP earnings/ratings** | `ml_backend/scripts/generate_explanations.py` | Added `_get_fmp_context()` — reads latest earnings (EPS actual vs estimated, surprise), analyst ratings, and price targets from `alpha_vantage_data` collection |
 | **Gemini reads short interest directly** | `ml_backend/scripts/generate_explanations.py` | Updated `_get_short_interest_context()` to read from `short_interest_data` collection first (more granular), with fallback to `sentiment` collection |
-| **Gemini API rate limit handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | Default model switched to `gemini-2.5-pro` (1.5K RPD vs 20 for flash); added check for existing explanations to avoid redundant API calls; added quota exceeded detection and graceful stopping |
-| **Gemini API error handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | `_call_gemini()` now returns error type (`quota_exceeded`, `rate_limit`, `api_error`); batch script stops processing when quota exceeded; API route returns clear error messages |
-| **Stock-specific Gemini prompts** | `ml_backend/scripts/generate_explanations.py` | Added `STOCK_META` dictionary (100 tickers → company name, sector, industry). Prompt now addresses each stock by name, includes sector-specific guidance, and requires every KEY_DRIVER to cite a specific data value |
-| **Gemini model auto-fallback** | `ml_backend/scripts/generate_explanations.py` + `.github/workflows/daily-predictions.yml` | `_pick_model()` auto-selects best model via in-process RPD tracking (pro→flash→flash-lite). Workflow no longer forces `GEMINI_MODEL=gemini-2.5-flash` |
+| **Groq/Gemini API rate limit handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | Primary provider switched to Groq (llama-3.1-8b-instant, 14.4K RPD); Gemini is fallback. Added check for existing explanations to avoid redundant API calls; added quota exceeded detection and graceful stopping |
+| **Gemini API error handling** | `ml_backend/scripts/generate_explanations.py` + `ml_backend/api/main.py` | `_call_groq()` / `_call_gemini()` now returns error type (`quota_exceeded`, `rate_limit`, `api_error`); batch script stops processing when quota exceeded; API route returns clear error messages |
+| **Stock-specific AI prompts** | `ml_backend/scripts/generate_explanations.py` | Added `STOCK_META` dictionary (75 tickers → company name, sector, industry). Prompt now addresses each stock by name, includes sector-specific guidance, and requires every KEY_DRIVER to cite a specific data value |
+| **Gemini model auto-fallback** | `ml_backend/scripts/generate_explanations.py` + `.github/workflows/daily-predictions.yml` | `_pick_model()` auto-selects best model via in-process RPD tracking. Groq is primary provider (llama-3.1-8b-instant, 14.4K RPD); Gemini is fallback. Workflow no longer forces model env var |
 | **Pipeline health summary** | `ml_backend/scripts/run_pipeline.py` | `PipelineHealthSummary` class tracks every pipeline stage and prints clear summary at end of run |
 | **Hardened prediction history** | `ml_backend/utils/mongodb.py` | `get_prediction_history()` logs effective query range; `get_prediction_history_simple()` rejects `start_date`/`end_date` kwargs with `TypeError` |
-| **CONFIDENCE in AI output** | `components/market/AIExplanationWidget.tsx` | Parser extracts the new `CONFIDENCE:` section from Gemini output |
+| **CONFIDENCE in AI output** | `components/market/AIExplanationWidget.tsx` | Parser extracts the new `CONFIDENCE:` section from Groq/Gemini output |
 | **News in AI Insights** | `views/stock-detail.tsx` + `components/market/AIExplanationWidget.tsx` | Stock detail view now passes `recentNews` prop to AI widget; widget displays news with sentiment indicators even when AI text lacks specific headlines |
+
+### v3.1 Model & Pipeline Improvements (Mar 2026)
+
+The following changes were applied to improve model accuracy, pipeline reliability, and production hardening:
+
+| Category | Change | Details |
+|----------|--------|---------|
+| **LightGBM Regularization** | Stronger regularization (v3.1) | `max_depth` 6→5, `num_leaves` 31→24, `min_child_samples` 20→30, `reg_alpha` 0.3→0.5, `reg_lambda` 1.0→2.0, `subsample` 0.8→0.75, `colsample_bytree` 0.8→0.7, `learning_rate` 0.03→0.01, `n_estimators` 200→400 |
+| **Sign Classifier** | Stronger regularization & eval_set fix | Pooled: `max_depth`→3, `num_leaves`→8, `min_child_samples`→50. Per-ticker: `min_child_samples`→30. Added `eval_set` to retrain path to enable early stopping |
+| **Trade Thresholds** | Relaxed to allow more trades | `TRADE_MIN_ALPHA` 0.001→0.0002, `TRADE_MIN_PROB_POSITIVE` 0.51→0.50, `TRADE_SIGMA_MULT` 0.5→0.3. Lowered per-horizon cap minimums |
+| **Walk-Forward** | Stronger leakage prevention | `purge_days` 5→7, `embargo_days` 2→3, `WALK_FORWARD_FOLDS` 3→4 |
+| **Prob Clipping** | Added to `predict_batch()` | `np.clip(prob, 0.01, 0.99)` prevents 0.0/1.0 probability edge cases |
+| **Datetime Bugs** | Fixed 7 naive→aware comparisons | `datetime.now()` → `datetime.now(timezone.utc)` in `sentiment.py` (×6) and `mongodb.py` (×1) to prevent `TypeError` when comparing with MongoDB's timezone-aware datetimes |
+| **Workflow YAML** | Fixed FATAL backslash bug | Line 305: `\\` → `\` — was causing the entire prediction batching step to fail |
 
 ---
 
@@ -2292,11 +2324,11 @@ The following code changes were made to address data storage gaps and pipeline i
 
 ### What Gets Fetched and Stored in MongoDB Every Daily Pipeline Run?
 
-This audit traces the complete data flow: **API fetch → MongoDB storage → ML feature engineering → LightGBM prediction** and separately **MongoDB → Gemini explanation prompt**.
+This audit traces the complete data flow: **API fetch → MongoDB storage → ML feature engineering → LightGBM prediction** and separately **MongoDB → AI explanation prompt (Groq/Gemini)**.
 
 #### A. Sentiment Cron (Step 1: `ml_backend.sentiment_cron`)
 
-Calls `get_combined_sentiment()` for each of the 100 S&P tickers, which fetches from **10 sources**:
+Calls `get_combined_sentiment()` for each of the 75 S&P tickers, which fetches from **10 sources**:
 
 | # | Source | Method | Stored In (MongoDB) | Fields Stored |
 |---|--------|--------|-------------------|---------------|
@@ -2345,9 +2377,9 @@ Feature engineering in `features_minimal.py` reads these data for each ticker:
 | SEC filing sentiment | `sec_filings` | YES | NO | MAYBE — filing-specific signal | Low |
 | FRED GDP/CPI/Unemployment | `macro_data_raw` | YES (if fetched) | NO | YES — regime indicators | Medium |
 
-**Key takeaway**: The pipeline stores far more data than it uses for features. The LightGBM model currently uses **~40 features** from price, cross-asset, 3 FRED indicators, 2 sentiment aggregates, 11 insider aggregates, and 1 earnings proximity. There are **~15-20 additional features** that could be engineered from already-stored data.
+The pipeline stores far more data than it uses for features. The LightGBM model currently uses **~52-54 features** (after pruning from ~77) from price, cross-asset, 3 FRED indicators, 2 sentiment aggregates, 11 insider aggregates, earnings, fundamentals, short interest, and 1 earnings proximity. There are **~15-20 additional features** that could be engineered from already-stored data.
 
-#### D. What the Gemini Explanation Now Reads from MongoDB
+#### D. What the AI Explanation Script Now Reads from MongoDB
 
 After the fixes applied in this review, `generate_explanations.py` reads:
 
@@ -2400,7 +2432,7 @@ Recent updates significantly hardened the reliability of the ML pipeline against
 
 | Component | Issue Fixed | Resolution Mechanism |
 |-----------|-------------|----------------------|
-| **Groq 429 Timeouts** | Pipeline stalled out on 2-hour limits due to 300s backoffs when 70b model hit 100K token limits | Switched primary explanation model to `llama-3.1-8b-instant` (500K TPD limit). Reduced error backoff from 300s → 30s. Cap quota-exhaustion limit quickly. |
+| **Groq 429 Timeouts** | Pipeline stalled out on 2-hour limits due to 300s backoffs when 70b model hit 100K token limits | Switched primary explanation model to `llama-3.1-8b-instant` (14.4K RPD limit). Reduced error backoff from 300s → 30s. Cap quota-exhaustion limit quickly. |
 | **FRED Data Scarcity** | FRED macro data was skipped during sentiment cron due to missing env vars | Added `FRED_API_KEY` explicitly to the workflow YAML `sentiment_cron` step |
 | **Pickle Security** | Pre-2026 code used Python `pickle` for caching sentiment files | Migrated `mongodb.py` and `economic_calendar.py` to `json.dumps()` + `gzip` for secure deserialization |
 | **NaN Feature Eradication** | `.fillna(0)` silently destroyed NLP sentiment score NA logic | Prevented Sentiment/Insider features missing values from being 0-filled via a `_nan_preserve` exclusion set. |
@@ -2521,7 +2553,7 @@ Dropped endpoints (lower sentiment value): `dividends`, `dividends_calendar`, `e
 
 | Component | Pacing | Purpose |
 |-----------|--------|---------|
-| `sentiment_cron.py` | `asyncio.sleep(1.0)` after each ticker (in `finally`) | Spreads 100 tickers over ~100s minimum |
+| `sentiment_cron.py` | `asyncio.sleep(1.0)` after each ticker (in `finally`) | Spreads 75 tickers over ~75s minimum |
 | `sentiment_cron.py` | `CONCURRENCY=3` (Semaphore) | Max 3 tickers processed in parallel |
 | `daily-predictions.yml` | `sleep 10` between prediction batches | Paces Finnhub calls across 10 batches |
 | `run-daily-pipeline-local.ps1` | `Start-Sleep -Seconds 10` between batches | Mirrors CI pacing locally |
@@ -2533,7 +2565,7 @@ Dropped endpoints (lower sentiment value): `dividends`, `dividends_calendar`, `e
 | Finnhub | 500 (paced at 55/min) | 60/min | ~9% margin |
 | FMP | ~240 (4 endpoints × 60 tickers) | 250 total | ~4% margin |
 | Marketaux | 50 (top-50 tickers) | 100/day | 50% margin |
-| Reddit | ~300 (3 subs × 100 tickers, paced 90/min) | 100 QPM | 10% margin |
+| Reddit | ~225 (3 subs × 75 tickers, paced 90/min) | 100 QPM | 10% margin |
 | FRED | 13 indicators (one-time) | 120/min | ~89% margin |
 
 ### 27.6 Env Vars for Rate Limiting
@@ -2546,7 +2578,7 @@ To adjust limits, modify the singleton instantiation in `rate_limiter.py`.
 
 ## 28. Technical Deep Dive: The AI Machine
 
-This section explains the "Black Magic" of how a free GitHub Actions runner can handle a massive 100-stock AI pipeline daily without crashing, timing out, or getting banned.
+This section explains the "Black Magic" of how a free GitHub Actions runner can handle a massive 75-stock AI pipeline daily without crashing, timing out, or getting banned.
 
 ### 28.1 The Orchestrator: Disposable Virtual Machines
 GitHub Actions provides a **standard Ubuntu VM** (approx. 7GB RAM, 2 CPUs) for every run. 
@@ -2555,19 +2587,19 @@ GitHub Actions provides a **standard Ubuntu VM** (approx. 7GB RAM, 2 CPUs) for e
 - **Life Limit**: A single run can last up to 6 hours. Our pipeline optimizes this down to ~40 minutes.
 
 ### 28.2 Parallel Data Fetching via Concurrency
-Fetching news, sentiment, and prices for 100 stocks sequentially would take hours.
+Fetching news, sentiment, and prices for 75 stocks sequentially would take hours.
 - **Asyncio Semaphores**: `sentiment_cron.py` uses `asyncio.Semaphore(3)`. This means the machine works on **3 stocks at the exact same time**.
-- **Bounded Parallelism**: We use 3 (not 100) to avoid overwhelming the CPU and getting IP-banned by news sources.
+- **Bounded Parallelism**: We use 3 (not 75) to avoid overwhelming the CPU and getting IP-banned by news sources.
 
 ### 28.3 Hybrid Model Strategy (Pooled vs. Per-Ticker)
-Training 100 deep-learning models would exceed the 7GB RAM limit. We use a more efficient approach:
-- **The Pooled Model**: We train one large "Base Model" using the historical data of *all* 100 stocks combined. This lets the AI learn general market patterns (e.g., "When inflation rises, Tech stocks usually drop").
+Training 75 deep-learning models would exceed the 7GB RAM limit. We use a more efficient approach:
+- **The Pooled Model**: We train one large "Base Model" using the historical data of *all* 75 stocks combined. This lets the AI learn general market patterns (e.g., "When inflation rises, Tech stocks usually drop").
 - **LightGBM**: This algorithm is used because it is an order of magnitude faster and lighter than Neural Networks, while maintaining top-tier accuracy for tabular data.
-- **Personalization**: The model uses "Ticker Labels" as a feature, allowing it to learn the unique "personality" of AAPL vs. JPM without needing 100 separate files.
+- **Personalization**: The model uses "Ticker Labels" as a feature, allowing it to learn the unique "personality" of AAPL vs. JPM without needing 75 separate files.
 
 ### 28.4 Batched Prediction & The "Cool Down" Cycle
 Calculating predictions and **SHAP explanations** is the most CPU-intensive part. 
-- **Batching**: We split the 100 stocks into **10 batches of 10**.
+- **Batching**: We split the 75 stocks into **batches of 10** (8 batches).
 - **The Loop**: The workflow pick 10 tickers, runs the AI, saves data, then **sleeps for 10 seconds**.
 - **The Wait**: This 10-second pause is critical. It prevents the GitHub runner's CPU from thermal throttling and ensures external APIs (like Finnhub) have time to reset their rate limits.
 
@@ -2593,7 +2625,7 @@ If the GitHub VM crashes halfway through Batch #5:
 
 ---
 
-*End of documentation. Last updated 2026-02-21.*
+*End of documentation. Last updated 2026-03-04.*
 
 ---
 
