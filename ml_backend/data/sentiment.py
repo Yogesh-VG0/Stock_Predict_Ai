@@ -2073,12 +2073,12 @@ class SentimentAnalyzer:
             async with ECONOMIC_CALENDAR_LOCK:
                 # Check if we have cached global economic data for today
                 global ECONOMIC_DATA_CACHE
-                today_key = datetime.now().strftime('%Y-%m-%d')
+                today_key = datetime.now(timezone.utc).strftime('%Y-%m-%d')
                 
                 # Check if cache is still valid
                 if (ECONOMIC_DATA_CACHE['data'] is not None and 
                     ECONOMIC_DATA_CACHE['timestamp'] is not None and
-                    (datetime.now() - ECONOMIC_DATA_CACHE['timestamp']) < ECONOMIC_DATA_CACHE['cache_duration']):
+                    (datetime.now(timezone.utc) - ECONOMIC_DATA_CACHE['timestamp']) < ECONOMIC_DATA_CACHE['cache_duration']):
                     
                     logger.info(f"Using cached global economic calendar data for {ticker}")
                     
@@ -2109,7 +2109,7 @@ class SentimentAnalyzer:
                 
                 # Update global cache
                 ECONOMIC_DATA_CACHE['data'] = economic_data
-                ECONOMIC_DATA_CACHE['timestamp'] = datetime.now()
+                ECONOMIC_DATA_CACHE['timestamp'] = datetime.now(timezone.utc)
                 
                 logger.info(f"Cached global economic calendar data for all tickers (valid for 6 hours)")
                 
@@ -2529,7 +2529,10 @@ def fetch_and_store_options_sentiment(mongo_client, ticker, date):
         if cached_doc and cached_doc.get('data'):
             # Check if cache is still valid (less than 1 day old)
             if cached_doc.get('timestamp'):
-                age = (datetime.now(timezone.utc) - cached_doc['timestamp']).total_seconds()
+                ts = cached_doc['timestamp']
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - ts).total_seconds()
                 if age < 86400:  # 24 hours
                     logger.info(f"Using cached Alpha Vantage options data for {ticker}")
                     return {'data': cached_doc['data']}
@@ -2681,9 +2684,16 @@ def get_stored_data_from_mongodb(mongo_client, ticker, data_type, collection_pre
             return None
         
         # Check if data is still valid (if expiration field exists)
-        if 'expires_at' in doc and datetime.now(timezone.utc) > doc.get('expires_at', datetime.now(timezone.utc)):
-            logger.info(f"Cached {data_type} data for {ticker} has expired")
-            return None
+        if 'expires_at' in doc:
+            expires_at = doc.get('expires_at')
+            if expires_at is not None:
+                now_utc = datetime.now(timezone.utc)
+                # MongoDB may return naive datetimes — normalize both to aware UTC
+                if expires_at.tzinfo is None:
+                    expires_at = expires_at.replace(tzinfo=timezone.utc)
+                if now_utc > expires_at:
+                    logger.info(f"Cached {data_type} data for {ticker} has expired")
+                    return None
         
         logger.info(f"Retrieved cached {data_type} data for {ticker}")
         return doc.get('data', {})
@@ -2747,7 +2757,10 @@ class FMPAPIManager:
         try:
             cached = self.mongo_client.get_alpha_vantage_data(ticker or 'global', cache_key)
             if cached and 'timestamp' in cached:
-                age = (datetime.now(timezone.utc) - cached['timestamp']).total_seconds()
+                ts = cached['timestamp']
+                if ts is not None and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - ts).total_seconds()
                 if age < self.cache_duration:
                     logger.info(f"Using cached FMP data for {endpoint} - {ticker or 'global'}")
                     return cached.get('data', {})

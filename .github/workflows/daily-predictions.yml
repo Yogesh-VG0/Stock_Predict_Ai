@@ -300,7 +300,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running evaluate_models --stored ====="
-          python -m ml_backend.scripts.evaluate_models --stored --days 180 \\
+          python -m ml_backend.scripts.evaluate_models --stored --days 180 \
             | tee eval_report.txt || echo "Evaluation failed (non-fatal)"
 
       - name: Run drift monitor

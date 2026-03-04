@@ -1105,7 +1105,10 @@ class MongoDBClient:
             
             cached = collection.find_one({'cache_key': cache_key})
             if cached:
-                age = (datetime.now(timezone.utc) - cached['timestamp']).total_seconds() / 3600
+                ts = cached['timestamp']
+                if ts is not None and ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
                 if age < max_age_hours:
                     # Decompress if needed
                     if cached.get('_compressed'):
