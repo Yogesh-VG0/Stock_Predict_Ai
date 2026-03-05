@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, memo, useState } from "react"
+import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
 
 function FinlogixEarningsCalendar() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -88,13 +89,15 @@ function FinlogixEarningsCalendar() {
   }
 
   return (
-    <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden" style={{ height: 550 }}>
-      {/* Use the exact class name the widget expects */}
-      <div
-        ref={containerRef}
-        className="finlogix-container w-full h-full"
-      />
-    </div>
+    <WidgetScrollWrapper>
+      <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden" style={{ height: 550 }}>
+        {/* Use the exact class name the widget expects */}
+        <div
+          ref={containerRef}
+          className="finlogix-container w-full h-full"
+        />
+      </div>
+    </WidgetScrollWrapper>
   )
 }
 

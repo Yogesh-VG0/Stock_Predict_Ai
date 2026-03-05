@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, memo } from "react"
+import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
 
 function TradingViewHeatmap() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -46,13 +47,15 @@ function TradingViewHeatmap() {
   }, [])
 
   return (
-    <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden p-2">
-      <div 
-        ref={containerRef} 
-        className="tradingview-widget-container" 
-        style={{ minHeight: 400 }}
-      />
-    </div>
+    <WidgetScrollWrapper>
+      <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden p-2">
+        <div 
+          ref={containerRef} 
+          className="tradingview-widget-container" 
+          style={{ minHeight: 400 }}
+        />
+      </div>
+    </WidgetScrollWrapper>
   )
 }
 
