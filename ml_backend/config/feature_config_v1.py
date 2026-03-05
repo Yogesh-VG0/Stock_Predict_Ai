@@ -133,6 +133,18 @@ FEATURE_PRUNING = {
         # Short interest features (v2.0) — crowding signals
         "si_short_float_pct",                      # short interest % of float
         "si_days_to_cover",                        # squeeze pressure metric
+        # Market regime detection (v3.0) — hedge-fund signals
+        "regime_score",                            # continuous risk-on/risk-off regime (-1 to +1)
+        "regime_bull_low_vol",                     # bull market + low volatility flag
+        "regime_bear_high_vol",                    # bear market + high volatility flag
+        # Volatility clustering (v3.0) — GARCH-lite features
+        "vol_cluster_autocorr",                    # persistence of volatility shocks
+        "vol_ratio_5_20",                          # short-term / long-term vol ratio
+        "vol_term_slope",                          # vol term structure (inverted = fear)
+        # Sector momentum (v3.0) — cross-sectional alpha signals
+        "excess_momentum_5d",                      # stock momentum minus sector momentum
+        "dual_momentum_flag",                      # absolute + relative momentum alignment
+        "momentum_reversal",                       # 5-day momentum sign-flip detector
     ],
     "min_features": 15,                # Don't prune below this many features
 }

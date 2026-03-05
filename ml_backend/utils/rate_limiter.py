@@ -13,6 +13,7 @@ Usage:
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -136,23 +137,61 @@ class BudgetExhausted(Exception):
 class DailyBudgetLimiter:
     """Hard daily call budget that resets at midnight UTC.
 
+    Persists count to a small JSON file so process restarts within the same
+    UTC day do not double-spend the budget.
+
     Parameters
     ----------
     daily_limit : int
         Maximum calls per UTC day.
     name : str
         Label used in log messages.
+    persist_dir : str | None
+        Directory for the persistence file.  Defaults to /tmp.
     """
 
-    def __init__(self, daily_limit: int, name: str = "DailyBudget"):
+    def __init__(self, daily_limit: int, name: str = "DailyBudget", persist_dir: str | None = None):
         self.daily_limit = daily_limit
         self.name = name
         self._lock = asyncio.Lock()
         self._count = 0
         self._day: str = ""
+        # Persistence
+        import tempfile, json as _json
+        self._persist_dir = persist_dir or tempfile.gettempdir()
+        self._persist_path = os.path.join(
+            self._persist_dir, f"budget_{name.lower().replace(' ', '_')}.json"
+        )
+        self._load_state()
 
     def _today(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def _load_state(self) -> None:
+        """Load persisted budget state from disk."""
+        import json as _json
+        try:
+            if os.path.exists(self._persist_path):
+                with open(self._persist_path, "r") as f:
+                    data = _json.load(f)
+                if data.get("day") == self._today():
+                    self._day = data["day"]
+                    self._count = int(data.get("count", 0))
+                    logger.info(
+                        "[%s] restored budget state: %d/%d used today",
+                        self.name, self._count, self.daily_limit,
+                    )
+        except Exception as e:
+            logger.debug("[%s] could not load budget state: %s", self.name, e)
+
+    def _save_state(self) -> None:
+        """Persist current budget state to disk."""
+        import json as _json
+        try:
+            with open(self._persist_path, "w") as f:
+                _json.dump({"day": self._day, "count": self._count}, f)
+        except Exception:
+            pass  # best-effort
 
     async def acquire(self) -> None:
         """Consume one unit of daily budget.  Raises BudgetExhausted if none left."""
@@ -173,6 +212,7 @@ class DailyBudgetLimiter:
                 )
 
             self._count += 1
+            self._save_state()  # persist after each call
             remaining = self.daily_limit - self._count
             if remaining <= 10:
                 logger.warning(

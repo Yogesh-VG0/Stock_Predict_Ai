@@ -194,6 +194,12 @@ def run_sentiment_pipeline() -> bool:
         logger.info("Total time: %.1f seconds", elapsed)
         logger.info("Completed at: %s", datetime.now(timezone.utc).isoformat())
         logger.info("=" * 60)
+
+        # Fail the pipeline when >50% of tickers failed (alert downstream consumers)
+        success_rate = ok / max(1, len(tickers))
+        if success_rate < 0.50:
+            logger.error("Pipeline success rate %.1f%% < 50%% — marking as FAILED", success_rate * 100)
+            return False
         return True
 
     except Exception as e:

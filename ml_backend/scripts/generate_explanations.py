@@ -101,6 +101,16 @@ FEATURE_DISPLAY_NAMES = {
     "si_short_float_pct": "Short interest (% of float)",
     "si_days_to_cover": "Short interest days to cover",
     "si_available": "Short interest data available",
+    # v3.0 hedge-fund features
+    "regime_score": "Market regime signal (risk-on/risk-off)",
+    "regime_bull_low_vol": "Bull market + low volatility flag",
+    "regime_bear_high_vol": "Bear market + high volatility flag",
+    "vol_cluster_autocorr": "Volatility persistence (clustering)",
+    "vol_ratio_5_20": "Short-term vs long-term volatility ratio",
+    "vol_term_slope": "Volatility term structure slope",
+    "excess_momentum_5d": "Stock momentum vs sector (5-day)",
+    "dual_momentum_flag": "Absolute + relative momentum alignment",
+    "momentum_reversal": "Momentum direction flip signal",
 }
 
 

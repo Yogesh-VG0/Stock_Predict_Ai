@@ -76,8 +76,11 @@ class StockPredictor:
     def _build_feature_shortlists(self) -> None:
         """Build per-horizon feature shortlists from pooled model importance.
 
-        Keeps protected features + top-k by gain.  Called after Phase 1
-        pooled training so Phase 2 retrains with a cleaner feature set.
+        Uses Phase-1 fold-0 importance only (not averaged across all folds)
+        to avoid information leakage from later validation folds informing
+        feature selection.  Keeps protected features + top-k by gain.
+        Called after Phase 1 pooled training so Phase 2 retrains with a
+        cleaner feature set.
         """
         if not FEATURE_PRUNING.get("enabled", False):
             return
@@ -87,7 +90,8 @@ class StockPredictor:
 
         for window_name, meta in self.pooled_metadata.items():
             all_cols = meta.get("feature_columns", [])
-            importance = meta.get("top_features_gain", [])
+            # Prefer fold-0 importance to prevent future-fold leakage
+            importance = meta.get("fold0_features_gain") or meta.get("top_features_gain", [])
             if not all_cols or not importance:
                 continue
             # Top-k feature names by gain (already sorted desc in metadata)
@@ -424,6 +428,7 @@ class StockPredictor:
             n_folds = max(1, WALK_FORWARD_FOLDS)
             fold_rmses, fold_maes, fold_hits, fold_corrs = [], [], [], []
             fold_q90, fold_q95 = [], []
+            fold0_features_gain = []  # fold-0 importance for leakage-free pruning
             model = None
 
             purge = FEATURE_CONFIG_V1["purge_days"]
@@ -506,6 +511,16 @@ class StockPredictor:
                 fold_q95.append(float(np.quantile(abs_resid, 0.95)))
                 # Keep the last model
                 model = fold_model
+
+                # Capture fold-0 feature importance for leakage-free pruning
+                if fold == 0:
+                    try:
+                        _booster = fold_model.booster_
+                        _gains = _booster.feature_importance(importance_type="gain")
+                        _pairs = sorted(zip(active_cols, _gains), key=lambda x: x[1], reverse=True)[:30]
+                        fold0_features_gain = [{"name": n, "gain": float(g)} for n, g in _pairs]
+                    except Exception:
+                        pass
 
             if not fold_rmses:
                 continue
@@ -601,6 +616,7 @@ class StockPredictor:
                 "conformal_q90": q90_med,
                 "conformal_q95": q95_med,
                 "top_features_gain": top_features_gain_pooled,
+                "fold0_features_gain": fold0_features_gain,
                 "n": int(n),
                 "hit_rate": hit_rate,
                 "correlation": correlation,
@@ -998,8 +1014,21 @@ class StockPredictor:
                     correlation = 0.0
                 if np.isnan(correlation):
                     correlation = 0.0
+                # Statistical significance gate: binomial test for directional accuracy
+                n_test_samples = int(test_mask.sum())
+                n_correct = int(round(hit_rate * n_test_samples))
+                binom_pval = 1.0
+                if n_test_samples >= 20:
+                    try:
+                        from scipy.stats import binomtest
+                        binom_pval = float(binomtest(n_correct, n_test_samples, 0.5, alternative='greater').pvalue)
+                    except ImportError:
+                        binom_pval = 0.5 if hit_rate > 0.52 else 1.0
                 production_ready = (
-                    beats_naive and beats_last and hit_rate >= 0.505
+                    beats_naive and beats_last
+                    and hit_rate >= 0.52
+                    and binom_pval < 0.10  # 90% confidence above coin-flip
+                    and n_test_samples >= 30  # minimum sample size
                 )
                 meta_out.update({
                     "n_test": int(test_mask.sum()),
@@ -1079,13 +1108,30 @@ class StockPredictor:
 
         results = {}
         for window_name in self.prediction_windows:
-            # Pooled model as default (better generalization); per-ticker only when proven better
-            model = self.pooled_models.get(window_name)
-            meta_w = self.pooled_metadata.get(window_name, {})
+            # --- Ensemble: blend pooled + per-ticker when both exist ---
+            pooled_model = self.pooled_models.get(window_name)
+            pooled_meta = self.pooled_metadata.get(window_name, {})
             key = (ticker, window_name)
             ticker_meta = self.metadata.get(key)
-            if ticker_meta is not None and ticker_meta.get("n_train", 0) >= 300 and ticker_meta.get("production_ready", False):
-                model = self.models.get(key, model)
+            ticker_model = self.models.get(key)
+
+            # Determine which model(s) to use
+            use_ensemble = False
+            model = pooled_model
+            meta_w = pooled_meta
+            if (ticker_meta is not None
+                    and ticker_meta.get("n_train", 0) >= 300
+                    and ticker_meta.get("production_ready", False)
+                    and ticker_model is not None
+                    and pooled_model is not None):
+                # Both models available & per-ticker is production-ready → ensemble
+                use_ensemble = True
+            elif (ticker_meta is not None
+                    and ticker_meta.get("n_train", 0) >= 300
+                    and ticker_meta.get("production_ready", False)
+                    and ticker_model is not None):
+                # Per-ticker only (no pooled)
+                model = ticker_model
                 meta_w = ticker_meta
             if model is None:
                 # logger.warning(f"No model for {ticker}-{window_name}") # Too noisy
@@ -1121,6 +1167,7 @@ class StockPredictor:
             if model_cols:
                 col_set = set(current_cols)
                 n_missing = sum(1 for c in model_cols if c not in col_set)
+                missing_ratio = n_missing / len(model_cols) if model_cols else 0
                 if n_missing > len(model_cols) * 0.5:
                     logger.error(
                         "Skipping %s-%s: %d/%d model columns missing (>50%%)",
@@ -1142,6 +1189,11 @@ class StockPredictor:
                         "reason": "feature_mismatch",
                     }
                     continue
+                # Feature coverage penalty: proportionally reduce confidence
+                feature_coverage_penalty = max(0.5, 1.0 - missing_ratio)
+            else:
+                feature_coverage_penalty = 1.0
+                missing_ratio = 0.0
 
             X_pred = self._select_features(
                 X_full, current_cols, model_cols,
@@ -1149,7 +1201,30 @@ class StockPredictor:
             )
             import pandas as pd
             X_pred_df = pd.DataFrame(X_pred, columns=model_cols)
-            pred_return = float(model.predict(X_pred_df)[0])
+
+            # --- Ensemble or single-model prediction ---
+            if use_ensemble:
+                pooled_pred = float(pooled_model.predict(X_pred_df)[0])
+                # Per-ticker model may need its own feature alignment
+                tk_model_cols = ticker_meta.get("feature_columns")
+                if tk_model_cols:
+                    X_tk = self._select_features(
+                        X_full, current_cols, tk_model_cols,
+                        ticker=ticker, window=window_name,
+                    )
+                    X_tk_df = pd.DataFrame(X_tk, columns=tk_model_cols)
+                else:
+                    X_tk_df = X_pred_df
+                ticker_pred = float(ticker_model.predict(X_tk_df)[0])
+
+                # Inverse-RMSE weighting: lower RMSE → more weight
+                pooled_rmse = max(float(pooled_meta.get("val_rmse", 1.0)), 1e-6)
+                ticker_rmse = max(float(ticker_meta.get("val_rmse", 1.0)), 1e-6)
+                w_pooled = (1 / pooled_rmse) / (1 / pooled_rmse + 1 / ticker_rmse)
+                w_ticker = 1.0 - w_pooled
+                pred_return = w_pooled * pooled_pred + w_ticker * ticker_pred
+            else:
+                pred_return = float(model.predict(X_pred_df)[0])
             # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
             # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true
             # price forecast — it's current_price * exp(alpha), useful only as a
@@ -1193,9 +1268,39 @@ class StockPredictor:
                 prob_positive = gauss_prob
             confidence = prob_positive
             # Clip extreme confidence — short-term alpha prediction can never be
-            # > ~80% or < ~20% certain; prevents per-ticker overfit edge cases.
-            prob_positive = max(0.20, min(0.80, prob_positive))
+            # > ~85% or < ~15% certain; prevents per-ticker overfit edge cases.
+            prob_positive = max(0.15, min(0.85, prob_positive))
             confidence = prob_positive
+
+            # Feature coverage penalty: reduce confidence proportionally to missing features
+            confidence *= feature_coverage_penalty
+
+            # Stale sentiment penalty: if sentiment data is old, reduce confidence
+            if os.environ.get("SENTIMENT_FRESH", "true").lower() not in ("true", "1", "yes"):
+                confidence *= 0.85  # 15% penalty for stale sentiment data
+
+            # ── Regime-adaptive confidence & threshold adjustment ──
+            # Read current regime from the feature row (same PIT-safe features
+            # the model already sees).  Adjusts confidence and trade thresholds
+            # so the system is more cautious in bear/high-vol regimes and slightly
+            # more aggressive in low-vol bull regimes.
+            _regime_score = 0.0
+            _vol_ratio = 1.0
+            if current_cols:
+                _col_idx = {c: i for i, c in enumerate(current_cols)}
+                if "regime_score" in _col_idx:
+                    _regime_score = float(X_full[0, _col_idx["regime_score"]])
+                if "vol_ratio_5_20" in _col_idx:
+                    _vol_ratio = float(X_full[0, _col_idx["vol_ratio_5_20"]])
+
+            # Bear + high-vol regime → reduce confidence, widen threshold
+            if _regime_score < 0:
+                # Max penalty: 20% confidence reduction in deep bear
+                confidence *= max(0.80, 1.0 + _regime_score * 0.20)
+            # Vol expansion (5d vol >> 20d vol) → reduce confidence
+            if _vol_ratio > 1.5:
+                _vol_penalty = min(0.15, (_vol_ratio - 1.5) * 0.10)
+                confidence *= (1.0 - _vol_penalty)
 
             # Restore price range — use conformal q90 for calibrated interval
             conformal_q = float(meta_w.get("conformal_q90", 0.0))
@@ -1211,8 +1316,23 @@ class StockPredictor:
             else:
                 raw_threshold = float(raw_threshold)
             min_alpha = max(raw_threshold, TRADE_MIN_ALPHA)
+
+            # Regime-adaptive threshold: tighten in bear/high-vol regimes
+            if _regime_score < 0:
+                # In bear regime, require 50% more alpha to trade
+                min_alpha *= (1.0 - _regime_score * 0.50)  # regime_score is negative → multiplier > 1
+            if _vol_ratio > 1.5:
+                # In vol-expansion regime, require 30% more alpha
+                min_alpha *= min(1.5, 1.0 + (_vol_ratio - 1.5) * 0.30)
+
+            # Transaction cost: round-trip in log space (must be computed BEFORE trade_recommended)
+            min_return_for_profit = (ROUND_TRIP_COST_BPS / 10000)
+            covers_transaction_cost = abs(pred_return) >= min_return_for_profit
+
             trade_recommended = (
-                pred_return >= min_alpha and prob_positive >= TRADE_MIN_PROB_POSITIVE
+                pred_return >= min_alpha
+                and prob_positive >= TRADE_MIN_PROB_POSITIVE
+                and covers_transaction_cost  # Fix #21: must clear transaction costs
             )
 
             # P(return > threshold) - classification-style (Losing Loonies v4: tradable moves)
@@ -1221,10 +1341,6 @@ class StockPredictor:
                 if sigma > 0 else 0.5
             )
             prob_above_threshold = max(0.0, min(1.0, prob_above_threshold))
-
-            # Transaction cost: round-trip in log space
-            min_return_for_profit = (ROUND_TRIP_COST_BPS / 10000)
-            covers_transaction_cost = abs(pred_return) >= min_return_for_profit
 
             # Normalized return for horizon selection (compound-equivalent daily log return)
             horizon = TARGET_CONFIG.get(window_name, {}).get("horizon", 1)
@@ -1257,6 +1373,14 @@ class StockPredictor:
                 "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
                 "model_version": MODEL_VERSION,
                 "training_timestamp": datetime.now(timezone.utc).isoformat(),
+                # ── regime context ──
+                "regime_score": float(_regime_score),
+                "detected_regime": (
+                    "bull" if _regime_score > 0.3
+                    else "bear" if _regime_score < -0.3
+                    else "neutral"
+                ),
+                "vol_expansion": bool(_vol_ratio > 1.5),
             }
 
         # Add best_window: highest normalized_return among trade_recommended, else highest normalized_return
