@@ -20,7 +20,7 @@ env:
 jobs:
   update-predictions:
     runs-on: ubuntu-latest
-    timeout-minutes: 225
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repository
@@ -234,10 +234,10 @@ jobs:
         run: |
           echo "===== Running SHAP analysis for all 75 tickers ====="
           # Wall-clock budget: reserve 25 min for AI explanations + evaluate + drift + retention
-          SHAP_BUDGET_SEC=$((50 * 60))   # 50 minutes max for entire SHAP step
+          SHAP_BUDGET_SEC=$((80 * 60))   # 80 minutes max for entire SHAP step
           SHAP_START=$SECONDS
-          # Per-batch budget (each batch gets up to 12 min — increased from 8)
-          BATCH_MAX_MIN=12
+          # Per-batch budget (each batch gets up to 15 min)
+          BATCH_MAX_MIN=15
 
           TICKER_BATCHES=(
             "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
@@ -280,7 +280,7 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           PYTHONPATH: ${{ github.workspace }}
-          AI_EXPLANATION_BUDGET_MIN: "45"
+          AI_EXPLANATION_BUDGET_MIN: "90"
         run: |
           echo "===== Generating AI explanations (Groq preferred, Gemini fallback) ====="
           echo "Time budget: ${AI_EXPLANATION_BUDGET_MIN:-35} minutes"

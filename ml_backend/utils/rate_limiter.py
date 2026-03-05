@@ -56,6 +56,7 @@ class AsyncRateLimiter:
     async def acquire(self) -> None:
         """Wait until a call is allowed, then record it."""
         while True:
+            wait = 0.0
             async with self._lock:
                 now = time.monotonic()
 
@@ -76,13 +77,10 @@ class AsyncRateLimiter:
                         "[%s] rate limit reached (%d/%d), sleeping %.2fs",
                         self.name, len(self._timestamps), self.max_calls, wait,
                     )
-                    # Release lock while sleeping
-                    await asyncio.sleep(0)
-                    # Will retry from the top of while loop
-                    continue
+                    # Fall through to sleep outside lock
 
                 # Check burst capacity
-                if (
+                elif (
                     self.burst_limit is not None
                     and len(self._burst_timestamps) >= self.burst_limit
                 ):
@@ -94,17 +92,17 @@ class AsyncRateLimiter:
                         self.burst_limit,
                         wait,
                     )
-                    await asyncio.sleep(0)
-                    continue
+                    # Fall through to sleep outside lock
 
-                # Token available — record and return
-                self._timestamps.append(now)
-                if self.burst_limit is not None:
-                    self._burst_timestamps.append(now)
-                return
+                else:
+                    # Token available — record and return
+                    self._timestamps.append(now)
+                    if self.burst_limit is not None:
+                        self._burst_timestamps.append(now)
+                    return
 
-            # Small sleep between retries (outside lock)
-            await asyncio.sleep(0.1)
+            # Sleep the computed wait outside the lock, then retry
+            await asyncio.sleep(max(wait, 0.01))
 
     def acquire_sync(self) -> None:
         """Blocking version for synchronous callers (e.g. FRED)."""

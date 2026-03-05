@@ -20,6 +20,19 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_settlement_date(date_str: str) -> datetime:
+    """Parse settlementDate string (MM/DD/YYYY or YYYY-MM-DD) for sorting.
+    Returns datetime.min on failure so unparseable dates sort last."""
+    if not date_str:
+        return datetime.min
+    for fmt in ('%m/%d/%Y', '%Y-%m-%d'):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except (ValueError, TypeError):
+            continue
+    return datetime.min
+
 # Global lock for coordinating short interest requests
 SHORT_INTEREST_LOCK = asyncio.Lock()
 
@@ -194,7 +207,7 @@ class ShortInterestAnalyzer:
                             if short_data:
                                 logger.info(f"🎉 Successfully extracted {len(short_data)} short interest records from direct API for {ticker}")
                                 # Sort by date (newest first)
-                                short_data.sort(key=lambda x: x['settlementDate'], reverse=True)
+                                short_data.sort(key=lambda x: _parse_settlement_date(x['settlementDate']), reverse=True)
                                 return short_data[:20]  # Return latest 20 records
                             else:
                                 logger.info(f"No short interest data in Nasdaq API response for {ticker}")
@@ -434,7 +447,7 @@ class ShortInterestAnalyzer:
             else:
                 logger.info(f"Successfully parsed {len(short_data)} short interest records")
                 # Sort by date (newest first)
-                short_data.sort(key=lambda x: x['settlementDate'], reverse=True)
+                short_data.sort(key=lambda x: _parse_settlement_date(x['settlementDate']), reverse=True)
             
             return short_data
             
@@ -593,7 +606,7 @@ class ShortInterestAnalyzer:
             if short_data:
                 logger.info(f"🎉 Enhanced parser found {len(short_data)} short interest records")
                 # Sort by date (newest first)
-                short_data.sort(key=lambda x: x['settlementDate'], reverse=True)
+                short_data.sort(key=lambda x: _parse_settlement_date(x['settlementDate']), reverse=True)
             else:
                 logger.warning("❌ Enhanced parser found no short interest data")
                 
@@ -871,7 +884,8 @@ class ShortInterestAnalyzer:
                     estimated_shares = 5_000_000_000  # Safe fallback
                     try:
                         import yfinance as yf
-                        info = yf.Ticker(ticker).info
+                        import asyncio
+                        info = await asyncio.to_thread(lambda: yf.Ticker(ticker).info)
                         shares_out = info.get("sharesOutstanding")
                         if shares_out and shares_out > 0:
                             estimated_shares = shares_out

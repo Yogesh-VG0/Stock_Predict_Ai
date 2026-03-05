@@ -652,8 +652,8 @@ class SECFilingsAnalyzer:
         except Exception as e:
             logger.error(f"Error storing SEC filings in MongoDB: {str(e)}")
 
-    @sleep_and_retry
-    @limits(calls=30, period=60)
+    # NOTE: This method is not called in production — analyze_filings_sentiment
+    # is used instead. Kept for potential future use without sync decorators.
     async def fetch_kaleidoscope_filings(self, ticker: str, lookback_days: int = 30) -> Dict:
         """
         Fetch SEC filings from Kaleidoscope API.

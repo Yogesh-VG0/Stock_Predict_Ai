@@ -478,7 +478,8 @@ class SentimentAnalyzer:
         
         for source_name, url in [("Yahoo Finance", yahoo_url), ("SeekingAlpha", sa_url)]:
             try:
-                feed = feedparser.parse(url)
+                loop = asyncio.get_event_loop()
+                feed = await loop.run_in_executor(None, feedparser.parse, url)
                 entries = feed.entries[:15]  # Limit to latest 15
                 
                 for entry in entries:
@@ -581,7 +582,7 @@ class SentimentAnalyzer:
         sentiment_items = {
             k: v for k, v in sentiment.items()
             if k.endswith('_sentiment') and isinstance(v, (int, float))
-               and k in weights  # ignore unknown / phantom keys
+               and not math.isnan(v) and k in weights  # ignore unknown / phantom keys
         }
 
         for key, value in sentiment_items.items():
@@ -630,8 +631,12 @@ class SentimentAnalyzer:
             from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
             to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             
-            # Fetch insider transactions
-            data = finnhub_client.stock_insider_transactions(ticker, from_date, to_date)
+            # Fetch insider transactions — run sync client in threadpool to
+            # avoid blocking the event loop (finnhub.Client is synchronous).
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(
+                None, finnhub_client.stock_insider_transactions, ticker, from_date, to_date
+            )
             
             # Store in MongoDB
             if data and data.get('data'):
@@ -1205,7 +1210,7 @@ class SentimentAnalyzer:
                 hour=0, minute=0, second=0, microsecond=0
             )
         sentiment_dict["last_updated"] = datetime.now(timezone.utc)
-        sentiment_dict["api_status"] = self.api_status  # Store API health status
+        sentiment_dict["api_status"] = dict(self.api_status)  # Store copy of API health status
         
         # Store in MongoDB with error handling
         try:
@@ -1472,7 +1477,11 @@ class SentimentAnalyzer:
         try:
             await finnhub_limiter.acquire()
             finnhub_client = finnhub.Client(api_key=api_key)
-            data = finnhub_client.recommendation_trends(ticker)
+            # Run sync client in threadpool to avoid blocking event loop
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(
+                None, finnhub_client.recommendation_trends, ticker
+            )
             if not data or len(data) == 0:
                 logger.info(f"Finnhub Recommendation Trends: No data for {ticker}")
                 return {"finnhub_recommendation_sentiment": 0.0, "finnhub_recommendation_volume": 0, "finnhub_recommendation_confidence": 0.0}
@@ -2094,8 +2103,9 @@ class SentimentAnalyzer:
                 latest = recent_data[0]
                 previous = recent_data[1]
                 
-                latest_si = latest.get('short_interest', 0)
-                previous_si = previous.get('short_interest', 0)
+                # Handle both camelCase (Nasdaq/Finviz API) and snake_case keys
+                latest_si = latest.get('shortInterest', latest.get('short_interest', 0))
+                previous_si = previous.get('shortInterest', previous.get('short_interest', 0))
                 
                 if previous_si > 0:
                     change_pct = (latest_si - previous_si) / previous_si
@@ -2226,14 +2236,21 @@ class SentimentAnalyzer:
                 sentiment_score = result["compound"]
                 confidence = abs(sentiment_score)  # VADER confidence approximation
             else:
-                # Transformer model
+                # Transformer model (e.g. FinBERT)
                 result = model(text[:512])  # Truncate for transformer models
                 if isinstance(result, list) and len(result) > 0:
                     result = result[0]
                 
-                # Map label to score
-                sentiment_score = _map_sentiment_label(result.get("label", ""))
-                confidence = result.get("score", 0.0)
+                # Use raw FinBERT probability as score magnitude (consistent with _score_text)
+                label = result.get("label", "").lower()
+                raw_score = result.get("score", 0.0)
+                if label == "positive":
+                    sentiment_score = float(raw_score)
+                elif label == "negative":
+                    sentiment_score = -float(raw_score)
+                else:
+                    sentiment_score = 0.0
+                confidence = raw_score
             
             processing_time = time.time() - start_time
             

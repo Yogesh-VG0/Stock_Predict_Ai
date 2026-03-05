@@ -186,7 +186,7 @@ def main():
     if args.end:
         end_date = datetime.strptime(args.end, "%Y-%m-%d")
         
-    start_date = end_date - timedelta(days=365 * 3) # Default 3 years (more data for pooled model)
+    start_date = end_date - timedelta(days=365 * 5) # 5 years of data for better model accuracy
     if args.start:
         start_date = datetime.strptime(args.start, "%Y-%m-%d")
 

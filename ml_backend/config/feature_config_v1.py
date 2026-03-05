@@ -42,7 +42,7 @@ WALK_FORWARD_FOLDS = 4
 
 # Trade filters: only recommend when model is both optimistic and confident
 TRADE_MIN_ALPHA = 0.0002  # Minimum predicted alpha (0.02%) — lowered to allow more trades in market-neutral regime
-TRADE_MIN_PROB_POSITIVE = 0.50  # P(return > 0) must exceed this — lowered from 0.51 (sign classifiers ~50% accuracy)
+TRADE_MIN_PROB_POSITIVE = 0.52  # P(return > 0) must exceed this — 0.50 was a no-op (any positive pred passes); 0.52 filters out noise
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
 TRADE_SIGMA_MULT = 0.3  # Regime-adaptive threshold multiplier — lowered from 0.5 (pred_std was making threshold too strict)
 
