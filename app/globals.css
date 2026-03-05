@@ -131,13 +131,16 @@
 /* ── Widget scroll-trap prevention ── */
 .widget-scroll-wrapper {
   overscroll-behavior: contain;
-  -webkit-overflow-scrolling: auto;
   touch-action: pan-y;
 }
 
-.widget-scroll-overlay {
-  touch-action: pan-y; /* allow page vertical scroll through overlay */
-  z-index: 50;
+/* Iframes non-interactive by default → events pass to parent → native smooth scroll */
+.widget-scroll-wrapper:not(.widget-active) iframe {
+  pointer-events: none !important;
+}
+
+.widget-scroll-wrapper:not(.widget-active) {
+  cursor: pointer;
 }
 
 .tradingview-widget-container,
