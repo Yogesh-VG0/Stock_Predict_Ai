@@ -2,7 +2,7 @@
 Main FastAPI application for the stock prediction system.
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Header
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta, timezone
@@ -10,8 +10,10 @@ from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import redis.asyncio as redis
 import os
+import threading
 from dotenv import load_dotenv
 import logging
+import hmac
 
 from ml_backend.api.errors import setup_error_handling
 from ml_backend.api.rate_limiter import (
@@ -45,6 +47,33 @@ from ml_backend.api.utils import normalize_prediction_dict
 
 # Load environment variables
 load_dotenv()
+
+# ---------------------------------------------------------------------------
+# API key authentication for mutative endpoints
+# ---------------------------------------------------------------------------
+_API_KEY = os.getenv("ML_API_KEY", "")
+
+
+async def _require_api_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    authorization: Optional[str] = Header(None),
+) -> None:
+    """Dependency that rejects requests without a valid API key.
+
+    Accepts the key via ``X-API-Key`` header **or** ``Authorization: Bearer <key>``.
+    When ML_API_KEY env var is unset the guard is disabled (dev mode).
+    """
+    if not _API_KEY:
+        return  # no key configured — allow (dev / local)
+    token = x_api_key
+    if not token and authorization and authorization.lower().startswith("bearer "):
+        token = authorization[7:]
+    if not token or not hmac.compare_digest(token, _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+# Thread-safe lock for training_jobs dict mutations from background threads
+_training_jobs_lock = threading.Lock()
 
 
 def _normalize_ticker(ticker: str) -> str:
@@ -272,18 +301,22 @@ def load_all_historical_data_from_mongodb(mongo_client, tickers, start_date, end
 def _run_training_job(job_id: str) -> None:
     """Background task: run full training pipeline. Updates app.state.training_jobs[job_id]."""
     if not hasattr(app.state, "training_jobs") or app.state.training_jobs is None:
-        app.state.training_jobs = {}
+        with _training_jobs_lock:
+            app.state.training_jobs = {}
     jobs = app.state.training_jobs
     try:
-        jobs[job_id] = {"status": "running", "progress": 0, "message": "Loading historical data..."}
+        with _training_jobs_lock:
+            jobs[job_id] = {"status": "running", "progress": 0, "message": "Loading historical data..."}
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=HISTORICAL_DATA_YEARS * 365)
         historical_data = load_all_historical_data_from_mongodb(
             app.state.mongo_client, TOP_100_TICKERS, start_date, end_date
         )
-        jobs[job_id] = {"status": "running", "progress": 20, "message": f"Training {len(historical_data)} tickers..."}
+        with _training_jobs_lock:
+            jobs[job_id] = {"status": "running", "progress": 20, "message": f"Training {len(historical_data)} tickers..."}
         app.state.stock_predictor.train_all_models(historical_data)
-        jobs[job_id] = {"status": "running", "progress": 70, "message": "Storing predictions..."}
+        with _training_jobs_lock:
+            jobs[job_id] = {"status": "running", "progress": 70, "message": "Storing predictions..."}
         total = len(historical_data)
         for i, (ticker, df) in enumerate(historical_data.items()):
             if df is not None and not df.empty:
@@ -303,29 +336,32 @@ def _run_training_job(job_id: str) -> None:
                             app.state.mongo_client.store_predictions(ticker, predictions)
                     except Exception as e:
                         logger.error(f"Error predicting/storing for {ticker}: {str(e)}")
+            with _training_jobs_lock:
+                jobs[job_id] = {
+                    "status": "running",
+                    "progress": 70 + int(30 * (i + 1) / max(total, 1)),
+                    "message": f"Processed {i+1}/{total} tickers",
+                }
+        with _training_jobs_lock:
             jobs[job_id] = {
-                "status": "running",
-                "progress": 70 + int(30 * (i + 1) / max(total, 1)),
-                "message": f"Processed {i+1}/{total} tickers",
+                "status": "completed",
+                "progress": 100,
+                "message": "Training and prediction completed",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             }
-        jobs[job_id] = {
-            "status": "completed",
-            "progress": 100,
-            "message": "Training and prediction completed",
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }
     except Exception as e:
         logger.error(f"Training job {job_id} failed: {e}")
-        jobs[job_id] = {
-            "status": "failed",
-            "progress": 0,
-            "message": str(e),
-            "error": str(e),
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        }
+        with _training_jobs_lock:
+            jobs[job_id] = {
+                "status": "failed",
+                "progress": 0,
+                "message": str(e),
+                "error": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }
 
 
-@app.post("/api/v1/train", tags=["Training"], summary="Train All Models", description="Start training job in background. Returns job_id to poll status.")
+@app.post("/api/v1/train", tags=["Training"], summary="Train All Models", description="Start training job in background. Returns job_id to poll status.", dependencies=[Depends(_require_api_key)])
 async def train_all_models(background_tasks: BackgroundTasks) -> Dict:
     """Start training job. Returns job_id immediately. Poll GET /api/v1/train/status/{job_id} for progress."""
     job_id = str(uuid.uuid4())
@@ -562,7 +598,11 @@ def format_prediction_details(prediction):
                 change_pct = (change / current * 100) if current and change else 0
                 confidence_level = "High" if confidence > 0.8 else "Medium" if confidence > 0.6 else "Low"
                 
-                details.append(f"  {window.upper()}: ${price:.2f} ({change_pct:+.2f}%) - Confidence: {confidence_level} ({confidence:.2f})")
+                try:
+                    price_str = f"${float(price):.2f}"
+                except (TypeError, ValueError):
+                    price_str = str(price)
+                details.append(f"  {window.upper()}: {price_str} ({change_pct:+.2f}%) - Confidence: {confidence_level} ({confidence:.2f})")
         
         return "\n".join(details)
     except Exception as e:
@@ -1545,7 +1585,7 @@ def build_explanation_prompt(ticker, date, sentiment, prediction, technicals=Non
     """Wrapper to maintain backwards compatibility while using the new comprehensive function"""
     return build_comprehensive_explanation_prompt(ticker, date, sentiment, prediction, technicals, shap_top_factors, news)
 
-@app.post("/api/v1/ingest", tags=["Data Ingestion"], summary="Ingest Data", description="Ingest historical data for all tickers or a specific ticker.")
+@app.post("/api/v1/ingest", tags=["Data Ingestion"], summary="Ingest Data", description="Ingest historical data for all tickers or a specific ticker.", dependencies=[Depends(_require_api_key)])
 async def ingest_data(ticker: Optional[str] = None):
     """Ingest historical data for all tickers or a specific ticker."""
     try:
@@ -1564,7 +1604,7 @@ async def ingest_data(ticker: Optional[str] = None):
         logger.error(f"Error in /api/v1/ingest: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/v1/sentiment", tags=["Sentiment"], summary="Fetch Sentiment", description="Fetch and store sentiment data for all tickers or a specific ticker.")
+@app.post("/api/v1/sentiment", tags=["Sentiment"], summary="Fetch Sentiment", description="Fetch and store sentiment data for all tickers or a specific ticker.", dependencies=[Depends(_require_api_key)])
 async def fetch_sentiment(ticker: Optional[str] = None):
     """Fetch and store sentiment for all tickers or a specific ticker."""
     try:

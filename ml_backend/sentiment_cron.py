@@ -94,6 +94,11 @@ async def _run_pipeline(tickers: list[str]) -> tuple[int, int]:
     ok = sum(1 for r in results if r is True)
     fail = len(results) - ok
 
+    # Log any unexpected exceptions that escaped _process_ticker's try/except
+    for i, r in enumerate(results):
+        if isinstance(r, Exception):
+            logger.error("Unexpected exception for %s: %s", tickers[i], r, exc_info=r)
+
     # ── Health summary: query MongoDB by the trading-day date this run targeted ──
     try:
         from ml_backend.data.sentiment import get_previous_trading_day
@@ -104,7 +109,7 @@ async def _run_pipeline(tickers: list[str]) -> tuple[int, int]:
         target_day_str = get_previous_trading_day(utc_today_str) or utc_today_str
         # Construct naive UTC midnight — exact same type/value as the upsert key
         _y, _m, _d = (int(x) for x in target_day_str.split("-"))
-        target_day_midnight = datetime(_y, _m, _d, 0, 0, 0)
+        target_day_midnight = datetime(_y, _m, _d, 0, 0, 0, tzinfo=timezone.utc)
 
         coll = mongo_client.db["sentiment"]
         # Projection: pull article-count keys so we can inspect per-source

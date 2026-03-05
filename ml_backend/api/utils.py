@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Dict, Any, Optional
 import logging
 import math
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +110,8 @@ def validate_ticker(ticker: str) -> str:
     if not ticker or not isinstance(ticker, str):
         raise ValueError("Ticker cannot be empty")
     t = ticker.strip().upper()
-    if not t.isalnum():
-        raise ValueError("Ticker must contain only alphanumeric characters")
-    if len(t) < 1 or len(t) > 5:
-        raise ValueError("Ticker must be 1-5 characters long")
+    if not re.match(r'^[A-Z0-9.\-]{1,6}$', t):
+        raise ValueError("Ticker must contain only alphanumeric characters, dots, or hyphens (1-6 chars)")
     return t
 
 

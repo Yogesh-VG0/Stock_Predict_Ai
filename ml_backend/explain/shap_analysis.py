@@ -15,11 +15,11 @@ Usage (standalone):
 """
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import logging
 import math
-import signal
 import sys
 import os
 import time
@@ -36,20 +36,6 @@ logger = logging.getLogger(__name__)
 # Increased from 60→180s because yfinance download + feature engineering +
 # SHAP computation on CI runners often takes 70-90s.
 _PER_TICKER_TIMEOUT = 180
-
-
-class _ShapTickerTimeout(BaseException):
-    """Raised when a single ticker's SHAP analysis exceeds the timeout.
-
-    Inherits from BaseException (not Exception) so that ``except Exception``
-    handlers in third-party / data-layer code cannot swallow the alarm.
-    Only the explicit ``except _ShapTickerTimeout`` in run_shap_analysis
-    will catch it.
-    """
-
-
-def _timeout_handler(signum, frame):
-    raise _ShapTickerTimeout("SHAP per-ticker timeout exceeded")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -354,25 +340,19 @@ def run_shap_analysis(
         logger.info("Analyzing %s ...", ticker)
         ticker_results = {}
 
-        # Per-ticker timeout guard (Linux only; no-op on Windows)
-        _use_alarm = hasattr(signal, "SIGALRM")
-        if _use_alarm:
-            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(_PER_TICKER_TIMEOUT)
-
+        # Cross-platform per-ticker timeout using ThreadPoolExecutor
         try:
-            ticker_results = _analyze_single_ticker(
-                ticker, horizons, predictor, mongo_client, store_to_mongo,
-                USE_MARKET_NEUTRAL_TARGET,
-            )
-        except _ShapTickerTimeout:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    _analyze_single_ticker,
+                    ticker, horizons, predictor, mongo_client, store_to_mongo,
+                    USE_MARKET_NEUTRAL_TARGET,
+                )
+                ticker_results = future.result(timeout=_PER_TICKER_TIMEOUT)
+        except concurrent.futures.TimeoutError:
             logger.warning("SHAP TIMEOUT for %s after %ds — skipping", ticker, _PER_TICKER_TIMEOUT)
         except Exception as e:
             logger.warning("SHAP failed for %s: %s", ticker, e)
-        finally:
-            if _use_alarm:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
 
         if ticker_results:
             all_results[ticker] = ticker_results
