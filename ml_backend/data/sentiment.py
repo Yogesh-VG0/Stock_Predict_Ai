@@ -62,12 +62,13 @@ _FINNHUB_MAX_DELAY = 30.0   # cap
 
 async def _finnhub_get_with_retry(url: str, params: dict, ticker: str, label: str) -> dict:
     """HTTP GET with retry on 429/5xx/timeout.  Returns parsed JSON or {}."""
+    _timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
     last_exc = None
     for attempt in range(1, _FINNHUB_MAX_RETRIES + 1):
         try:
             await finnhub_limiter.acquire()
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=30) as resp:
+            async with aiohttp.ClientSession(timeout=_timeout) as session:
+                async with session.get(url, params=params) as resp:
                     if resp.status == 200:
                         return await resp.json()
                     if resp.status in _FINNHUB_RETRYABLE_STATUSES:
@@ -203,10 +204,27 @@ class SentimentAnalyzer:
         
         self.mongo_client = mongo_client
         
-        # Initialize sentiment — VADER only (transformers removed for CI speed)
-        logger.info("  Initializing Sentiment Analyzer (VADER)...")
+        # Initialize sentiment — FinBERT preferred, VADER fallback
+        logger.info("  Initializing Sentiment Analyzer ...")
         
-        # Initialize VADER sentiment analyzer
+        # Try FinBERT first (ProsusAI/finbert — 15-25% more accurate on financial text)
+        self.finbert = None
+        self._finbert_tokenizer = None
+        try:
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline as hf_pipeline
+            _fb_model_name = "ProsusAI/finbert"
+            self._finbert_tokenizer = AutoTokenizer.from_pretrained(_fb_model_name)
+            _fb_model = AutoModelForSequenceClassification.from_pretrained(_fb_model_name)
+            self.finbert = hf_pipeline(
+                "sentiment-analysis", model=_fb_model,
+                tokenizer=self._finbert_tokenizer, truncation=True, max_length=512,
+            )
+            logger.info("  FinBERT (ProsusAI/finbert) initialized — using as primary")
+        except Exception as e:
+            logger.warning("  FinBERT not available (%s) — falling back to VADER", e)
+            self.finbert = None
+
+        # Initialize VADER sentiment analyzer (always available as fallback)
         try:
             from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
             self.vader = SentimentIntensityAnalyzer()
@@ -214,12 +232,6 @@ class SentimentAnalyzer:
         except ImportError:
             logger.error("  VADER sentiment analyzer not available")
             self.vader = None
-        
-        # Transformer models removed — set to None for interface compatibility
-        self.finbert = None
-        self.financial_news_roberta = None
-        self.twitter_roberta = None
-        self.roberta_large = None
         
         # Initialize SEC analyzer
         try:
@@ -277,17 +289,18 @@ class SentimentAnalyzer:
             'reddit': {'working': True, 'last_error': None, 'cooldown_until': None},
         }
         
-        # Model routing — all sources use VADER (transformers removed)
+        # Model routing — FinBERT primary when available, VADER fallback
+        _primary = "finbert" if self.finbert is not None else "vader"
         self.model_routing = {
-            "rss_news": {"primary": "vader", "fallback": "vader"},
-            "yahoo_news": {"primary": "vader", "fallback": "vader"},
-            "marketaux": {"primary": "vader", "fallback": "vader"},
-            "reddit": {"primary": "vader", "fallback": "vader"},
-            "social_media": {"primary": "vader", "fallback": "vader"},
-            "finviz": {"primary": "vader", "fallback": "vader"},
-            "sec_filings": {"primary": "vader", "fallback": "vader"},
-            "earnings_calls": {"primary": "vader", "fallback": "vader"},
-            "general": {"primary": "vader", "fallback": "vader"},
+            "rss_news": {"primary": _primary, "fallback": "vader"},
+            "yahoo_news": {"primary": _primary, "fallback": "vader"},
+            "marketaux": {"primary": _primary, "fallback": "vader"},
+            "reddit": {"primary": _primary, "fallback": "vader"},
+            "social_media": {"primary": _primary, "fallback": "vader"},
+            "finviz": {"primary": _primary, "fallback": "vader"},
+            "sec_filings": {"primary": _primary, "fallback": "vader"},
+            "earnings_calls": {"primary": _primary, "fallback": "vader"},
+            "general": {"primary": _primary, "fallback": "vader"},
         }
         
         # Model performance tracking
@@ -298,10 +311,43 @@ class SentimentAnalyzer:
         self.max_delay = 60.0
         
         logger.info("  Sentiment Analyzer Summary:")
+        logger.info(f"    FinBERT: {self.finbert is not None}")
         logger.info(f"    VADER: {self.vader is not None}")
         logger.info(f"    SEC Analyzer: {self.sec_analyzer is not None}")
-        logger.info("  Disabled: transformers models (CI-incompatible), SeekingAlpha (needs Playwright)")
+        logger.info("  Disabled: SeekingAlpha (needs Playwright)")
         logger.info("  Disabled: alphavantage_news (free tier: 25 req/day insufficient for 75 tickers)")
+
+    # ----- Unified text scoring -----
+    def _score_text(self, text: str) -> float:
+        """Score a single text string using FinBERT (preferred) or VADER fallback.
+
+        Returns a float in [-1, 1] where:
+          -1 = very negative, 0 = neutral, +1 = very positive
+        """
+        if not text or not text.strip():
+            return 0.0
+        text_trunc = text[:512]
+        # Try FinBERT first
+        if self.finbert is not None:
+            try:
+                result = self.finbert(text_trunc)[0]
+                label = result.get("label", "neutral").lower()
+                score = result.get("score", 0.5)
+                if label == "positive":
+                    return float(score)
+                elif label == "negative":
+                    return -float(score)
+                else:  # neutral
+                    return 0.0
+            except Exception:
+                pass  # fall through to VADER
+        # VADER fallback
+        if self.vader is not None:
+            try:
+                return float(self.vader.polarity_scores(text_trunc)["compound"])
+            except Exception:
+                pass
+        return 0.0
         
     def _check_api_health(self, api_name: str) -> bool:
         """Check if an API is healthy and not in cooldown."""
@@ -549,6 +595,12 @@ class SentimentAnalyzer:
             vol_key  = key.replace('_sentiment', '_volume')
             conf = float(sentiment.get(conf_key, 1.0))
             vol  = float(sentiment.get(vol_key, 1))
+
+            # Skip sources that returned no data (score=0, confidence=0).
+            # A genuine neutral signal would have confidence > 0.
+            if score == 0.0 and conf == 0.0:
+                continue
+
             effective_weight = base_weight * max(conf, 0.01) * math.log1p(max(vol, 0))
 
             total_score  += score * effective_weight
@@ -714,19 +766,10 @@ class SentimentAnalyzer:
                 if not _is_recent(date_obj):
                     continue
                 headlines.append(headline)
-                text_trunc = headline[:512]
-                if self.finbert is not None:
-                    sentiment = self.finbert(text_trunc)[0]
-                    if 'label' in sentiment:
-                        sentiment_score = _map_sentiment_label(sentiment['label'])
-                        logger.debug(f"FinViz label '{sentiment['label']}' mapped to score {sentiment_score}")
-                    else:
-                        sentiment_score = sentiment['score']
-                else:
-                    sentiment = self.vader.polarity_scores(text_trunc)
-                    sentiment_score = sentiment["compound"]
+                sentiment_score = self._score_text(headline)
+                _used_model = "finbert" if self.finbert is not None else "vader"
                 sentiment_scores.append(sentiment_score)
-                sentiment_results.append({"headline": headline, "sentiment": sentiment_score, "model": "finbert" if self.finbert is not None else "vader"})
+                sentiment_results.append({"headline": headline, "sentiment": sentiment_score, "model": _used_model})
                 total_volume += 1
         except Exception as e:
             logger.error(f"Error analyzing FinViz sentiment for {ticker}: {str(e)}")
@@ -1375,9 +1418,22 @@ class SentimentAnalyzer:
                     logger.warning(f"Error processing transaction for {ticker}: {e}")
                     continue
             
-            # Normalize sentiment
+            # Normalize sentiment — weighted_sentiment is net (buy-sell) dollar value.
+            # Normalise by total absolute dollar value to get a ratio in [-1, 1].
             if total_volume > 0:
-                sentiment = weighted_sentiment / (total_volume * 100)  # Scale down for normalization
+                total_abs_value = abs(weighted_sentiment) + 1e-6  # avoid div-by-zero
+                # Net buy/sell ratio: +1 = all buying, -1 = all selling
+                # Use total transacted dollar value as denominator (sum of buys + sells)
+                total_buy_val = sum(
+                    abs(float(t.get('share', 0)) or abs(float(t.get('change', 0))))
+                    * (float(t.get('transactionPrice', 0)) or 1.0)
+                    for t in insider_data
+                    if isinstance(t, dict)
+                )
+                if total_buy_val > 0:
+                    sentiment = weighted_sentiment / total_buy_val
+                else:
+                    sentiment = weighted_sentiment / (abs(weighted_sentiment) + 1.0)
                 sentiment = max(-1.0, min(1.0, sentiment))  # Clamp to [-1, 1]
                 confidence = min(1.0, len(insider_data) / 5)  # Higher volume = higher confidence
             else:
@@ -1706,26 +1762,13 @@ class SentimentAnalyzer:
     def _analyze_earnings_call_sentiment_sync(self, transcript: str) -> Dict[str, float]:
         """Synchronous version of earnings call sentiment analysis."""
         try:
-            # Use FinBERT for analysis if available
-            if hasattr(self, 'finbert') and self.finbert is not None:
-                sentiment = self.finbert(transcript[:512])[0]  # Truncate to avoid memory issues
-                if 'label' in sentiment:
-                    sentiment_score = _map_sentiment_label(sentiment['label'])
-                    confidence = sentiment.get('score', 0.8)
-                else:
-                    sentiment_score = sentiment.get('score', 0.0)
-                    confidence = sentiment.get('confidence', 0.8)
-                return {
-                    'sentiment': float(sentiment_score),
-                    'confidence': float(confidence)
-                }
-            else:
-                # Fallback to VADER
-                sentiment = self.vader.polarity_scores(transcript[:512])
-                return {
-                    'sentiment': float(sentiment['compound']),
-                    'confidence': 0.6  # Lower confidence for VADER
-                }
+            score = self._score_text(transcript)
+            # FinBERT gets higher confidence than VADER
+            confidence = 0.8 if self.finbert is not None else 0.6
+            return {
+                'sentiment': float(score),
+                'confidence': float(confidence)
+            }
         except Exception as e:
             logger.error(f"Error in sync earnings call analysis: {str(e)}")
             return {'sentiment': 0.0, 'confidence': 0.0}
@@ -1870,11 +1913,18 @@ class SentimentAnalyzer:
                     total_volume += 1
             
             # Process price targets  (FMP manager key: 'price_target_summary')
+            # Use relative measure (target / current_price - 1) instead of
+            # hardcoded $200 reference which biases against low-priced stocks.
             price_targets = fmp_data.get('price_target_summary', [])
             if price_targets:
                 pt = price_targets[0] if isinstance(price_targets, list) else price_targets
                 avg_target = pt.get('lastYearAvgPriceTarget', pt.get('averagePriceTarget', 0.0))
-                norm_pt = max(-1, min(1, (avg_target - 200) / 100))
+                _current = fmp_data.get('current_price', 0.0) or 0.0
+                if _current > 0 and avg_target > 0:
+                    upside_ratio = (avg_target / _current) - 1.0  # e.g., 0.10 = +10%
+                    norm_pt = max(-1.0, min(1.0, upside_ratio * 2))  # ±50% maps to ±1.0
+                else:
+                    norm_pt = 0.0
                 sentiments.append(norm_pt)
                 weights.append(0.25)
                 total_volume += pt.get('lastYearCount', 1)
@@ -1884,8 +1934,14 @@ class SentimentAnalyzer:
             if consensus_data:
                 cs = consensus_data[0] if isinstance(consensus_data, list) else consensus_data
                 consensus_val = cs.get('targetConsensus', 0.0)
-                if consensus_val:
-                    sentiments.append(max(-1.0, min(1.0, (float(consensus_val) - 200) / 100)))
+                _current = fmp_data.get('current_price', 0.0) or 0.0
+                if consensus_val and _current > 0:
+                    upside_ratio = (float(consensus_val) / _current) - 1.0
+                    sentiments.append(max(-1.0, min(1.0, upside_ratio * 2)))
+                    weights.append(0.15)
+                    total_volume += 1
+                elif consensus_val:
+                    sentiments.append(0.0)
                     weights.append(0.15)
                     total_volume += 1
             

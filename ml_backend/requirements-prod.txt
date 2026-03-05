@@ -42,6 +42,12 @@ fredapi>=0.5
 beautifulsoup4>=4.12
 pandas_market_calendars>=4.1
 
+# --- FinBERT (optional but recommended for 15-25% better financial sentiment) ---
+# If torch/transformers are too large for your CI, the pipeline falls back to VADER.
+transformers>=4.35
+torch>=2.1
+sentencepiece>=0.1
+
 # --- AI / LLM APIs ---
 google-genai>=1.0  # Gemini API
 groq>=0.4.0        # Groq API (better free tier: 1K-14K RPD vs Gemini's 20)

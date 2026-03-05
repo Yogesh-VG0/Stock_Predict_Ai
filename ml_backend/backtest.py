@@ -106,16 +106,32 @@ def run_backtest(
             )
             start = oos_start_date
     else:
-        # Fallback: if no OOS boundary provided, use last 20% of dates
-        fallback_idx = int(len(all_dates) * 0.80)
-        fallback_start = pd.Timestamp(all_dates[fallback_idx]) if fallback_idx < len(all_dates) else start
-        if start < fallback_start:
-            logger.warning(
-                "No OOS boundary provided; using last 20%% of dates (start=%s). "
-                "Pass oos_start_date for precise OOS boundary.",
-                fallback_start.date(),
+        # Fallback: try to infer OOS boundary from predictor metadata
+        inferred_oos = None
+        if hasattr(predictor, '_train_cutoff_dates') and predictor._train_cutoff_dates:
+            all_cutoffs = (
+                predictor._train_cutoff_dates.get("pooled", [])
+                + predictor._train_cutoff_dates.get("ticker", [])
             )
-            start = fallback_start
+            if all_cutoffs:
+                inferred_oos = max(all_cutoffs)
+                logger.info(
+                    "OOS guard: inferred cutoff from model metadata = %s",
+                    inferred_oos.date(),
+                )
+        if inferred_oos is not None and start < inferred_oos:
+            start = inferred_oos
+        else:
+            # Last resort: use last 20% of dates
+            fallback_idx = int(len(all_dates) * 0.80)
+            fallback_start = pd.Timestamp(all_dates[fallback_idx]) if fallback_idx < len(all_dates) else start
+            if start < fallback_start:
+                logger.warning(
+                    "No OOS boundary provided; using last 20%% of dates (start=%s). "
+                    "Pass oos_start_date for precise OOS boundary.",
+                    fallback_start.date(),
+                )
+                start = fallback_start
 
     # Trading dates
     trade_dates = [d for d in all_dates if start <= d <= end]
