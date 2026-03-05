@@ -139,10 +139,6 @@
   pointer-events: none !important;
 }
 
-.widget-scroll-wrapper:not(.widget-active) {
-  cursor: pointer;
-}
-
 .tradingview-widget-container,
 .finlogix-container {
   position: relative;

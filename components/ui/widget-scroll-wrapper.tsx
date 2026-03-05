@@ -2,30 +2,63 @@
 
 import { useState, useRef, useCallback, useEffect } from "react"
 
+type WidgetMode = "always" | "hover"
+
 interface WidgetScrollWrapperProps {
   children: React.ReactNode
   className?: string
   style?: React.CSSProperties
+  /**
+   * `"always"` — iframe is always interactive (for click-only widgets like
+   *              Gainers/Losers that have no internal scroll).
+   * `"hover"`  — Desktop: hover to activate, mouse-leave to deactivate.
+   *              Mobile: long-press (500 ms) to activate, auto-deactivates after 6 s.
+   *              Default mode.
+   */
+  mode?: WidgetMode
 }
 
 /**
- * WidgetScrollWrapper — prevents embedded iframes (TradingView, Finlogix, etc.)
- * from hijacking page scroll on both mobile and desktop.
+ * WidgetScrollWrapper
  *
- * Approach: CSS `pointer-events: none !important` on child iframes when the
- * wrapper is inactive. This means wheel / touch events pass straight through
- * the iframe to the parent DOM → native smooth scrolling with zero JS in the
- * scroll path (no onWheel, no scrollBy, no jitter).
+ * Prevents embedded iframes from hijacking page scroll while letting users
+ * interact with widgets when they intend to.
  *
- *  Desktop  — click anywhere on widget area to activate; mouse-leave deactivates.
- *  Mobile   — long-press (500 ms hold) to activate; auto-deactivates after 6 s.
- *  Keyboard — Enter / Space activates.
+ * Uses CSS `pointer-events: none` on child iframes (via `.widget-scroll-wrapper`
+ * class rules in globals.css) when the wrapper is not active. Events fall through
+ * to the parent DOM → native smooth scrolling, zero JS in the scroll path.
  */
 export default function WidgetScrollWrapper({
   children,
   className = "",
   style,
+  mode = "hover",
 }: WidgetScrollWrapperProps) {
+  // "always" mode: render with active class permanently, no event handlers
+  if (mode === "always") {
+    return (
+      <div
+        className={`widget-scroll-wrapper widget-active relative ${className}`}
+        style={style}
+      >
+        {children}
+      </div>
+    )
+  }
+
+  return <HoverWrapper className={className} style={style}>{children}</HoverWrapper>
+}
+
+// ── Hover mode component (separated so hooks are unconditional) ──
+function HoverWrapper({
+  children,
+  className = "",
+  style,
+}: {
+  children: React.ReactNode
+  className?: string
+  style?: React.CSSProperties
+}) {
   const [isActive, setIsActive] = useState(false)
   const [showHint, setShowHint] = useState(false)
   const [hasShownHint, setHasShownHint] = useState(false)
@@ -33,24 +66,23 @@ export default function WidgetScrollWrapper({
   const hintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastTouchRef = useRef(0)
+  const canHover = useRef(true)
 
-  // Detect touch device once on mount
-  const isTouchDevice = useRef(false)
   useEffect(() => {
-    isTouchDevice.current =
-      "ontouchstart" in window || navigator.maxTouchPoints > 0
+    canHover.current = window.matchMedia(
+      "(hover: hover) and (pointer: fine)",
+    ).matches
   }, [])
 
-  // ── Activate widget interaction ──
+  // ── Activate ──
   const activate = useCallback(() => {
     setIsActive(true)
     setShowHint(false)
     if (hintTimeoutRef.current) clearTimeout(hintTimeoutRef.current)
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
 
-    // Desktop: deactivates on mouseLeave only (no timer)
-    // Touch:   auto-deactivate after 6 s
-    if (isTouchDevice.current) {
+    // Only auto-deactivate on non-hover (touch) devices
+    if (!canHover.current) {
       timeoutRef.current = setTimeout(() => setIsActive(false), 6000)
     }
   }, [])
@@ -63,38 +95,33 @@ export default function WidgetScrollWrapper({
     setShowHint(false)
   }, [])
 
-  // ── Desktop: show hint once on first hover ──
+  // ── Desktop: hover activates (no click needed) ──
   const handleMouseEnter = useCallback(() => {
-    if (!isActive && !hasShownHint) {
+    if (!canHover.current) return
+    activate()
+    if (!hasShownHint) {
       setShowHint(true)
       setHasShownHint(true)
-      hintTimeoutRef.current = setTimeout(() => setShowHint(false), 1500)
+      hintTimeoutRef.current = setTimeout(() => setShowHint(false), 1000)
     }
-  }, [isActive, hasShownHint])
+  }, [activate, hasShownHint])
 
   const handleMouseLeave = useCallback(() => {
+    if (!canHover.current) return
     deactivate()
   }, [deactivate])
-
-  // ── Desktop click activates (ignore touch-emulated clicks) ──
-  const handleClick = useCallback(() => {
-    if (Date.now() - lastTouchRef.current < 500) return
-    activate()
-  }, [activate])
 
   // ── Mobile: long-press (500 ms) to activate ──
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
       lastTouchRef.current = Date.now()
 
-      // Show hint on first touch
       if (!hasShownHint) {
         setShowHint(true)
         setHasShownHint(true)
         hintTimeoutRef.current = setTimeout(() => setShowHint(false), 1500)
       }
 
-      // Start long-press timer
       longPressRef.current = setTimeout(() => {
         activate()
         if (navigator.vibrate) navigator.vibrate(30)
@@ -104,7 +131,6 @@ export default function WidgetScrollWrapper({
   )
 
   const handleTouchMove = useCallback(() => {
-    // Finger moved → it's a scroll gesture, cancel long-press
     if (longPressRef.current) {
       clearTimeout(longPressRef.current)
       longPressRef.current = null
@@ -118,7 +144,7 @@ export default function WidgetScrollWrapper({
     }
   }, [])
 
-  // ── Keyboard: Enter / Space activates ──
+  // ── Keyboard: Enter / Space ──
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -129,7 +155,7 @@ export default function WidgetScrollWrapper({
     [activate],
   )
 
-  // Cleanup all timers
+  // Cleanup timers
   useEffect(() => {
     return () => {
       if (timeoutRef.current) clearTimeout(timeoutRef.current)
@@ -144,14 +170,13 @@ export default function WidgetScrollWrapper({
       style={style}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
-      onClick={handleClick}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       onKeyDown={handleKeyDown}
       role="group"
       tabIndex={0}
-      aria-label="Interactive widget — click or hold to activate"
+      aria-label="Interactive widget — hover or hold to activate"
     >
       {children}
 
@@ -159,7 +184,7 @@ export default function WidgetScrollWrapper({
       {showHint && !isActive && (
         <div className="absolute inset-0 z-50 flex items-center justify-center pointer-events-none">
           <span className="text-xs text-white/70 bg-black/60 px-3 py-1.5 rounded-full backdrop-blur-sm border border-white/10 select-none animate-pulse">
-            {isTouchDevice.current ? "Hold to interact" : "Click to interact"}
+            Hold to interact
           </span>
         </div>
       )}

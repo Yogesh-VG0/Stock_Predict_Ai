@@ -49,7 +49,7 @@ function TradingViewHotlistsWidget() {
   }, [])
 
   return (
-    <WidgetScrollWrapper>
+    <WidgetScrollWrapper mode="always">
       <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden p-2">
         <div 
           ref={containerRef} 
