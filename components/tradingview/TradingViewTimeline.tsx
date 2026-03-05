@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, memo } from "react"
+import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
 
 function TradingViewTimeline() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -39,13 +40,15 @@ function TradingViewTimeline() {
   }, [])
 
   return (
-    <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden p-2">
-      <div 
-        ref={containerRef} 
-        className="tradingview-widget-container" 
-        style={{ minHeight: 350 }}
-      />
-    </div>
+    <WidgetScrollWrapper>
+      <div className="rounded-lg bg-zinc-900 border border-zinc-800 shadow-lg overflow-hidden p-2">
+        <div 
+          ref={containerRef} 
+          className="tradingview-widget-container" 
+          style={{ minHeight: 350 }}
+        />
+      </div>
+    </WidgetScrollWrapper>
   )
 }
 

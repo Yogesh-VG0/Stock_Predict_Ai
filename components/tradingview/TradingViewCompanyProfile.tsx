@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, memo } from "react"
+import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
 
 interface TradingViewCompanyProfileProps {
   symbol: string
@@ -50,11 +51,13 @@ function TradingViewCompanyProfile({ symbol, height = 550 }: TradingViewCompanyP
   }, [symbol, height])
 
   return (
-    <div 
-      ref={containerRef} 
-      className="tradingview-widget-container" 
-      style={{ minHeight: height, width: "100%" }}
-    />
+    <WidgetScrollWrapper>
+      <div 
+        ref={containerRef} 
+        className="tradingview-widget-container" 
+        style={{ minHeight: height, width: "100%" }}
+      />
+    </WidgetScrollWrapper>
   )
 }
 

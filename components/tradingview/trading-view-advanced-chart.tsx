@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { Loader2 } from "lucide-react"
+import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
 
 interface TradingViewAdvancedChartProps {
   symbol: string
@@ -139,25 +140,27 @@ export default function TradingViewAdvancedChart({
   }, [isReady, widgetKey, symbol, height, autosize, containerId])
 
   return (
-    <div className={`relative w-full ${className}`}>
-      {isLoading && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-10 rounded-lg"
-        >
-          <div className="flex flex-col items-center gap-2">
-            <Loader2 className="h-8 w-8 text-emerald-500 animate-spin" />
-            <p className="text-sm text-zinc-300">Loading chart for {symbol}...</p>
-          </div>
-        </motion.div>
-      )}
-      <div
-        id={containerId}
-        ref={containerRef}
-        className="w-full rounded-lg overflow-hidden border border-zinc-800 bg-black"
-        style={{ height: autosize ? "100%" : `${height}px` }}
-      />
-    </div>
+    <WidgetScrollWrapper className={className}>
+      <div className="relative w-full">
+        {isLoading && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-10 rounded-lg"
+          >
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="h-8 w-8 text-emerald-500 animate-spin" />
+              <p className="text-sm text-zinc-300">Loading chart for {symbol}...</p>
+            </div>
+          </motion.div>
+        )}
+        <div
+          id={containerId}
+          ref={containerRef}
+          className="w-full rounded-lg overflow-hidden border border-zinc-800 bg-black"
+          style={{ height: autosize ? "100%" : `${height}px` }}
+        />
+      </div>
+    </WidgetScrollWrapper>
   )
 }

@@ -127,3 +127,27 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #52525b;
 }
+
+/* ── Widget scroll-trap prevention ── */
+.widget-scroll-wrapper {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: auto;
+  touch-action: pan-y;
+}
+
+.widget-scroll-overlay {
+  touch-action: pan-y; /* allow page vertical scroll through overlay */
+  z-index: 50;
+}
+
+.tradingview-widget-container,
+.finlogix-container {
+  position: relative;
+  z-index: 0;
+  overscroll-behavior: contain;
+}
+
+.tradingview-widget-container iframe,
+.finlogix-container iframe {
+  overscroll-behavior: contain;
+}
