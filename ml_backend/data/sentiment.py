@@ -62,7 +62,7 @@ _FINNHUB_MAX_DELAY = 30.0   # cap
 
 async def _finnhub_get_with_retry(url: str, params: dict, ticker: str, label: str) -> dict:
     """HTTP GET with retry on 429/5xx/timeout.  Returns parsed JSON or {}."""
-    _timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
+    _timeout = aiohttp.ClientTimeout(total=45, connect=10, sock_read=30)
     last_exc = None
     for attempt in range(1, _FINNHUB_MAX_RETRIES + 1):
         try:
@@ -627,7 +627,7 @@ class SentimentAnalyzer:
         
         try:
             await finnhub_limiter.acquire()
-            finnhub_client = finnhub.Client(api_key=api_key)
+            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
             from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
             to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             
@@ -687,7 +687,7 @@ class SentimentAnalyzer:
                 return cached
             
             await finnhub_limiter.acquire()
-            finnhub_client = finnhub.Client(api_key=api_key)
+            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
             data = finnhub_client.quote(ticker)
             
             # Transform to match expected format
@@ -1476,7 +1476,7 @@ class SentimentAnalyzer:
             return {"finnhub_recommendation_sentiment": 0.0, "finnhub_recommendation_volume": 0, "finnhub_recommendation_confidence": 0.0}
         try:
             await finnhub_limiter.acquire()
-            finnhub_client = finnhub.Client(api_key=api_key)
+            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
             # Run sync client in threadpool to avoid blocking event loop
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
@@ -2330,7 +2330,7 @@ class SentimentAnalyzer:
             to_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
             import finnhub
-            finnhub_client = finnhub.Client(api_key=api_key)
+            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
             
             # Use Finnhub's insider sentiment API
             data = finnhub_client.stock_insider_sentiment(ticker, from_date, to_date)

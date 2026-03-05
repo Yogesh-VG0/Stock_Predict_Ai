@@ -62,7 +62,9 @@ class ShortInterestAnalyzer:
             'Sec-Fetch-Site': 'same-origin',
         }
         
-        url = f"https://api.nasdaq.com/api/quote/{ticker.upper()}/short-interest"
+        # Nasdaq API uses slash-separated share classes (e.g. BRK/B not BRK-B)
+        api_ticker = ticker.upper().replace("-", "/")
+        url = f"https://api.nasdaq.com/api/quote/{api_ticker}/short-interest"
         params = {
             'assetClass': 'stocks'
         }
@@ -685,8 +687,8 @@ class ShortInterestAnalyzer:
             # Try the short interest specific page first
             url = f"https://finviz.com/quote.ashx?t={ticker}&p=d&ty=si"
             
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=30) as response:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+                async with session.get(url, headers=headers) as response:
                     if response.status == 200:
                         html = await response.text()
                         soup = BeautifulSoup(html, 'html.parser')
