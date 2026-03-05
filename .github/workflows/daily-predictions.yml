@@ -50,6 +50,7 @@ jobs:
           REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: "StockPredictAI/1.0"
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           PYTHONPATH: ${{ github.workspace }}
         run: |
           echo "===== Running sentiment cron ====="
