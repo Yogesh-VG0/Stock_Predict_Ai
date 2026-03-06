@@ -94,57 +94,14 @@ LIGHTGBM_PARAMS = {
 FEATURE_PRUNING = {
     "enabled": True,
     "top_k": 35,                       # v3.0: 30→35 (retain more signal with improved regularization)
-    "protected_features": [            # Core stability features — never prune
+    "protected_features": [            # Core stability features — never prune (trimmed from 45→15 to let pruning work)
         "log_return_1d", "log_return_5d", "log_return_21d",
         "volatility_20d", "volume_ratio", "rsi",
         "sector_id", "ticker_id",
-        "vix_return_1d", "vix_level",             # cross-asset regime
-        "sector_etf_return_1d",                    # sector rotation
-        # Sector regime (v2)
-        "sector_etf_return_20d",                   # sector momentum
-        "excess_vs_sector_5d",                     # stock vs sector excess
-        "sector_etf_vol_20d",                      # sector volatility
-        "sector_momentum_rank",                    # cross-sector rotation rank (v3)
-        # Sentiment (v2)
-        "sent_mean_7d",                            # rolling sentiment
-        "sent_momentum",                           # sentiment regime change
-        "news_count_7d",                           # news flow intensity
-        "news_spike_1d",                           # unusual coverage burst detector
-        "sent_available",                          # missingness indicator (0=no data, 1=data)
-        # Insider (v4) — direct transaction features
-        "insider_net_value_30d",                   # dollar flow direction
-        "insider_buy_ratio_30d",                   # buy/sell balance
-        "insider_cluster_buying",                  # cluster-buying alpha signal
-        "insider_activity_z_90d",                  # abnormal activity detector
-        "insider_available",                       # missingness indicator (0=no insider data)
-        # Technical (v4)
-        "rsi_divergence",                          # bullish/bearish RSI divergence
-        # FMP analyst features (v1.5) — fundamental signals from analyst consensus
-        "analyst_sentiment_7d",                    # analyst estimates consensus (7d rolling)
-        "analyst_rating_7d",                       # overall analyst rating score (7d rolling)
-        # Earnings features (v2.0) — post-earnings drift signals
-        "earnings_surprise",                       # EPS actual - estimated
-        "earnings_beat",                           # beat/miss binary signal
-        "earnings_recency",                        # decay weight since last earnings
-        # Fundamental features (v2.0) — valuation signals
-        "fund_pe_ratio",                           # price-to-earnings ratio
-        "fund_roe",                                # return on equity
-        "fund_beta",                               # market sensitivity
-        # Short interest features (v2.0) — crowding signals
-        "si_short_float_pct",                      # short interest % of float
-        "si_days_to_cover",                        # squeeze pressure metric
-        # Market regime detection (v3.0) — hedge-fund signals
-        "regime_score",                            # continuous risk-on/risk-off regime (-1 to +1)
-        "regime_bull_low_vol",                     # bull market + low volatility flag
-        "regime_bear_high_vol",                    # bear market + high volatility flag
-        # Volatility clustering (v3.0) — GARCH-lite features
-        "vol_cluster_autocorr",                    # persistence of volatility shocks
-        "vol_ratio_5_20",                          # short-term / long-term vol ratio
-        "vol_term_slope",                          # vol term structure (inverted = fear)
-        # Sector momentum (v3.0) — cross-sectional alpha signals
-        "excess_momentum_5d",                      # stock momentum minus sector momentum
-        "dual_momentum_flag",                      # absolute + relative momentum alignment
-        "momentum_reversal",                       # 5-day momentum sign-flip detector
+        "vix_return_1d", "vix_level",
+        "sent_mean_7d", "sent_available",
+        "insider_available",
+        "regime_score", "vol_ratio_5_20",
     ],
     "min_features": 15,                # Don't prune below this many features
 }

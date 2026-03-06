@@ -14,6 +14,16 @@ const {
   getSankeyData
 } = require('../controllers/stockController');
 
+// Validate :symbol param — reject malformed tickers early
+const VALID_SYMBOL_RE = /^[A-Z0-9.\-]{1,10}$/;
+router.param('symbol', (req, res, next, val) => {
+  if (!VALID_SYMBOL_RE.test(val.toUpperCase())) {
+    return res.status(400).json({ error: 'Invalid stock symbol' });
+  }
+  req.params.symbol = val.toUpperCase();
+  next();
+});
+
 // Specific routes first to avoid shadowing by /:symbol
 // Get enhanced AI analysis (detailed sentiment + factors)
 router.get('/:symbol/analysis', getAIAnalysis);

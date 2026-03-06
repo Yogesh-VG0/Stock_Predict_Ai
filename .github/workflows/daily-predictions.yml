@@ -105,67 +105,31 @@ jobs:
         run: |
           set -e
 
-          # 8 batches × ~9-10 tickers = 75 stocks
-          # Models are already trained above; --predict-only loads them from disk.
-          BATCHES=(
-            "AAPL MSFT NVDA GOOGL META AVGO ORCL CRM AMD INTC"
-            "CSCO ADBE QCOM TXN INTU AMAT IBM PYPL PLTR"
-            "AMZN TSLA HD NFLX LOW SBUX NKE MCD DIS BKNG"
-            "TGT JPM V MA BAC WFC GS MS AXP C"
-            "BRK-B XOM CVX JNJ UNH LLY PFE ABBV MRK AMGN"
-            "GILD ISRG CVS WMT COST PG KO PEP MDLZ"
-            "CAT HON BA RTX LMT DE GE FDX UPS"
-            "CMCSA VZ T CHTR TMUS LIN NEE AMT"
-          )
-
-          FAILED_BATCHES=()
-          for idx in "${!BATCHES[@]}"; do
-            BATCH="${BATCHES[$idx]}"
-            BATCH_NUM=$((idx + 1))
-            echo ""
-            echo "===== Batch $BATCH_NUM/${#BATCHES[@]}: $BATCH ====="
-
-            SUCCESS=0
-            for attempt in 1 2 3; do
-              echo "  Attempt $attempt..."
-              if python -m ml_backend.scripts.run_pipeline --predict-only --tickers $BATCH 2>&1 | tee "batch_${BATCH_NUM}_attempt_${attempt}.log"; then
-                SUCCESS=1
-                break
-              fi
-              
-              if grep -q "No saved models found" "batch_${BATCH_NUM}_attempt_${attempt}.log" 2>/dev/null; then
-                echo "  *** CRITICAL: No saved models found. Failing job immediately. ***"
-                exit 1
-              fi
-
-              echo "  Attempt $attempt failed. Last error:"
-              tail -50 "batch_${BATCH_NUM}_attempt_${attempt}.log" || echo "  (log file not found)"
-              sleep $((attempt * 20))
-            done
-
-            if [ "$SUCCESS" -eq 0 ]; then
-              echo "  *** Batch $BATCH_NUM FAILED after 3 attempts ***"
-              FAILED_BATCHES+=("$BATCH_NUM")
+          # Load models once and predict all 75 tickers in one process.
+          # --predict-only --all-tickers loads saved models from disk and
+          # iterates every ticker defined in TICKERS (constants.py).
+          echo "===== Generating predictions for all tickers ====="
+          SUCCESS=0
+          for attempt in 1 2 3; do
+            echo "  Attempt $attempt..."
+            if python -m ml_backend.scripts.run_pipeline --predict-only --all-tickers 2>&1 | tee "predictions_attempt_${attempt}.log"; then
+              SUCCESS=1
+              break
             fi
 
-            # Rate limit: pause between batches (API courtesy — paces Finnhub 60/min)
-            if [ "$BATCH_NUM" -lt "${#BATCHES[@]}" ]; then
-              sleep 10
-            fi
-          done
-
-          echo ""
-          echo "===== Pipeline Summary ====="
-          echo "Total batches: ${#BATCHES[@]}"
-          echo "Failed batches: ${#FAILED_BATCHES[@]}"
-          if [ "${#FAILED_BATCHES[@]}" -gt 0 ]; then
-            echo "Failed batch numbers: ${FAILED_BATCHES[*]}"
-            # Fail the job if more than 25% of batches failed (2 of 8)
-            if [ "${#FAILED_BATCHES[@]}" -gt 1 ]; then
-              echo "Too many failures (${#FAILED_BATCHES[@]}/8 batches failed) — failing job."
+            if grep -q "No saved models found" "predictions_attempt_${attempt}.log" 2>/dev/null; then
+              echo "  *** CRITICAL: No saved models found. Failing job immediately. ***"
               exit 1
             fi
-            echo "Partial success — continuing."
+
+            echo "  Attempt $attempt failed. Last error:"
+            tail -50 "predictions_attempt_${attempt}.log" || echo "  (log file not found)"
+            sleep $((attempt * 20))
+          done
+
+          if [ "$SUCCESS" -eq 0 ]; then
+            echo "*** Prediction run FAILED after 3 attempts ***"
+            exit 1
           fi
 
       - name: Verify predictions are fresh

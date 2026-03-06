@@ -61,10 +61,10 @@ async def _require_api_key(
     """Dependency that rejects requests without a valid API key.
 
     Accepts the key via ``X-API-Key`` header **or** ``Authorization: Bearer <key>``.
-    When ML_API_KEY env var is unset the guard is disabled (dev mode).
+    When ML_API_KEY env var is unset, rejects all requests (fail closed).
     """
     if not _API_KEY:
-        return  # no key configured — allow (dev / local)
+        raise HTTPException(status_code=503, detail="Server misconfigured: ML_API_KEY not set")
     token = x_api_key
     if not token and authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:]
@@ -1777,7 +1777,7 @@ async def get_optimization_insights(ticker: str):
         logger.error(f"Error getting optimization insights for {ticker}: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting insights: {str(e)}")
 
-@app.post("/optimization/trigger/{ticker}")
+@app.post("/optimization/trigger/{ticker}", dependencies=[Depends(_require_api_key)])
 async def trigger_optimization(ticker: str):
     """Trigger a comprehensive data optimization for a ticker."""
     try:
@@ -1816,7 +1816,7 @@ async def trigger_optimization(ticker: str):
         logger.error(f"Error triggering optimization for {ticker}: {e}")
         raise HTTPException(status_code=500, detail=f"Error triggering optimization: {str(e)}")
 
-@app.post("/predict/{ticker}")
+@app.post("/predict/{ticker}", dependencies=[Depends(_require_api_key)])
 async def predict_stock(ticker: str, request: PredictionRequest):
     """
     Get predictions for next day, 7 days, and 30 days with consistent feature engineering.
@@ -1868,7 +1868,7 @@ async def predict_stock(ticker: str, request: PredictionRequest):
         logger.error(f"Error predicting {ticker}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/train/{ticker}")
+@app.post("/train/{ticker}", dependencies=[Depends(_require_api_key)])
 async def train_models(ticker: str, request: TrainingRequest):
     """
     Train models for a specific ticker with improved feature engineering.
@@ -1976,7 +1976,7 @@ async def health_check():
             status_code=503,
         )
 
-@app.get("/debug/sec-filing-extraction/{ticker}")
+@app.get("/debug/sec-filing-extraction/{ticker}", dependencies=[Depends(_require_api_key)])
 async def debug_sec_filing_extraction(ticker: str):
     """Debug endpoint to test SEC filing text extraction for a specific ticker."""
     try:
@@ -2876,7 +2876,8 @@ async def get_stored_ai_explanation(ticker: str, window: str = "comprehensive"):
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 @app.post("/api/v1/explain/batch", tags=["AI Explanations"], summary="Batch Generate AI Explanations", 
-         description="Generate AI explanations for all 25 S&P tickers in batch")
+         description="Generate AI explanations for all 25 S&P tickers in batch",
+         dependencies=[Depends(_require_api_key)])
 async def batch_generate_ai_explanations(date: Optional[str] = None):
     """
     Generate comprehensive AI explanations for all 25 S&P tickers in batch.

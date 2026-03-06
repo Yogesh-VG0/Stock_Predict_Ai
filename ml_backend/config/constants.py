@@ -14,7 +14,7 @@ MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "stock_predictor")
 # Nasdaq short-interest unavailable): ACN, AIG, ABT, BK, BLK, BMY, CL,
 # COF, COP, DHR, DUK, EMR, GD, MDT, MET, MMM, MO, NOW, PM, SCHW, SO,
 # SPG, TMO, UNP, USB.
-TOP_100_TICKERS = [
+TICKERS = [
     # Technology (19)
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "ORCL", "CRM",
     "AMD", "INTC", "CSCO", "ADBE", "QCOM", "TXN", "INTU", "AMAT",
@@ -38,6 +38,8 @@ TOP_100_TICKERS = [
     # Other (3)
     "LIN", "NEE", "AMT",
 ]
+# Backward-compat alias (the list was historically called TOP_100_TICKERS)
+TOP_100_TICKERS = TICKERS
 
 # API Configuration
 API_PREFIX = "/api"
@@ -149,18 +151,18 @@ TICKER_SUBREDDITS = {
 # Deterministic ticker_id for pooled models — HASH-BASED for stability.
 # Sequential IDs shift when tickers are added/removed, corrupting trained models.
 import hashlib as _hashlib
-_ALL_TICKERS = sorted(set(TOP_100_TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
+_ALL_TICKERS = sorted(set(TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
 TICKER_TO_ID = {
     ticker: int(_hashlib.sha256(ticker.encode()).hexdigest()[:6], 16)
     for ticker in _ALL_TICKERS
 }
 
 
-# Prediction Windows
+# Prediction Windows (values = trading days, not calendar days)
 PREDICTION_WINDOWS = {
     "next_day": 1,
-    "7_day": 7,
-    "30_day": 30
+    "7_day": 5,     # 5 trading days ≈ 1 calendar week
+    "30_day": 21    # 21 trading days ≈ 1 calendar month
 }
 
 # MongoDB Collections
