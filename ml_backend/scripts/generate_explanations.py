@@ -339,7 +339,9 @@ BASE_BACKOFF = 2         # Exponential base
 
 # Global rate limiter: track last API call time (GLOBAL, not per-model) to prevent hammering
 _last_api_call_time: Dict[str, float] = {}
-_MIN_CALL_INTERVAL = 12.0  # Minimum seconds between ANY API call (≈5 RPM; raised from 8s to eliminate 429s)
+# Groq free tier: 30 RPM for llama-3.1-8b-instant → 1 req every 2s minimum.
+# Use 20s spacing (≈3 RPM) to stay well within limits and avoid 429s entirely.
+_MIN_CALL_INTERVAL = 20.0
 
 # Per-model RPD tracking within this process run
 _model_rpd_count: Dict[str, int] = {}
@@ -413,7 +415,7 @@ def _rate_limit_wait(model: str):
 
 def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]]:
     """
-    Call Groq API (much better free tier limits).
+    Call Groq API with automatic retry on 429 rate-limit errors.
     
     Returns (explanation_text, error_type) where error_type is None on success,
     or "quota_exceeded", "rate_limit", or "api_error" on failure.
@@ -429,55 +431,65 @@ def _call_groq(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]
     
     client = Groq(api_key=api_key)
     
-    try:
-        # Rate limit: wait if needed before making API call
-        _rate_limit_wait(model)
-        
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": (
-                    "You are a senior equity analyst at a fintech platform writing concise "
-                    "market intelligence briefings for retail investors. Your style is "
-                    "Bloomberg-professional but accessible. You ONLY cite data provided in "
-                    "the prompt — never fabricate numbers, headlines, or analyst targets. "
-                    "Translate all ML/quantitative jargon into plain English."
-                )},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=2048,
-        )
-        
-        if response and response.choices and len(response.choices) > 0:
-            explanation_text = response.choices[0].message.content
-            if explanation_text:
-                _model_rpd_count[model] = _model_rpd_count.get(model, 0) + 1
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            # Rate limit: wait if needed before making API call
+            _rate_limit_wait(model)
+            
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": (
+                        "You are a senior equity analyst at a fintech platform writing concise "
+                        "market intelligence briefings for retail investors. Your style is "
+                        "Bloomberg-professional but accessible. You ONLY cite data provided in "
+                        "the prompt — never fabricate numbers, headlines, or analyst targets. "
+                        "Translate all ML/quantitative jargon into plain English."
+                    )},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.2,
+                max_tokens=2048,
+            )
+            
+            if response and response.choices and len(response.choices) > 0:
+                explanation_text = response.choices[0].message.content
+                if explanation_text:
+                    _model_rpd_count[model] = _model_rpd_count.get(model, 0) + 1
+                    logger.info(
+                        "Groq %s response for %s: %d chars (RPD usage: %d)",
+                        model, ticker, len(explanation_text), _model_rpd_count[model],
+                    )
+                    return (explanation_text, None)
+            
+            return ("AI explanation unavailable: empty response from Groq", "api_error")
+            
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
+            is_quota = "quota" in error_str or "limit" in error_str
+            
+            if is_rate_limit:
+                # Parse Retry-After hint and respect it
+                retry_after = _parse_retry_after(error_str)
+                sleep_secs = max(retry_after + 3, 20)  # At least 20s, prefer Retry-After hint + margin
                 logger.info(
-                    "Groq %s response for %s: %d chars (RPD usage: %d)",
-                    model, ticker, len(explanation_text), _model_rpd_count[model],
+                    "Groq 429 for %s (attempt %d/%d) — sleeping %ds (Retry-After=%ds)",
+                    ticker, attempt, MAX_RETRIES, sleep_secs, retry_after,
                 )
-                return (explanation_text, None)
-        
-        return ("AI explanation unavailable: empty response from Groq", "api_error")
-        
-    except Exception as e:
-        error_str = str(e).lower()
-        is_rate_limit = "429" in error_str or "rate limit" in error_str or "resource_exhausted" in error_str
-        is_quota = "quota" in error_str or "limit" in error_str
-        
-        if is_rate_limit:
-            # Parse Retry-After hint and respect it; add 2s safety margin instead of always 30s
-            retry_after = _parse_retry_after(error_str)
-            sleep_secs = max(retry_after + 2, 15)  # At least 15s on any 429, prefer Retry-After hint
-            logger.info("Groq 429 for %s — sleeping %ds (Retry-After=%ds)", ticker, sleep_secs, retry_after)
-            time.sleep(sleep_secs)
-            return (f"AI explanation unavailable: Groq API rate limited ({model})", "rate_limit")
-        elif is_quota:
-            return (f"AI explanation unavailable: Groq API quota exceeded ({model})", "quota_exceeded")
-        else:
-            logger.error("Groq API error for %s (%s): %s", ticker, model, e)
-            return (f"AI explanation unavailable: Groq API error: {str(e)[:100]}", "api_error")
+                time.sleep(sleep_secs)
+                # Update global timer so the next call also respects the interval
+                _last_api_call_time["__global__"] = time.time()
+                if attempt < MAX_RETRIES:
+                    continue  # retry
+                return (f"AI explanation unavailable: Groq API rate limited after {MAX_RETRIES} retries ({model})", "rate_limit")
+            elif is_quota:
+                return (f"AI explanation unavailable: Groq API quota exceeded ({model})", "quota_exceeded")
+            else:
+                logger.error("Groq API error for %s (%s): %s", ticker, model, e)
+                return (f"AI explanation unavailable: Groq API error: {str(e)[:100]}", "api_error")
+    
+    return ("AI explanation unavailable: Groq API failed after retries", "api_error")
 
 
 def _call_gemini(prompt: str, ticker: str, model: str) -> tuple[str, Optional[str]]:

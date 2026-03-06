@@ -14,7 +14,7 @@ env:
   MONGODB_URI: ${{ secrets.MONGODB_URI }}
   PYTHONIOENCODING: utf-8
   # FMP free tier returns 403 on /api/v3/sec_filings — skip FMP SEC fallback
-  # to avoid noisy errors. Kaleidoscope is the primary SEC filings source.
+  # to avoid noisy errors. Kaleidoscope (primary SEC source) is NOT affected.
   SKIP_SEC_FMP: "true"
 
 jobs:

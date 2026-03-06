@@ -327,7 +327,17 @@ class SentimentAnalyzer:
             import finnhub
             api_key = os.getenv("FINNHUB_API_KEY")
             if api_key:
-                self._finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
+                self._finnhub_client = finnhub.Client(api_key=api_key)
+                # finnhub-python >=2.4.20 removed the timeout kwarg from __init__;
+                # set timeout on the underlying requests.Session instead.
+                if hasattr(self._finnhub_client, "_session"):
+                    # requests.Session doesn't have a `.timeout` attr by default,
+                    # but we can monkey-patch `.request` to inject it.
+                    _orig_request = self._finnhub_client._session.request
+                    def _timeout_request(*args, **kwargs):
+                        kwargs.setdefault("timeout", 30)
+                        return _orig_request(*args, **kwargs)
+                    self._finnhub_client._session.request = _timeout_request
         return self._finnhub_client
 
     # ----- Unified text scoring -----
@@ -1042,7 +1052,8 @@ class SentimentAnalyzer:
 
         # Detect CI environment (GitHub Actions sets CI=true)
         _is_ci = os.getenv("CI", "").lower() in ("true", "1")
-        # Respect SKIP_SEC_FMP — when true, skip SEC and FMP entirely
+        # SKIP_SEC_FMP controls only the FMP SEC fallback (free tier 403s).
+        # Kaleidoscope-based SEC is always included when its API key is present.
         _skip_sec_fmp = os.getenv("SKIP_SEC_FMP", "false").lower() == "true"
 
         # Define sentiment sources and their corresponding keys
@@ -1051,23 +1062,22 @@ class SentimentAnalyzer:
         #       free-tier insufficient (25 req/day for 100 tickers).
         sources = [
             self.get_finviz_sentiment,
+            self.get_sec_sentiment,            # Kaleidoscope — always included
             self.get_marketaux_sentiment,
             self.get_rss_news_sentiment,  # This already includes Yahoo + SeekingAlpha
             self.get_reddit_sentiment,
             self.get_finnhub_sentiment,
         ]
         keys = [
-            "finviz", "marketaux", "rss_news", "reddit", "finnhub",
+            "finviz", "sec", "marketaux", "rss_news", "reddit", "finnhub",
         ]
 
         if not _skip_sec_fmp:
-            # Insert SEC after finviz, FMP before finnhub
-            sources.insert(1, self.get_sec_sentiment)
-            keys.insert(1, "sec")
+            # Also include FMP sentiment when not skipped
             sources.insert(-1, self.get_fmp_sentiment)
             keys.insert(-1, "fmp")
         else:
-            logger.info("SKIP_SEC_FMP=true — sec and fmp sources skipped for %s", ticker)
+            logger.info("SKIP_SEC_FMP=true — fmp source skipped for %s (Kaleidoscope SEC still active)", ticker)
 
         # SeekingAlpha comments removed — requires Playwright browser (unusable in CI)
 
