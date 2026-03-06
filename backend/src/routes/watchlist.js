@@ -9,6 +9,25 @@ const {
   subscribeToUpdates
 } = require('../controllers/watchlistController');
 
+// Validate :userId param — alphanumeric + hyphens only (UUID / Firebase UID)
+const VALID_USERID_RE = /^[a-zA-Z0-9_\-]{1,128}$/;
+router.param('userId', (req, res, next, val) => {
+  if (!VALID_USERID_RE.test(val)) {
+    return res.status(400).json({ error: 'Invalid userId' });
+  }
+  next();
+});
+
+// Validate :symbol param on watchlist routes
+const VALID_SYMBOL_RE = /^[A-Z0-9.\-]{1,10}$/;
+router.param('symbol', (req, res, next, val) => {
+  if (!VALID_SYMBOL_RE.test(val.toUpperCase())) {
+    return res.status(400).json({ error: 'Invalid stock symbol' });
+  }
+  req.params.symbol = val.toUpperCase();
+  next();
+});
+
 // Get user's watchlist
 router.get('/:userId', getWatchlist);
 

@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const mongoConnection = require('./config/mongodb');
 const newsRoutes = require('./routes/newsRoutes');
@@ -44,8 +46,33 @@ setTimeout(() => {
 
 // Performance optimizations
 app.use(compression()); // Enable gzip compression for responses
-app.use(cors());
+
+// Security headers via helmet
+app.use(helmet({
+  contentSecurityPolicy: false, // CSP handled by frontend framework
+  crossOriginEmbedderPolicy: false, // Allow embedded TradingView widgets
+}));
+
+// Rate limiting: 200 requests per 15-minute window per IP
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+app.use('/api/', apiLimiter);
+
+// CORS: restrict to known origins (falls back to open in dev)
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
+  : undefined; // undefined = allow all (dev mode)
+app.use(cors(allowedOrigins ? { origin: allowedOrigins, credentials: true } : {}));
+
 app.use(express.json({ limit: '1mb' })); // Limit JSON body size
+
+// Ticker/symbol validation regex (used in route handlers)
+const VALID_SYMBOL_RE = /^[A-Z0-9.\-]{1,10}$/;
 
 // Cache control headers for API responses
 app.use((req, res, next) => {

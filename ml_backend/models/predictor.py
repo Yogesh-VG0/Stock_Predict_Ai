@@ -14,6 +14,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 import lightgbm as lgb
+from sklearn.calibration import CalibratedClassifierCV
 
 from ..config.constants import PREDICTION_WINDOWS
 from ..config.feature_config_v1 import (
@@ -697,8 +698,15 @@ class StockPredictor:
                                 callbacks=[lgb.log_evaluation(0)],
                             )
                         self.pooled_sign_models[window_name] = sign_clf
+                        # Platt-scale (sigmoid calibration) on the val set
+                        try:
+                            cal_clf = CalibratedClassifierCV(sign_clf, method="sigmoid", cv="prefit")
+                            cal_clf.fit(sign_X_val_df, sign_y_val)
+                            self.pooled_sign_models[window_name] = cal_clf
+                        except Exception as cal_err:
+                            logger.debug("Platt calibration skipped for pooled-%s: %s", window_name, cal_err)
                         # Evaluate on val set
-                        sign_proba = sign_clf.predict_proba(sign_X_val_df)[:, 1]
+                        sign_proba = self.pooled_sign_models[window_name].predict_proba(sign_X_val_df)[:, 1]
                         sign_acc = float(np.mean((sign_proba > 0.5) == sign_y_val))
                         pooled_meta["sign_classifier_accuracy"] = sign_acc
                         n_final_trees = sign_clf.booster_.num_trees()
@@ -924,6 +932,13 @@ class StockPredictor:
                             callbacks=[lgb.log_evaluation(0)],
                         )
                     self.sign_models[key] = sign_clf_tk
+                    # Platt-scale on val set
+                    try:
+                        cal_tk = CalibratedClassifierCV(sign_clf_tk, method="sigmoid", cv="prefit")
+                        cal_tk.fit(X_val_df, sign_y_val)
+                        self.sign_models[key] = cal_tk
+                    except Exception as cal_err:
+                        logger.debug("Platt calibration skipped for %s-%s: %s", ticker, window_name, cal_err)
             except Exception as e:
                 logger.debug("Could not train sign classifier for %s-%s: %s", ticker, window_name, e)
             # Record training cutoff for OOS backtest boundary (ticker bucket)
@@ -1115,6 +1130,32 @@ class StockPredictor:
             ticker_meta = self.metadata.get(key)
             ticker_model = self.models.get(key)
 
+            # Kill switch: refuse to predict if pooled model is anti-correlated on holdout
+            pooled_holdout_corr = pooled_meta.get("holdout_correlation", 0.0)
+            if pooled_holdout_corr < -0.05 and pooled_model is not None:
+                logger.warning(
+                    "KILL-SWITCH: Pooled %s has negative holdout correlation (%.3f). "
+                    "Predictions suppressed for %s.",
+                    window_name, pooled_holdout_corr, ticker,
+                )
+                results[window_name] = {
+                    "prediction": 0.0, "alpha": 0.0, "alpha_pct": 0.0,
+                    "price_change": 0.0, "predicted_price": current_price,
+                    "alpha_implied_price": current_price,
+                    "confidence": 0.0, "current_price": current_price,
+                    "prob_positive": 0.5, "prob_above_threshold": 0.5,
+                    "trade_recommended": False,
+                    "trade_threshold": TRADE_MIN_ALPHA,
+                    "normalized_return": 0.0,
+                    "horizon_days": TARGET_CONFIG.get(window_name, {}).get("horizon", 1),
+                    "min_return_for_profit": ROUND_TRIP_COST_BPS / 10000,
+                    "covers_transaction_cost": False,
+                    "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
+                    "reason": "model_anti_correlated",
+                    "model_version": MODEL_VERSION,
+                }
+                continue
+
             # Determine which model(s) to use
             use_ensemble = False
             model = pooled_model
@@ -1199,7 +1240,6 @@ class StockPredictor:
                 X_full, current_cols, model_cols,
                 ticker=ticker, window=window_name,
             )
-            import pandas as pd
             X_pred_df = pd.DataFrame(X_pred, columns=model_cols)
 
             # --- Ensemble or single-model prediction ---
@@ -1251,10 +1291,12 @@ class StockPredictor:
                     clf_prob = float(sign_model.predict_proba(X_pred_df)[0, 1])
                     # Blend: if sign model is undertrained (few trees), mix with
                     # Gaussian CDF so a near-constant classifier doesn't dominate.
-                    n_sign_trees = getattr(sign_model, "n_iter_", 0) or 0
+                    # Unwrap CalibratedClassifierCV to inspect the base estimator
+                    _base = getattr(sign_model, 'estimator', sign_model)
+                    n_sign_trees = getattr(_base, "n_iter_", 0) or 0
                     if n_sign_trees == 0:
                         try:
-                            n_sign_trees = sign_model.booster_.num_trees()
+                            n_sign_trees = _base.booster_.num_trees()
                         except Exception:
                             n_sign_trees = 50  # assume decent if we can't check
                     if n_sign_trees < 15:
@@ -1423,15 +1465,32 @@ class StockPredictor:
         # Note: sigma comes from model metadata, not calculated here
         
         for window_name in self.prediction_windows:
-            # Select model
-            model = self.pooled_models.get(window_name)
-            meta_w = self.pooled_metadata.get(window_name, {})
+            # --- Ensemble logic (mirrors predict_all_windows) ---
+            pooled_model = self.pooled_models.get(window_name)
+            pooled_meta = self.pooled_metadata.get(window_name, {})
             key = (ticker, window_name)
             ticker_meta = self.metadata.get(key)
-            
-            # Use ticker model if production ready and enough data
-            if ticker_meta is not None and ticker_meta.get("n_train", 0) >= 300 and ticker_meta.get("production_ready", False):
-                model = self.models.get(key, model)
+            ticker_model = self.models.get(key)
+
+            # Kill switch: skip horizon if pooled model is anti-correlated
+            pooled_holdout_corr = pooled_meta.get("holdout_correlation", 0.0)
+            if pooled_holdout_corr < -0.05 and pooled_model is not None:
+                continue
+
+            use_ensemble = False
+            model = pooled_model
+            meta_w = pooled_meta
+            if (ticker_meta is not None
+                    and ticker_meta.get("n_train", 0) >= 300
+                    and ticker_meta.get("production_ready", False)
+                    and ticker_model is not None
+                    and pooled_model is not None):
+                use_ensemble = True
+            elif (ticker_meta is not None
+                    and ticker_meta.get("n_train", 0) >= 300
+                    and ticker_meta.get("production_ready", False)
+                    and ticker_model is not None):
+                model = ticker_model
                 meta_w = ticker_meta
             
             if model is None:
@@ -1444,8 +1503,24 @@ class StockPredictor:
             if len(pred_cols) == X_pred.shape[1]:
                 X_pred = pd.DataFrame(X_pred, columns=pred_cols)
 
-            # Vectorized prediction
-            preds_ret = model.predict(X_pred)
+            # Vectorized prediction — ensemble or single-model
+            if use_ensemble:
+                pooled_preds = pooled_model.predict(X_pred)
+                tk_model_cols = ticker_meta.get("feature_columns")
+                if tk_model_cols:
+                    X_tk = self._select_features(features, current_cols, tk_model_cols)
+                    X_tk = pd.DataFrame(X_tk, columns=tk_model_cols)
+                else:
+                    X_tk = X_pred
+                ticker_preds = ticker_model.predict(X_tk)
+                # Inverse-RMSE weighting
+                pooled_rmse = max(float(pooled_meta.get("val_rmse", 1.0)), 1e-6)
+                ticker_rmse = max(float(ticker_meta.get("val_rmse", 1.0)), 1e-6)
+                w_pooled = (1 / pooled_rmse) / (1 / pooled_rmse + 1 / ticker_rmse)
+                w_ticker = 1.0 - w_pooled
+                preds_ret = w_pooled * pooled_preds + w_ticker * ticker_preds
+            else:
+                preds_ret = model.predict(X_pred)
             
             # Vectorized trade logic
             sigma = float(meta_w.get("val_rmse", 0.0))
@@ -1458,9 +1533,11 @@ class StockPredictor:
 
             # Prob positive (vectorized)
             # Use sign classifier when available, else Gaussian CDF fallback.
+            # Prefer per-ticker sign model (mirrors predict_all_windows).
             sign_model = self.pooled_sign_models.get(window_name)
-            if ticker_meta is not None and ticker_meta.get("production_ready", False):
-                sign_model = self.sign_models.get(key, sign_model)
+            tk_sign = self.sign_models.get(key)
+            if tk_sign is not None:
+                sign_model = tk_sign
 
             if sign_model is not None:
                 try:
@@ -1479,11 +1556,15 @@ class StockPredictor:
                 else:
                     probs = np.full(len(preds_ret), 0.5)
 
-            # Clip probabilities to [0.20, 0.80] — consistent with single-prediction path
-            probs = np.clip(probs, 0.20, 0.80)
+            # Clip probabilities to [0.15, 0.85] — consistent with single-prediction path
+            probs = np.clip(probs, 0.15, 0.85)
+
+            # Transaction cost filter (matches predict_all_windows)
+            min_return_for_profit = ROUND_TRIP_COST_BPS / 10000
+            covers_cost = np.abs(preds_ret) >= min_return_for_profit
 
             # Trade recommended mask
-            trade_mask = (preds_ret >= min_alpha) & (probs >= TRADE_MIN_PROB_POSITIVE)
+            trade_mask = (preds_ret >= min_alpha) & (probs >= TRADE_MIN_PROB_POSITIVE) & covers_cost
             
             # Normalized return
             horizon = TARGET_CONFIG.get(window_name, {}).get("horizon", 1)

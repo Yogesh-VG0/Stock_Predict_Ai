@@ -141,6 +141,10 @@ def main():
     # uses only --tickers (or defaults).  This ensures the pooled model is
     # trained on the full cross-section instead of a small batch.
     train_tickers = list(TOP_100_TICKERS) if args.all_tickers else tickers
+    # --predict-only --all-tickers: predict all tickers in one process
+    # (loads models once instead of once per batch).
+    if args.predict_only and args.all_tickers and not args.tickers:
+        tickers = list(TOP_100_TICKERS)
     mongo_client = None
     
     # 1. Setup MongoDB or Fallback
@@ -413,6 +417,16 @@ def main():
                 preds = predictor.predict_all_windows(ticker, df)
                 
                 if preds:
+                    # Skip tickers where no horizon has a production-ready or meaningful prediction
+                    real_horizons = {k: v for k, v in preds.items() if k != "_meta" and isinstance(v, dict)}
+                    all_suppressed = all(
+                        v.get("reason") in ("model_anti_correlated", "no_model", "feature_mismatch")
+                        for v in real_horizons.values()
+                    )
+                    if all_suppressed and real_horizons:
+                        logger.info(f"Skipping {ticker}: all horizons suppressed (kill-switch / no model)")
+                        health.predictions_skipped += 1
+                        continue
                     # Only count actual prediction horizons, not metadata keys like _meta
                     horizons_seen.update(k for k in preds.keys() if k != "_meta")
                     success = mongo_client.store_predictions(ticker, preds)

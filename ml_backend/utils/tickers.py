@@ -2,7 +2,7 @@ import hashlib
 
 # S&P 75 Tickers — trimmed from 100 to improve pipeline reliability.
 # Removed 25 tickers with worst API coverage. Canonical source: config/constants.py.
-TOP_100_TICKERS = [
+TICKERS = [
     # Technology (19)
     "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "ORCL", "CRM",
     "AMD", "INTC", "CSCO", "ADBE", "QCOM", "TXN", "INTU", "AMAT",
@@ -26,6 +26,8 @@ TOP_100_TICKERS = [
     # Other (3)
     "LIN", "NEE", "AMT",
 ]
+# Backward-compat alias
+TOP_100_TICKERS = TICKERS
 
 # Ticker-specific subreddit mapping
 TICKER_SUBREDDITS = {
@@ -38,7 +40,7 @@ TICKER_SUBREDDITS = {
 # Sequential IDs (enumerate) shift when tickers are added/removed, silently
 # corrupting the pooled model's learned ticker associations.  Hash-based IDs
 # are stable across ticker list changes.
-_ALL_TICKERS = sorted(set(TOP_100_TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
+_ALL_TICKERS = sorted(set(TICKERS) | set(TICKER_SUBREDDITS.keys()) | {"SPY"})
 
 
 def _stable_ticker_hash(ticker: str) -> int:

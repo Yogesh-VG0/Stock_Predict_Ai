@@ -275,6 +275,9 @@ class SentimentAnalyzer:
         # Initialize short interest analyzer (will be created on-demand)
         self.short_interest_analyzer = None
         
+        # Shared Finnhub client — created lazily, reused across all methods
+        self._finnhub_client = None
+        
         # Track API health status for rate limiting and error handling
         # Only live sources — alphavantage and alpha_earnings_call removed
         # (free tier insufficient / method gutted).
@@ -316,6 +319,16 @@ class SentimentAnalyzer:
         logger.info(f"    SEC Analyzer: {self.sec_analyzer is not None}")
         logger.info("  Disabled: SeekingAlpha (needs Playwright)")
         logger.info("  Disabled: alphavantage_news (free tier: 25 req/day insufficient for 75 tickers)")
+
+    @property
+    def finnhub_client(self):
+        """Lazy-initialized shared Finnhub client (reused across all methods)."""
+        if self._finnhub_client is None:
+            import finnhub
+            api_key = os.getenv("FINNHUB_API_KEY")
+            if api_key:
+                self._finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
+        return self._finnhub_client
 
     # ----- Unified text scoring -----
     def _score_text(self, text: str) -> float:
@@ -620,14 +633,13 @@ class SentimentAnalyzer:
 
     async def fetch_finnhub_insider_transactions(self, ticker: str) -> dict:
         """Fetch insider transactions from Finnhub."""
-        api_key = os.getenv("FINNHUB_API_KEY")
-        if not api_key:
+        if self.finnhub_client is None:
             logger.warning("FINNHUB_API_KEY not set. Skipping Finnhub insider transactions.")
             return {}
         
         try:
             await finnhub_limiter.acquire()
-            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
+            finnhub_client = self.finnhub_client
             from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
             to_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             
@@ -676,8 +688,7 @@ class SentimentAnalyzer:
 
     async def fetch_finnhub_quote(self, ticker: str) -> dict:
         """Fetch real-time quote from Finnhub."""
-        api_key = os.getenv("FINNHUB_API_KEY")
-        if not api_key:
+        if self.finnhub_client is None:
             logger.warning("FINNHUB_API_KEY not set. Skipping Finnhub quote.")
             return {}
         
@@ -687,8 +698,9 @@ class SentimentAnalyzer:
                 return cached
             
             await finnhub_limiter.acquire()
-            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
-            data = finnhub_client.quote(ticker)
+            finnhub_client = self.finnhub_client
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(None, finnhub_client.quote, ticker)
             
             # Transform to match expected format
             quote_data = {
@@ -1470,13 +1482,12 @@ class SentimentAnalyzer:
         """
         Enhanced Finnhub Recommendation Trends with detailed breakdown and trend analysis.
         """
-        api_key = os.getenv("FINNHUB_API_KEY")
-        if not api_key:
+        if self.finnhub_client is None:
             logger.warning("FINNHUB_API_KEY not set. Skipping Finnhub Recommendation Trends.")
             return {"finnhub_recommendation_sentiment": 0.0, "finnhub_recommendation_volume": 0, "finnhub_recommendation_confidence": 0.0}
         try:
             await finnhub_limiter.acquire()
-            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
+            finnhub_client = self.finnhub_client
             # Run sync client in threadpool to avoid blocking event loop
             loop = asyncio.get_event_loop()
             data = await loop.run_in_executor(
@@ -2319,8 +2330,7 @@ class SentimentAnalyzer:
         Fetch insider sentiment directly from Finnhub's insider sentiment API.
         This provides pre-calculated MSPR (Monthly Share Purchase Ratio) values.
         """
-        api_key = os.getenv("FINNHUB_API_KEY")
-        if not api_key:
+        if self.finnhub_client is None:
             logger.warning("FINNHUB_API_KEY not set. Skipping Finnhub insider sentiment.")
             return {}
         
@@ -2329,11 +2339,14 @@ class SentimentAnalyzer:
             from_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime('%Y-%m-%d')
             to_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
-            import finnhub
-            finnhub_client = finnhub.Client(api_key=api_key, timeout=30)
+            finnhub_client = self.finnhub_client
             
-            # Use Finnhub's insider sentiment API
-            data = finnhub_client.stock_insider_sentiment(ticker, from_date, to_date)
+            # Use Finnhub's insider sentiment API — run in threadpool to
+            # avoid blocking the event loop (finnhub.Client is synchronous).
+            loop = asyncio.get_event_loop()
+            data = await loop.run_in_executor(
+                None, finnhub_client.stock_insider_sentiment, ticker, from_date, to_date
+            )
             
             if data and 'data' in data and data['data']:
                 logger.info(f"Finnhub insider sentiment API returned {len(data['data'])} data points for {ticker}")

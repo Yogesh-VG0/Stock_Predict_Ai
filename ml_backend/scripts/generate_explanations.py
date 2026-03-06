@@ -22,6 +22,7 @@ Usage (CI):
 
 import argparse
 import logging
+import math
 import os
 import sys
 import time
@@ -1303,6 +1304,24 @@ STRICT RULES:
     return "\n\n".join(sections)
 
 
+def _model_quality_note(predictions: dict) -> str:
+    """Return a short quality tier based on prediction confidence."""
+    confs = []
+    for window_data in predictions.values():
+        if isinstance(window_data, dict):
+            c = window_data.get("confidence")
+            if isinstance(c, (int, float)) and math.isfinite(c):
+                confs.append(c)
+    if not confs:
+        return "UNKNOWN – no confidence data available"
+    avg = sum(confs) / len(confs)
+    if avg < 0.50:
+        return "LOW – model confidence is below 50 %; treat as directional hint only"
+    if avg < 0.65:
+        return "MODERATE – predictions carry meaningful uncertainty"
+    return "HIGH – model shows reasonable confidence"
+
+
 def generate_explanations(
     tickers: Optional[List[str]] = None,
     max_tickers: int = 100,
@@ -1558,6 +1577,7 @@ def generate_explanations(
         explanation_data = {
             "ticker": ticker,
             "explanation_date": target_date,
+            "model_quality_note": _model_quality_note(predictions),
             "prediction_data": predictions,
             "sentiment_summary": {
                 "blended_sentiment": sentiment.get("blended_sentiment", 0),
