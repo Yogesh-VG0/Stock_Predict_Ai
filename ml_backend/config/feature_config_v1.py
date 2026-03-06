@@ -88,13 +88,31 @@ LIGHTGBM_PARAMS = {
     "n_jobs": -1,
 }
 
+# Next-day-specific LightGBM overrides — 1-day alpha is much noisier than 7d/30d,
+# so we use heavier regularization, more aggressive subsampling, and shallower trees.
+# These are merged on top of LIGHTGBM_PARAMS for next_day horizon only.
+LIGHTGBM_PARAMS_NEXT_DAY = {
+    **LIGHTGBM_PARAMS,
+    "n_estimators": 600,       # More rounds with slower learning to find weak signals
+    "max_depth": 4,            # Shallower — daily noise overfits deeper trees
+    "learning_rate": 0.005,    # Much slower learning for noisy 1-day target
+    "num_leaves": 12,          # Very constrained — prevents memorizing daily noise
+    "min_child_samples": 50,   # Large leaves: each split needs strong statistical support
+    "min_split_gain": 0.05,    # Higher bar to split — only genuine patterns pass
+    "reg_alpha": 1.0,          # Strong L1 — aggressively prune weak features
+    "reg_lambda": 5.0,         # Strong L2 — suppress noisy coefficient magnitudes
+    "subsample": 0.6,          # More aggressive row sampling for diversity
+    "colsample_bytree": 0.5,   # Only see half the features per tree — reduces overfit
+    "feature_fraction_bynode": 0.7,  # Additional feature randomization per node
+}
+
 # Feature pruning: remove noisy features based on pooled model importance
 # Phase 1: train pooled with all features → extract top-k by gain
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
 FEATURE_PRUNING = {
     "enabled": True,
-    "top_k": 35,                       # v3.0: 30→35 (retain more signal with improved regularization)
-    "protected_features": [            # Core stability features — never prune (trimmed from 45→15 to let pruning work)
+    "top_k": 45,                       # v3.1: 35→45 to accommodate new microstructure features
+    "protected_features": [            # Core stability features — never prune
         "log_return_1d", "log_return_5d", "log_return_21d",
         "volatility_20d", "volume_ratio", "rsi",
         "sector_id", "ticker_id",
@@ -102,7 +120,11 @@ FEATURE_PRUNING = {
         "sent_mean_7d", "sent_available",
         "insider_available",
         "regime_score", "vol_ratio_5_20",
+        # Short-term microstructure (critical for next_day)
+        "clv", "ret_zscore_5d", "volume_spike_z",
+        "volume_return_interaction", "consecutive_days",
+        "candle_body_ratio", "obv_slope_10d",
     ],
-    "min_features": 15,                # Don't prune below this many features
+    "min_features": 20,                # Raised from 15 to ensure microstructure features survive
 }
 

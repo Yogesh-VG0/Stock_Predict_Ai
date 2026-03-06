@@ -266,8 +266,86 @@ class MinimalFeatureEngineer:
                 )
                 # shift(1) for PIT safety: use yesterday's divergence signal
                 df["rsi_divergence"] = pd.Series(divergence, index=df.index).shift(1).fillna(0).astype(float)
-    
-                # 5b. Sector and ticker IDs for pooled model (deterministic; stable across runs)
+
+                # ── 5b. Short-term microstructure features (next_day signal) ──
+                # These features capture intraday and very-short-term patterns
+                # that are specifically informative for 1-day horizon prediction.
+                # All use data available at market close of day t (PIT-safe).
+
+                _open = _to_series(df["Open"])
+                _high = _to_series(df["High"])
+                _low = _to_series(df["Low"])
+                _range = (_high - _low).replace(0, np.nan)
+
+                # Close Location Value: where price closed within the day's range
+                # +1 = closed at high (bullish), -1 = closed at low (bearish)
+                df["clv"] = ((close - _low) - (_high - close)) / _range
+                df["clv"] = _to_series(df["clv"]).fillna(0).clip(-1, 1)
+
+                # Candle body ratio: |close - open| / range — large body = conviction
+                df["candle_body_ratio"] = (
+                    (close - _open).abs() / _range
+                ).fillna(0).clip(0, 1)
+
+                # Upper/lower wick ratio: captures rejection patterns
+                # Upper wick: (high - max(open, close)) / range
+                _co_max = np.maximum(_open, close)
+                _co_min = np.minimum(_open, close)
+                df["upper_wick_ratio"] = ((_high - _co_max) / _range).fillna(0).clip(0, 1)
+                df["lower_wick_ratio"] = ((_co_min - _low) / _range).fillna(0).clip(0, 1)
+
+                # Short-term mean reversion: z-score of 1d return over 5d and 10d windows
+                _ret_1d = _to_series(df["log_return_1d"])
+                _ret_m5 = _ret_1d.rolling(5, min_periods=3).mean()
+                _ret_s5 = _ret_1d.rolling(5, min_periods=3).std().replace(0, np.nan)
+                df["ret_zscore_5d"] = ((_ret_1d - _ret_m5) / _ret_s5).fillna(0).clip(-4, 4)
+                _ret_m10 = _ret_1d.rolling(10, min_periods=5).mean()
+                _ret_s10 = _ret_1d.rolling(10, min_periods=5).std().replace(0, np.nan)
+                df["ret_zscore_10d"] = ((_ret_1d - _ret_m10) / _ret_s10).fillna(0).clip(-4, 4)
+
+                # Overnight gap analysis: gap direction + magnitude as predictor
+                _gap = _to_series(df["overnight_gap"])
+                df["gap_filled"] = (
+                    ((_gap > 0) & (close < _open)) | ((_gap < 0) & (close > _open))
+                ).astype(float)
+                # Rolling average gap fill rate (mean-reversion tendency)
+                df["gap_fill_rate_10d"] = _to_series(df["gap_filled"]).rolling(10, min_periods=3).mean().fillna(0.5)
+
+                # Volume spike detection: is today's volume an outlier vs recent?
+                _vol_m10 = vol.rolling(10, min_periods=5).mean()
+                _vol_s10 = vol.rolling(10, min_periods=5).std().replace(0, np.nan)
+                df["volume_spike_z"] = ((vol - _vol_m10) / _vol_s10).fillna(0).clip(-3, 5)
+                # High volume + positive return = accumulation; high vol + negative return = distribution
+                df["volume_return_interaction"] = (
+                    _to_series(df["volume_spike_z"]) * np.sign(_ret_1d)
+                ).fillna(0).clip(-5, 5)
+
+                # On-Balance Volume slope (10-day): captures accumulation/distribution trend
+                _obv = (vol * np.sign(_ret_1d.fillna(0))).cumsum()
+                _obv_slope = _obv.rolling(10, min_periods=5).apply(
+                    lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] if len(x) >= 2 else 0, raw=True
+                )
+                # Normalize by mean volume to make comparable across tickers
+                df["obv_slope_10d"] = (_obv_slope / _vol_m10.replace(0, np.nan)).fillna(0).clip(-3, 3)
+
+                # Day-of-week effect (known calendar seasonality in equity returns)
+                _dow = pd.to_datetime(_to_series(df["date"])).dt.dayofweek  # 0=Mon, 4=Fri
+                df["is_monday"] = (_dow == 0).astype(float)
+                df["is_friday"] = (_dow == 4).astype(float)
+
+                # Consecutive up/down days counter (momentum persistence)
+                _sign = np.sign(_ret_1d.fillna(0))
+                _groups = (_sign != _sign.shift(1)).cumsum()
+                df["consecutive_days"] = _sign.groupby(_groups).cumsum().fillna(0).clip(-7, 7)
+
+                # High-low range expansion/contraction (volatility regime for next day)
+                _range_ma5 = _range.rolling(5, min_periods=3).mean()
+                _range_ma20 = _range.rolling(20, min_periods=10).mean()
+                df["range_expansion"] = (
+                    _range_ma5 / _range_ma20.replace(0, np.nan)
+                ).fillna(1.0).clip(0.3, 3.0)
+
+                # 5c. Sector and ticker IDs for pooled model (deterministic; stable across runs)
                 sector = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
                 df["sector_id"] = SECTOR_ID.get(sector, 1)
                 df["ticker_id"] = get_ticker_id(ticker)

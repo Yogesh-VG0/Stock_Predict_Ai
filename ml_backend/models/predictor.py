@@ -21,6 +21,7 @@ from ..config.feature_config_v1 import (
     FEATURE_CONFIG_V1,
     FEATURE_PRUNING,
     LIGHTGBM_PARAMS,
+    LIGHTGBM_PARAMS_NEXT_DAY,
     POOL_CONFIG,
     TARGET_CONFIG,
     USE_MARKET_NEUTRAL_TARGET,
@@ -39,7 +40,18 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-MODEL_VERSION = "v2.0.0"
+MODEL_VERSION = "v2.1.0"
+
+
+def _lgb_params_for_horizon(window_name: str) -> dict:
+    """Return horizon-appropriate LightGBM hyperparameters.
+
+    next_day uses heavier regularization (LIGHTGBM_PARAMS_NEXT_DAY) because
+    1-day alpha is much noisier than 7d/30d.
+    """
+    if window_name == "next_day":
+        return dict(LIGHTGBM_PARAMS_NEXT_DAY)
+    return dict(LIGHTGBM_PARAMS)
 
 
 class StockPredictor:
@@ -483,7 +495,8 @@ class StockPredictor:
 
                 # Moderate recency weighting: ~2.7x ratio (exp(-1) to exp(0))
                 w = np.exp(np.linspace(-1.0, 0.0, len(y_train))).astype(np.float32)
-                fold_model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
+                _horizon_params = _lgb_params_for_horizon(window_name)
+                fold_model = lgb.LGBMRegressor(**_horizon_params)
                 X_train_df = pd.DataFrame(X_train, columns=active_cols)
                 X_val_df = pd.DataFrame(X_val, columns=active_cols)
                 fold_model.fit(
@@ -655,6 +668,19 @@ class StockPredictor:
                     "verbosity": -1,
                     "n_jobs": -1,
                 }
+                # Next-day-specific: even stronger regularization for the noisier target
+                if window_name == "next_day":
+                    sign_params.update({
+                        "n_estimators": 500,        # More rounds with slower learning
+                        "max_depth": 3,
+                        "learning_rate": 0.01,      # Much slower
+                        "num_leaves": 6,            # Very constrained
+                        "min_child_samples": 80,    # Very large leaves
+                        "reg_alpha": 1.0,
+                        "reg_lambda": 3.0,
+                        "subsample": 0.6,
+                        "colsample_bytree": 0.5,
+                    })
                 _SIGN_MIN_TREES = 30  # safety net — never stop below this many rounds
                 # Reuse the same time-based split as the last fold
                 if val_start < val_end and val_start < n:
@@ -879,7 +905,8 @@ class StockPredictor:
 
             # Moderate recency weighting: ~2.7x ratio (exp(-1) to exp(0))
             w = np.exp(np.linspace(-1.0, 0.0, len(y_train))).astype(np.float32)
-            model = lgb.LGBMRegressor(**LIGHTGBM_PARAMS)
+            _horizon_params = _lgb_params_for_horizon(window_name)
+            model = lgb.LGBMRegressor(**_horizon_params)
             X_train_df = pd.DataFrame(X_train, columns=active_cols)
             X_val_df = pd.DataFrame(X_val, columns=active_cols)
             model.fit(
@@ -914,6 +941,14 @@ class StockPredictor:
                         "subsample": 0.7, "colsample_bytree": 0.7,
                         "random_state": 42, "verbosity": -1, "n_jobs": -1,
                     }
+                    # Next-day-specific: stronger regularization for noisy 1-day target
+                    if window_name == "next_day":
+                        sign_params_tk.update({
+                            "n_estimators": 400, "learning_rate": 0.01,
+                            "num_leaves": 6, "min_child_samples": 50,
+                            "reg_alpha": 1.0, "reg_lambda": 3.0,
+                            "subsample": 0.6, "colsample_bytree": 0.5,
+                        })
                     _SIGN_MIN_TREES_TK = 20
                     sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk)
                     sign_clf_tk.fit(
@@ -1045,6 +1080,22 @@ class StockPredictor:
                     and binom_pval < 0.10  # 90% confidence above coin-flip
                     and n_test_samples >= 30  # minimum sample size
                 )
+                # Detect anti-correlated models: if correlation is strongly negative
+                # (< -0.15) with enough test samples, the model learned an inverse
+                # signal.  Flag for sign-flip at prediction time.
+                invert_signal = (
+                    correlation < -0.15
+                    and n_test_samples >= 30
+                    and hit_rate < 0.45  # clearly worse than random
+                )
+                # If inverted, the model IS useful — just backwards. Mark as
+                # production_ready so the ensemble uses it (with flipped sign).
+                if invert_signal:
+                    production_ready = True
+                    logger.info(
+                        "INVERT-SIGNAL %s-%s: corr=%.3f hit=%.1f%% → will flip sign at prediction",
+                        ticker, window_name, correlation, hit_rate * 100,
+                    )
                 meta_out.update({
                     "n_test": int(test_mask.sum()),
                     "test_rmse": test_rmse,
@@ -1059,6 +1110,7 @@ class StockPredictor:
                     "hit_rate": hit_rate,
                     "correlation": correlation,
                     "production_ready": production_ready,
+                    "invert_signal": invert_signal,
                     "has_holdout": True,
                     "eval_rmse": test_rmse,
                 })
@@ -1257,6 +1309,14 @@ class StockPredictor:
                     X_tk_df = X_pred_df
                 ticker_pred = float(ticker_model.predict(X_tk_df)[0])
 
+                # Sign-flip for anti-correlated per-ticker models
+                if ticker_meta.get("invert_signal", False):
+                    ticker_pred = -ticker_pred
+                    logger.debug(
+                        "INVERT-SIGNAL %s-%s: flipped per-ticker pred sign",
+                        ticker, window_name,
+                    )
+
                 # Inverse-RMSE weighting: lower RMSE → more weight
                 pooled_rmse = max(float(pooled_meta.get("val_rmse", 1.0)), 1e-6)
                 ticker_rmse = max(float(ticker_meta.get("val_rmse", 1.0)), 1e-6)
@@ -1265,6 +1325,13 @@ class StockPredictor:
                 pred_return = w_pooled * pooled_pred + w_ticker * ticker_pred
             else:
                 pred_return = float(model.predict(X_pred_df)[0])
+                # Sign-flip for anti-correlated single model (per-ticker only, not pooled)
+                if ticker_meta is not None and ticker_meta.get("invert_signal", False) and model is not pooled_model:
+                    pred_return = -pred_return
+                    logger.debug(
+                        "INVERT-SIGNAL %s-%s: flipped single-model pred sign",
+                        ticker, window_name,
+                    )
             # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
             # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true
             # price forecast — it's current_price * exp(alpha), useful only as a
