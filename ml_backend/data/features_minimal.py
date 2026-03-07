@@ -494,7 +494,11 @@ class MinimalFeatureEngineer:
                     for _sic in ("si_short_float_pct", "si_days_to_cover",
                                  "si_available"):
                         df[_sic] = 0.0
-    
+
+                # Defragment DataFrame after all column-by-column additions
+                # to eliminate PerformanceWarnings from internal block fragmentation
+                df = df.copy()
+
                 # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
                 # SPY_close used for market-neutral target only, not as feature
                 # Exclude raw OHLCV, intermediate helpers, and anything that embeds absolute price level

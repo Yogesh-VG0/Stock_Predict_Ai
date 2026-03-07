@@ -20,6 +20,7 @@ from ..config.constants import PREDICTION_WINDOWS
 from ..config.feature_config_v1 import (
     FEATURE_CONFIG_V1,
     FEATURE_PRUNING,
+    FEATURE_PRUNING_TOP_K_BY_HORIZON,
     LIGHTGBM_PARAMS,
     LIGHTGBM_PARAMS_NEXT_DAY,
     POOL_CONFIG,
@@ -28,6 +29,7 @@ from ..config.feature_config_v1 import (
     WALK_FORWARD_FOLDS,
     TRADE_MIN_ALPHA,
     TRADE_MIN_PROB_POSITIVE,
+    TRADE_MIN_PROB_BY_HORIZON,
     TRADE_SIGMA_MULT,
     TRADE_THRESHOLD_CAP,
     ROUND_TRIP_COST_BPS,
@@ -102,13 +104,15 @@ class StockPredictor:
         min_feats = FEATURE_PRUNING.get("min_features", 15)
 
         for window_name, meta in self.pooled_metadata.items():
+            # Per-horizon top_k: next_day gets fewer features (simpler model for noisy target)
+            horizon_top_k = FEATURE_PRUNING_TOP_K_BY_HORIZON.get(window_name, top_k)
             all_cols = meta.get("feature_columns", [])
             # Prefer fold-0 importance to prevent future-fold leakage
             importance = meta.get("fold0_features_gain") or meta.get("top_features_gain", [])
             if not all_cols or not importance:
                 continue
             # Top-k feature names by gain (already sorted desc in metadata)
-            top_names = [entry["name"] for entry in importance[:top_k]]
+            top_names = [entry["name"] for entry in importance[:horizon_top_k]]
             # Merge protected (that actually exist) + top-k
             shortlist = sorted(
                 set(top_names) | (protected & set(all_cols))
@@ -122,7 +126,7 @@ class StockPredictor:
             self._feature_shortlist[window_name] = shortlist
             logger.info(
                 "Pruning %s: %d → %d features (top_k=%d, protected=%d)",
-                window_name, len(all_cols), len(shortlist), top_k,
+                window_name, len(all_cols), len(shortlist), horizon_top_k,
                 len(protected & set(all_cols)),
             )
 
@@ -1438,9 +1442,13 @@ class StockPredictor:
             min_return_for_profit = (ROUND_TRIP_COST_BPS / 10000)
             covers_transaction_cost = abs(pred_return) >= min_return_for_profit
 
+            # Per-horizon probability threshold: next_day uses a lower bar (0.505)
+            # because its sign classifier accuracy is ~51.7% — the standard 0.52
+            # threshold was filtering out nearly all trades.
+            _min_prob = TRADE_MIN_PROB_BY_HORIZON.get(window_name, TRADE_MIN_PROB_POSITIVE)
             trade_recommended = (
                 pred_return >= min_alpha
-                and prob_positive >= TRADE_MIN_PROB_POSITIVE
+                and prob_positive >= _min_prob
                 and covers_transaction_cost  # Fix #21: must clear transaction costs
             )
 
@@ -1630,8 +1638,9 @@ class StockPredictor:
             min_return_for_profit = ROUND_TRIP_COST_BPS / 10000
             covers_cost = np.abs(preds_ret) >= min_return_for_profit
 
-            # Trade recommended mask
-            trade_mask = (preds_ret >= min_alpha) & (probs >= TRADE_MIN_PROB_POSITIVE) & covers_cost
+            # Trade recommended mask (per-horizon probability threshold)
+            _min_prob = TRADE_MIN_PROB_BY_HORIZON.get(window_name, TRADE_MIN_PROB_POSITIVE)
+            trade_mask = (preds_ret >= min_alpha) & (probs >= _min_prob) & covers_cost
             
             # Normalized return
             horizon = TARGET_CONFIG.get(window_name, {}).get("horizon", 1)

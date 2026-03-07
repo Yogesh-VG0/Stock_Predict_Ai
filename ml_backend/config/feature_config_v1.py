@@ -43,6 +43,14 @@ WALK_FORWARD_FOLDS = 4
 # Trade filters: only recommend when model is both optimistic and confident
 TRADE_MIN_ALPHA = 0.0002  # Minimum predicted alpha (0.02%) — lowered to allow more trades in market-neutral regime
 TRADE_MIN_PROB_POSITIVE = 0.52  # P(return > 0) must exceed this — 0.50 was a no-op (any positive pred passes); 0.52 filters out noise
+# Per-horizon probability thresholds: next_day signal is much weaker so use
+# a lower bar (0.505) to allow *some* trades rather than zero.  7_day/30_day
+# keep the standard 0.52 threshold.
+TRADE_MIN_PROB_BY_HORIZON = {
+    "next_day": 0.505,
+    "7_day": 0.52,
+    "30_day": 0.52,
+}
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
 TRADE_SIGMA_MULT = 0.3  # Regime-adaptive threshold multiplier — lowered from 0.5 (pred_std was making threshold too strict)
 
@@ -93,22 +101,28 @@ LIGHTGBM_PARAMS = {
 # These are merged on top of LIGHTGBM_PARAMS for next_day horizon only.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 600,       # More rounds with slower learning to find weak signals
-    "max_depth": 4,            # Shallower — daily noise overfits deeper trees
-    "learning_rate": 0.005,    # Much slower learning for noisy 1-day target
-    "num_leaves": 12,          # Very constrained — prevents memorizing daily noise
-    "min_child_samples": 50,   # Large leaves: each split needs strong statistical support
-    "min_split_gain": 0.05,    # Higher bar to split — only genuine patterns pass
-    "reg_alpha": 1.0,          # Strong L1 — aggressively prune weak features
-    "reg_lambda": 5.0,         # Strong L2 — suppress noisy coefficient magnitudes
-    "subsample": 0.6,          # More aggressive row sampling for diversity
-    "colsample_bytree": 0.5,   # Only see half the features per tree — reduces overfit
-    "feature_fraction_bynode": 0.7,  # Additional feature randomization per node
+    "n_estimators": 800,       # More rounds with very slow learning to find weak 1-day signals
+    "max_depth": 3,            # Even shallower — 1-day noise absolutely requires shallow trees
+    "learning_rate": 0.003,    # Very slow learning — patience lets weak patterns emerge without overfit
+    "num_leaves": 8,           # Very constrained — far fewer interaction paths against daily noise
+    "min_child_samples": 80,   # Very large leaves: each split needs overwhelming statistical support
+    "min_split_gain": 0.08,    # High bar to split — only the most genuine patterns survive
+    "reg_alpha": 2.0,          # Very strong L1 — prune almost all features to a sparse core
+    "reg_lambda": 8.0,         # Very strong L2 — heavily penalize large coefficient magnitudes
+    "subsample": 0.5,          # Aggressive row sampling — more diverse ensemble of weak learners
+    "colsample_bytree": 0.4,   # See only 40% of features per tree — decorrelates trees
+    "feature_fraction_bynode": 0.6,  # Additional feature randomization per node
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
 # Phase 1: train pooled with all features → extract top-k by gain
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
+# Per-horizon top_k: next_day gets fewer features (noisier target → simpler model)
+FEATURE_PRUNING_TOP_K_BY_HORIZON = {
+    "next_day": 30,   # Fewer features for 1-day alpha — reduces overfit on noise
+    "7_day": 45,      # Standard
+    "30_day": 45,     # Standard
+}
 FEATURE_PRUNING = {
     "enabled": True,
     "top_k": 45,                       # v3.1: 35→45 to accommodate new microstructure features
