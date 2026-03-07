@@ -1165,46 +1165,23 @@ def _build_prompt(
         if len(fmp_lines) > 1:
             sections.append("\n".join(fmp_lines))
 
-    # ── 10. INSTRUCTIONS (the actual prompt to Gemini) ──
+    # ── 10. INSTRUCTIONS (the actual prompt to the LLM) ──
     meta = _get_stock_meta(ticker)
     company_name = meta["name"]
     sector = meta["sector"]
     industry = meta["industry"]
 
-    # Build sector-specific analysis guidance
-    sector_guidance = ""
-    if sector == "Technology":
-        sector_guidance = "For this tech stock, pay special attention to AI/cloud growth narratives, semiconductor cycle positioning, valuation multiples relative to growth, and sector ETF rotation signals."
-    elif sector == "Financial Services":
-        sector_guidance = "For this financial stock, factor in interest rate sensitivity (yield curve shape, Fed funds rate), credit risk signals, capital ratios, and how bank earnings link to the macro cycle."
-    elif sector == "Healthcare":
-        sector_guidance = "For this healthcare stock, consider pipeline catalysts, FDA approval cycles, patent cliffs, drug pricing risks, and whether recent earnings beat/miss reflects one-time items or trend."
-    elif sector == "Energy":
-        sector_guidance = "For this energy stock, link analysis to oil/gas price trends, OPEC dynamics, capital discipline, and how macro data (CPI, GDP) affects energy demand expectations."
-    elif sector == "Consumer Cyclical":
-        sector_guidance = "For this consumer cyclical stock, focus on consumer spending trends (retail sales data), discretionary vs staple rotation, and how the macro cycle affects demand."
-    elif sector == "Consumer Defensive":
-        sector_guidance = "For this consumer staple, note its defensive characteristics — how it performs in risk-off environments, dividend stability, and pricing power vs inflation."
-    elif sector == "Industrials":
-        sector_guidance = "For this industrial stock, connect analysis to manufacturing PMI, capex cycles, infrastructure spending, and order backlog trends."
-    elif sector == "Utilities":
-        sector_guidance = "For this utility stock, highlight its interest-rate sensitivity (bond proxy), dividend yield relative to treasuries, and any renewable energy transition exposure."
-    elif sector == "Communication Services":
-        sector_guidance = "For this communication services stock, consider ad revenue trends, subscriber growth, content spending ROI, and regulatory risk."
-    else:
-        sector_guidance = "Relate the analysis to the company's specific industry dynamics and competitive position."
-
-    # Extract key prediction numbers for consistency
+    # Extract key prediction numbers for the fixed header fields
     pred_30d = predictions.get("30_day", {})
     pred_7d = predictions.get("7_day", {})
     pred_next = predictions.get("next_day", {})
-    
+
     # Use 30-day prediction as primary (most reliable)
     primary_pred = pred_30d if pred_30d else (pred_7d if pred_7d else pred_next)
     predicted_price = primary_pred.get("predicted_price", 0) if isinstance(primary_pred, dict) else 0
     price_change = primary_pred.get("price_change", 0) if isinstance(primary_pred, dict) else 0
     price_change_pct = (price_change / current_price * 100) if current_price and price_change else 0
-    
+
     # Determine outlook from predictions
     if price_change_pct > 2:
         outlook_hint = "Bullish"
@@ -1216,61 +1193,45 @@ def _build_prompt(
         outlook_hint = "Slightly Bearish"
     else:
         outlook_hint = "Neutral"
-    
+
     # Calculate confidence from prediction confidence scores
     conf_scores = []
     for w in [pred_next, pred_7d, pred_30d]:
         if isinstance(w, dict) and w.get("confidence"):
             conf_scores.append(w["confidence"])
     avg_confidence = int(sum(conf_scores) / len(conf_scores) * 100) if conf_scores else 50
-    
+
     # Format numeric values before f-string to avoid format specifier errors
     current_price_str = f"{current_price:.2f}" if isinstance(current_price, (int, float)) and current_price else "N/A"
     predicted_price_str = f"{predicted_price:.2f}" if isinstance(predicted_price, (int, float)) else "0.00"
     price_change_pct_str = f"{price_change_pct:+.2f}" if isinstance(price_change_pct, (int, float)) else "0.00"
-    price_change_abs_str = f"{abs(price_change):.2f}" if isinstance(price_change, (int, float)) else "0.00"
-    
-    # Format prediction prices safely
+
+    # Format individual horizon prices
     pred_next_price = pred_next.get("predicted_price", 0) if isinstance(pred_next, dict) else 0
     pred_next_str = f"{pred_next_price:.2f}" if isinstance(pred_next_price, (int, float)) else "0.00"
     pred_7d_price = pred_7d.get("predicted_price", 0) if isinstance(pred_7d, dict) else 0
     pred_7d_str = f"{pred_7d_price:.2f}" if isinstance(pred_7d_price, (int, float)) else "0.00"
-    
-    # Determine movement direction text
-    movement_text = "slight declines" if price_change_pct < 0 else "modest gains" if price_change_pct > 0 else "minimal movement"
-    pressure_text = "modest downward pressure" if price_change_pct < 0 else "moderate upward momentum"
-    change_type = "decline" if price_change_pct < 0 else "gain"
-    conditions_text = "potential headwinds" if price_change_pct < 0 else "supportive conditions"
-    source_text = "sector volatility" if price_change_pct < 0 else "favorable market conditions"
-    
-    # Pre-compute Bollinger and prediction values to avoid invalid f-string format specifiers
+
+    # Bollinger band levels for KEY_LEVELS
     bb_lower_val = technicals.get("Bollinger_Lower", 0) if technicals else 0
     bb_upper_val = technicals.get("Bollinger_Upper", 0) if technicals else 0
     bb_lower_str = f"{bb_lower_val:.2f}" if isinstance(bb_lower_val, (int, float)) else "0.00"
     bb_upper_str = f"{bb_upper_val:.2f}" if isinstance(bb_upper_val, (int, float)) else "0.00"
-    direction_text = "decline" if price_change_pct < 0 else "rise"
-    abs_pct_str = f"{abs(price_change_pct):.1f}" if isinstance(price_change_pct, (int, float)) else "0.0"
-    driver_text = "elevated sector volatility" if price_change_pct < 0 else "supportive market conditions"
-    
+
     sections.append(f"""
-INSTRUCTIONS: You are a professional equity analyst writing a clear, concise market intelligence briefing for {company_name} ({ticker}) — a {industry} company in the {sector} sector.
+INSTRUCTIONS: You are a senior equity analyst writing a market intelligence briefing for {company_name} ({ticker}), a {industry} company in the {sector} sector.
 
-{sector_guidance}
+YOUR TASK: Carefully read ALL the data sections above and write a UNIQUE analysis for {ticker}. Do NOT use generic market phrases — every sentence must be grounded in the specific data provided for this stock today.
 
-Your audience is retail investors who want clear, actionable insights. Write like Bloomberg or professional investment platforms — professional but accessible. Be specific to {ticker}, not generic market commentary.
+CRITICAL RULES:
+1. NEVER repeat template-sounding language like "moderate upward momentum" or "supportive market conditions". Describe what the actual numbers and data tell you.
+2. If the predicted price change is near zero (less than 0.3%), say so honestly — "the model sees no meaningful directional signal" or "essentially flat". Do NOT spin near-zero as bullish or bearish.
+3. CITE SPECIFIC DATA from the sections above: actual news headlines (quote them), actual insider names and transaction details, actual RSI/MACD values, actual P/E ratios, actual macro numbers, actual SHAP driver names.
+4. Translate ML model drivers (SHAP) into plain English. NEVER mention SHAP, feature importance %, contribution scores, or model internals. Instead say things like "the yield curve spread is the biggest factor" or "sector volatility is weighing on the outlook".
+5. Each bullish/bearish factor MUST reference a specific data point from the sections above — no vague "favorable conditions" or "market headwinds" without citing the data.
+6. If news headlines exist above, you MUST reference at least one specific headline. Do not say "no significant news" when headlines are provided.
 
-CRITICAL: Translate ALL technical ML data into plain English. NEVER mention:
-- SHAP values, feature importance percentages, or model coefficients
-- Raw numeric impacts like "+0.0009" or "impact: -0.0015"
-- Technical ML jargon like "model driver context" or "feature importance"
-- Internal model mechanics
-
-Instead, convert technical signals into human meaning:
-- "Treasury yield curve (2Y-10Y spread) at 41.5% importance, value 0.0000" → "Yield curve conditions are currently neutral"
-- "Sector ETF volatility: 0.0179, impact -0.0015" → "Rising technology sector volatility is creating headwinds"
-- "Feature importance 41.5%" → Just describe what the factor means, don't mention the percentage
-
-OUTPUT FORMAT — use this EXACT structure. Plain text only, no markdown.
+OUTPUT FORMAT — use this EXACT structure with these EXACT headers. Plain text only, no markdown.
 
 OVERALL_OUTLOOK: {outlook_hint}
 
@@ -1282,36 +1243,26 @@ EXPECTED_PRICE: ${predicted_price_str}
 
 CURRENT_PRICE: ${current_price_str}
 
-SUMMARY: [{company_name} ({ticker}) is currently trading at ${current_price_str}. The ML model predicts {movement_text} for {ticker} across all time horizons, with next day at ${pred_next_str}, 1 week at ${pred_7d_str}, and 1 month at ${predicted_price_str}. Reference ONE key driver from the data — a specific news headline, technical indicator, or macro factor — that explains the prediction.]
+SUMMARY: [Write 2-3 sentences about {ticker}'s current situation. Include the current price (${current_price_str}), the 3 prediction targets (next day ${pred_next_str}, 1 week ${pred_7d_str}, 1 month ${predicted_price_str}), and identify the single most important driver from the data above that explains why. Be specific — name the actual factor and its value.]
 
-WHAT_THIS_MEANS: [2-3 sentences translating the prediction into investment implications. Be specific to {ticker}'s business model and sector. Example: "The model anticipates {ticker} may experience {pressure_text} in the near term, with a projected {change_type} of ${price_change_abs_str} over the next month. This suggests {conditions_text} from {source_text}."]
+WHAT_THIS_MEANS: [Write 2-3 sentences explaining what a {price_change_pct_str}% move means for someone holding {ticker}. Connect it to the company's actual business — its {industry} position, current financials, and sector dynamics. If the move is near zero, say the model sees no strong edge right now.]
 
-BULLISH_FACTORS: [2-4 bullet points, each starting with "+". Translate technical factors into plain English. Examples:
-+ Treasury yield curve conditions: A positive yield curve spread supports {ticker}'s outlook
-+ Price momentum: Currently trading above its 20-day moving average, indicating short-term strength
-+ Insider activity: Recent buying by executives signals internal confidence]
+BULLISH_FACTORS: [List 2-4 factors starting with "+". Each must cite a SPECIFIC number or data point from the sections above. For example: "+ RSI at 42 suggests the stock is approaching oversold territory" or "+ Insider {'{'}actual name{'}'} bought {'{'}actual shares{'}'} shares on {'{'}actual date{'}'}". Do NOT use generic examples.]
 
-BEARISH_FACTORS: [2-4 bullet points, each starting with "-". Translate technical factors into plain English. Examples:
-- Sector volatility: Elevated volatility in the {sector.lower()} sector is creating headwinds
-- Market sentiment: Rising fear levels (VIX elevated) suggest broader market caution
-- Technical indicators: MACD shows weakening momentum signals]
+BEARISH_FACTORS: [List 2-4 factors starting with "-". Same rule: cite SPECIFIC data. For example: "- MACD ({'{'}actual value{'}'}) crossed below signal line ({'{'}actual value{'}'}), indicating fading momentum" or "- Short float at {'{'}actual %{'}'} with {'{'}actual days{'}'} days to cover". Do NOT use generic examples.]
 
-NEWS_IMPACT: [1-2 sentences referencing SPECIFIC headlines from above. If news is available, quote or paraphrase actual headlines and explain relevance. If no news: "No significant recent news detected for {company_name}. The analysis relies on technical, quantitative, and macro factors."]
+NEWS_IMPACT: [If headlines exist in the NEWS & SENTIMENT section above, quote or paraphrase 1-2 actual headlines and explain how they affect {ticker}. Only say "no significant news" if the data above truly shows no headlines.]
 
 KEY_LEVELS: [Support around ${bb_lower_str} | Resistance around ${bb_upper_str}]
 
-BOTTOM_LINE: [1-2 sentences. The single most important takeaway. Use the 30-day prediction: "{company_name} ({ticker}) is predicted to {direction_text} {abs_pct_str}% over the next month to ${predicted_price_str}, primarily driven by {driver_text} — watch the ${bb_lower_str} support level."]
+BOTTOM_LINE: [One concise sentence: what is the single most important thing an investor should know about {ticker} right now? Reference the actual prediction and the #1 driver from the data.]
 
-STRICT RULES:
+RULES:
 - Maximum 2000 characters total
-- Use ONLY data provided above. NEVER invent numbers
-- Translate ALL technical ML jargon into plain English
-- NEVER mention SHAP %, feature importance %, or model coefficients
-- Use consistent numbers: primary prediction is 30-day (${predicted_price_str}, {price_change_pct_str}%)
-- Reference {company_name} or {ticker} by name, not "the stock"
-- Write for regular investors, not quants
+- Use ONLY data from the sections above — never invent numbers or facts
 - No markdown formatting (no **, ##, bold, italics)
-- Each section header on its own line
+- Refer to the company as {company_name} or {ticker}, not "the stock"
+- Write for retail investors, not quants — plain English only
 """)
     return "\n\n".join(sections)
 
