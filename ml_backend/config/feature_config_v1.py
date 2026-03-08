@@ -72,60 +72,63 @@ POOL_CONFIG = {
     "use_sector_feature": True,
 }
 
-# LightGBM params — production-grade, tuned for 75-ticker pooled model
+# LightGBM params — production-grade, tuned for 75-ticker pooled model (~91K samples)
 # Huber: robust to outliers (earnings surprises, black swans)
-# v3.1: stronger regularization to combat holdout degradation (47.8% → target 50%+)
+# v3.2: rebalanced regularization — v3.1 was over-regularized (holdout corr ~0, hit ~48%).
+# With 91K pooled samples the model can learn deeper patterns without overfitting.
 LIGHTGBM_PARAMS = {
     "objective": "huber",
     "alpha": 0.9,              # Huber delta — 0.9 balances robustness vs capturing larger moves
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 400,       # Reduced from 500; early stopping (patience 30) prevents overfit
-    "max_depth": 5,            # Reduced from 6 to prevent overfitting on recent OOS periods
-    "learning_rate": 0.01,     # Very slow learning — best generalization with 400 rounds
-    "num_leaves": 24,          # Reduced from 31; tighter constraint for depth-5
-    "min_child_samples": 30,   # Increased from 20 for stronger regularization
-    "min_split_gain": 0.02,    # Increased from 0.01 — filter out more noise splits
-    "reg_alpha": 0.5,          # Increased L1 from 0.3 — promotes feature sparsity
-    "reg_lambda": 2.0,         # Increased L2 from 1.0 — prevents weight explosion on noisy alpha
-    "subsample": 0.75,         # Reduced from 0.8 for more diversity
+    "n_estimators": 500,       # More rounds with slower learning for gradual convergence
+    "max_depth": 5,            # Depth-5 is appropriate for 91K samples
+    "learning_rate": 0.008,    # Slightly slower learning — lets early stopping find optimal point
+    "num_leaves": 24,          # Tighter constraint for depth-5
+    "min_child_samples": 25,   # Relaxed from 30 — 91K samples support finer splits
+    "min_split_gain": 0.01,    # Relaxed from 0.02 — let more genuine splits through
+    "reg_alpha": 0.3,          # Moderate L1 — sparsity without crushing weak but real signals
+    "reg_lambda": 1.5,         # Moderate L2 — prevents weight explosion while preserving signal
+    "subsample": 0.75,         # Row sampling for diversity
     "subsample_freq": 1,       # Apply row sampling every boosting round
-    "colsample_bytree": 0.7,   # Reduced from 0.8 — more feature diversity per tree
+    "colsample_bytree": 0.7,   # Feature diversity per tree
     "random_state": 42,
     "verbosity": -1,
     "n_jobs": -1,
 }
 
 # Next-day-specific LightGBM overrides — 1-day alpha is much noisier than 7d/30d,
-# so we use heavier regularization, more aggressive subsampling, and shallower trees.
-# These are merged on top of LIGHTGBM_PARAMS for next_day horizon only.
+# so we use heavier regularization and shallower trees, but NOT so extreme that
+# the model can't learn anything (v3.1 had 48% hit rate = coin flip).
+# v3.2: significantly relaxed from v3.1's crippling over-regularization.
+# With 91K pooled samples, depth-4 / 14 leaves is still conservative.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 800,       # More rounds with very slow learning to find weak 1-day signals
-    "max_depth": 3,            # Even shallower — 1-day noise absolutely requires shallow trees
-    "learning_rate": 0.003,    # Very slow learning — patience lets weak patterns emerge without overfit
-    "num_leaves": 8,           # Very constrained — far fewer interaction paths against daily noise
-    "min_child_samples": 80,   # Very large leaves: each split needs overwhelming statistical support
-    "min_split_gain": 0.08,    # High bar to split — only the most genuine patterns survive
-    "reg_alpha": 2.0,          # Very strong L1 — prune almost all features to a sparse core
-    "reg_lambda": 8.0,         # Very strong L2 — heavily penalize large coefficient magnitudes
-    "subsample": 0.5,          # Aggressive row sampling — more diverse ensemble of weak learners
-    "colsample_bytree": 0.4,   # See only 40% of features per tree — decorrelates trees
-    "feature_fraction_bynode": 0.6,  # Additional feature randomization per node
+    "n_estimators": 600,       # More rounds with slow learning for gradual signal extraction
+    "max_depth": 4,            # One extra interaction level vs base — still very conservative
+    "learning_rate": 0.008,    # Slow but not cripplingly so — allows meaningful convergence
+    "num_leaves": 14,          # Modest for depth-4 — captures key interactions without overfit
+    "min_child_samples": 40,   # Large leaves for stability, but not so large it blocks all splits
+    "min_split_gain": 0.02,    # Relaxed from 0.08 — previous value blocked nearly ALL splits
+    "reg_alpha": 0.8,          # Moderate L1 sparsity
+    "reg_lambda": 3.0,         # Strong but not crushing L2
+    "subsample": 0.65,         # Row sampling — some diversity without throwing away too much data
+    "colsample_bytree": 0.55,  # See more features per tree than before
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
 # Phase 1: train pooled with all features → extract top-k by gain
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
 # Per-horizon top_k: next_day gets fewer features (noisier target → simpler model)
+# v3.2: increased top_k to accommodate new MACD/ATR/52w/BB features
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 30,   # Fewer features for 1-day alpha — reduces overfit on noise
-    "7_day": 45,      # Standard
-    "30_day": 45,     # Standard
+    "next_day": 35,   # Increased from 30 — new features add diverse signal
+    "7_day": 50,      # Increased from 45
+    "30_day": 50,     # Increased from 45
 }
 FEATURE_PRUNING = {
     "enabled": True,
-    "top_k": 45,                       # v3.1: 35→45 to accommodate new microstructure features
+    "top_k": 50,                       # v3.2: 45→50 for new features
     "protected_features": [            # Core stability features — never prune
         "log_return_1d", "log_return_5d", "log_return_21d",
         "volatility_20d", "volume_ratio", "rsi",
@@ -138,7 +141,10 @@ FEATURE_PRUNING = {
         "clv", "ret_zscore_5d", "volume_spike_z",
         "volume_return_interaction", "consecutive_days",
         "candle_body_ratio", "obv_slope_10d",
+        # v3.2: new technical features — proven alpha signals
+        "macd_norm", "macd_hist_norm",
+        "atr_norm", "dist_52w_high", "bb_width",
     ],
-    "min_features": 20,                # Raised from 15 to ensure microstructure features survive
+    "min_features": 22,                # Raised from 20 for additional new features
 }
 

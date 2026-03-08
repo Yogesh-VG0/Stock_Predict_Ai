@@ -222,6 +222,40 @@ class MinimalFeatureEngineer:
                 vol_sign = np.sign(vol.pct_change(5).fillna(0))
                 df["price_vol_divergence"] = (ret_sign * vol_sign * -1).fillna(0)  # -1 when divergent
     
+                # 4c. MACD (12/26/9) — trend-following momentum indicator
+                # Normalized by close to make comparable across tickers.
+                _ema12 = close.ewm(span=12, min_periods=8, adjust=False).mean()
+                _ema26 = close.ewm(span=26, min_periods=18, adjust=False).mean()
+                _macd_line = _ema12 - _ema26
+                _macd_signal = _macd_line.ewm(span=9, min_periods=6, adjust=False).mean()
+                _macd_hist = _macd_line - _macd_signal
+                df["macd_norm"] = (_macd_line / close.replace(0, np.nan)).fillna(0).clip(-0.1, 0.1)
+                df["macd_signal_norm"] = (_macd_signal / close.replace(0, np.nan)).fillna(0).clip(-0.1, 0.1)
+                df["macd_hist_norm"] = (_macd_hist / close.replace(0, np.nan)).fillna(0).clip(-0.05, 0.05)
+
+                # 4d. ATR normalized — Average True Range / Close (volatility regime)
+                _high_s = _to_series(df["High"])
+                _low_s = _to_series(df["Low"])
+                _prev_close = close.shift(1)
+                _tr = pd.concat([
+                    (_high_s - _low_s).abs(),
+                    (_high_s - _prev_close).abs(),
+                    (_low_s - _prev_close).abs(),
+                ], axis=1).max(axis=1)
+                _atr14 = _tr.rolling(14, min_periods=5).mean()
+                df["atr_norm"] = (_atr14 / close.replace(0, np.nan)).fillna(0).clip(0, 0.2)
+
+                # 4e. Distance from 52-week high/low — mean-reversion / momentum signal
+                _high_252 = close.rolling(252, min_periods=60).max()
+                _low_252 = close.rolling(252, min_periods=60).min()
+                df["dist_52w_high"] = ((close - _high_252) / _high_252.replace(0, np.nan)).fillna(0).clip(-1, 0)
+                df["dist_52w_low"] = ((close - _low_252) / _low_252.replace(0, np.nan)).fillna(0).clip(0, 5)
+
+                # 4f. Bollinger Bandwidth — width of BB(20, 2) / SMA(20)
+                # Low bandwidth = volatility squeeze (precedes breakouts)
+                _bb_width = (4 * std_20_price) / sma20.replace(0, np.nan)
+                df["bb_width"] = _bb_width.fillna(0).clip(0, 0.5)
+
                 # 5. RSI (14-period, standard)
                 delta = close.diff()
                 gain = delta.where(delta > 0, 0).rolling(14, min_periods=5).mean()
@@ -1055,8 +1089,7 @@ class MinimalFeatureEngineer:
             from .earnings_features import make_earnings_features
 
             earn_df = make_earnings_features(df, ticker, mongo_client)
-            for col in earn_df.columns:
-                df[col] = earn_df[col].values
+            df = pd.concat([df, earn_df], axis=1)
         except Exception as e:
             logger.warning("Could not add earnings features for %s: %s", ticker, e)
             for col, default in _earn_defaults.items():
@@ -1080,8 +1113,7 @@ class MinimalFeatureEngineer:
             from .fundamental_features import make_fundamental_features
 
             fund_df = make_fundamental_features(df, ticker, mongo_client)
-            for col in fund_df.columns:
-                df[col] = fund_df[col].values
+            df = pd.concat([df, fund_df], axis=1)
         except Exception as e:
             logger.warning("Could not add fundamental features for %s: %s", ticker, e)
             for col, default in _fund_defaults.items():
@@ -1105,8 +1137,7 @@ class MinimalFeatureEngineer:
             from .short_interest_features import make_short_interest_features
 
             si_df = make_short_interest_features(df, ticker, mongo_client)
-            for col in si_df.columns:
-                df[col] = si_df[col].values
+            df = pd.concat([df, si_df], axis=1)
         except Exception as e:
             logger.warning("Could not add short interest features for %s: %s", ticker, e)
             for col, default in _si_defaults.items():
