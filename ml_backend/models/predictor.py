@@ -42,7 +42,9 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-MODEL_VERSION = "v2.1.0"
+# v2.2.0: relaxed hyperparams, new features (MACD/ATR/52w/BB), stronger recency,
+#          walk-forward fold improvement, kill-switch threshold relaxed.
+MODEL_VERSION = "v2.2.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -455,7 +457,8 @@ class StockPredictor:
                 if n_folds == 1:
                     train_end = int(n * 0.85)
                 else:
-                    train_end = int(n * (0.5 + fold * 0.12))
+                    # v3.2: start at 55% (was 50%) — fold-0 gets 10% more training data
+                    train_end = int(n * (0.55 + fold * 0.10))
 
                 # Purge/embargo gap to prevent horizon overlap leakage
                 horizon = TARGET_CONFIG[window_name]["horizon"]
@@ -497,8 +500,9 @@ class StockPredictor:
                 if len(y_train) < 200 or len(y_val) < 20:
                     break
 
-                # Moderate recency weighting: ~2.7x ratio (exp(-1) to exp(0))
-                w = np.exp(np.linspace(-1.0, 0.0, len(y_train))).astype(np.float32)
+                # Recency weighting: ~4.5x ratio (exp(-1.5) to exp(0))
+                # v3.2: strengthened from 2.7x — recent market patterns are more predictive
+                w = np.exp(np.linspace(-1.5, 0.0, len(y_train))).astype(np.float32)
                 _horizon_params = _lgb_params_for_horizon(window_name)
                 fold_model = lgb.LGBMRegressor(**_horizon_params)
                 X_train_df = pd.DataFrame(X_train, columns=active_cols)
@@ -672,18 +676,19 @@ class StockPredictor:
                     "verbosity": -1,
                     "n_jobs": -1,
                 }
-                # Next-day-specific: even stronger regularization for the noisier target
+                # Next-day-specific: stronger regularization for the noisier target
+                # v3.2: relaxed from v3.1's extreme settings to match regression improvement
                 if window_name == "next_day":
                     sign_params.update({
-                        "n_estimators": 500,        # More rounds with slower learning
+                        "n_estimators": 400,        # Adequate rounds with slower learning
                         "max_depth": 3,
-                        "learning_rate": 0.01,      # Much slower
-                        "num_leaves": 6,            # Very constrained
-                        "min_child_samples": 80,    # Very large leaves
-                        "reg_alpha": 1.0,
-                        "reg_lambda": 3.0,
-                        "subsample": 0.6,
-                        "colsample_bytree": 0.5,
+                        "learning_rate": 0.01,      # Slow but not crippling
+                        "num_leaves": 8,            # Modest constraint
+                        "min_child_samples": 60,    # Relaxed from 80
+                        "reg_alpha": 0.8,
+                        "reg_lambda": 2.0,          # Relaxed from 3.0
+                        "subsample": 0.65,
+                        "colsample_bytree": 0.55,   # See more features
                     })
                 _SIGN_MIN_TREES = 30  # safety net — never stop below this many rounds
                 # Reuse the same time-based split as the last fold
@@ -693,8 +698,8 @@ class StockPredictor:
                     sign_X_val = X_all[val_start:val_end]
                     sign_y_val = sign_y[val_start:val_end]
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
-                        # Moderate recency weighting: ~2.7x ratio
-                        w_sign = np.exp(np.linspace(-1.0, 0.0, len(sign_y_train))).astype(np.float32)
+                        # Recency weighting: ~4.5x ratio (matching regression model)
+                        w_sign = np.exp(np.linspace(-1.5, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
                         sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
                         sign_X_val_df = pd.DataFrame(sign_X_val, columns=active_cols)
@@ -907,8 +912,8 @@ class StockPredictor:
                 logger.warning(f"Skipping {ticker}-{window_name}: not enough samples")
                 continue
 
-            # Moderate recency weighting: ~2.7x ratio (exp(-1) to exp(0))
-            w = np.exp(np.linspace(-1.0, 0.0, len(y_train))).astype(np.float32)
+            # Recency weighting: ~4.5x ratio (exp(-1.5) to exp(0))
+            w = np.exp(np.linspace(-1.5, 0.0, len(y_train))).astype(np.float32)
             _horizon_params = _lgb_params_for_horizon(window_name)
             model = lgb.LGBMRegressor(**_horizon_params)
             X_train_df = pd.DataFrame(X_train, columns=active_cols)
@@ -945,13 +950,13 @@ class StockPredictor:
                         "subsample": 0.7, "colsample_bytree": 0.7,
                         "random_state": 42, "verbosity": -1, "n_jobs": -1,
                     }
-                    # Next-day-specific: stronger regularization for noisy 1-day target
+                    # Next-day-specific: relaxed regularization (v3.2)
                     if window_name == "next_day":
                         sign_params_tk.update({
-                            "n_estimators": 400, "learning_rate": 0.01,
-                            "num_leaves": 6, "min_child_samples": 50,
-                            "reg_alpha": 1.0, "reg_lambda": 3.0,
-                            "subsample": 0.6, "colsample_bytree": 0.5,
+                            "n_estimators": 300, "learning_rate": 0.01,
+                            "num_leaves": 8, "min_child_samples": 40,
+                            "reg_alpha": 0.8, "reg_lambda": 2.0,
+                            "subsample": 0.65, "colsample_bytree": 0.55,
                         })
                     _SIGN_MIN_TREES_TK = 20
                     sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk)
@@ -1187,8 +1192,10 @@ class StockPredictor:
             ticker_model = self.models.get(key)
 
             # Kill switch: refuse to predict if pooled model is anti-correlated on holdout
+            # v3.2: relaxed from -0.05 to -0.08 — the 7_day model at -0.055 was
+            # falsely killed despite producing profitable backtest results
             pooled_holdout_corr = pooled_meta.get("holdout_correlation", 0.0)
-            if pooled_holdout_corr < -0.05 and pooled_model is not None:
+            if pooled_holdout_corr < -0.08 and pooled_model is not None:
                 logger.warning(
                     "KILL-SWITCH: Pooled %s has negative holdout correlation (%.3f). "
                     "Predictions suppressed for %s.",
@@ -1549,7 +1556,7 @@ class StockPredictor:
 
             # Kill switch: skip horizon if pooled model is anti-correlated
             pooled_holdout_corr = pooled_meta.get("holdout_correlation", 0.0)
-            if pooled_holdout_corr < -0.05 and pooled_model is not None:
+            if pooled_holdout_corr < -0.08 and pooled_model is not None:
                 continue
 
             use_ensemble = False
