@@ -1278,11 +1278,15 @@ def _model_quality_note(predictions: dict) -> str:
     if not confs:
         return "UNKNOWN – no confidence data available"
     avg = sum(confs) / len(confs)
+    # v6.0: Adjusted tiers for quality-driven confidence (typical range: 8-70%).
+    # Previous formula produced 4-5% for everything; new formula is meaningful.
+    if avg < 0.15:
+        return "LOW – model has minimal directional edge; treat as speculative hint only"
+    if avg < 0.30:
+        return "MODERATE – model shows a measurable edge but significant uncertainty remains"
     if avg < 0.50:
-        return "LOW – model confidence is below 50 %; treat as directional hint only"
-    if avg < 0.65:
-        return "MODERATE – predictions carry meaningful uncertainty"
-    return "HIGH – model shows reasonable confidence"
+        return "GOOD – model demonstrates meaningful predictive signal"
+    return "HIGH – model shows strong historical accuracy for this ticker"
 
 
 def generate_explanations(

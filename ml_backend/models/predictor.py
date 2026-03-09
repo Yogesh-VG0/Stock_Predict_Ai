@@ -33,6 +33,8 @@ from ..config.feature_config_v1 import (
     TRADE_SIGMA_MULT,
     TRADE_THRESHOLD_CAP,
     ROUND_TRIP_COST_BPS,
+    TRADE_MIN_CONFIDENCE,
+    SIGN_CLF_MIN_ACCURACY,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,16 +44,18 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-# v5.0.0: Major accuracy overhaul:
-#   - Ensemble blending (pooled + per-ticker weighted average) replaces per-ticker-only
-#   - Confidence from regression prediction magnitude + model quality (removed useless sign classifier dependency)
-#   - Walk-forward starts at 50% (was 40%), 5 folds for robustness
-#   - Recency weighting moderated to 2x (was 3x) to preserve effective sample size
-#   - LightGBM: deeper trees, more leaves, lower regularization to find weak signals
-#   - Sign classifier removed from confidence calc (was producing 50% = coin flip)
-#   - Trade thresholds substantially lowered to generate meaningful trade counts
-#   - Early stopping patience increased to 50 rounds
-MODEL_VERSION = "v5.0.0"
+# v6.0.0: Confidence & signal quality overhaul:
+#   - Confidence formula redesigned: quality-driven (hit_rate + correlation) instead of
+#     prediction-magnitude-driven. Previous formula produced 4-5% for all tickers because
+#     regression predictions are always tiny (regression-to-mean).
+#   - Sign classifier: no longer force-retrained when early stopping finds < 5 trees
+#     (no signal). Previous behavior forced 80 trees → 41% accuracy (anti-correlated).
+#   - Sign classifier gated: ignored when holdout accuracy < 50% (SIGN_CLF_MIN_ACCURACY).
+#   - Ensemble blending: quality-weighted (uses holdout correlation) instead of fixed 60/40.
+#   - Model agreement bonus: +8% confidence when pooled & per-ticker agree on direction.
+#   - Trade recommendation: requires TRADE_MIN_CONFIDENCE (12%) in addition to alpha/prob.
+#   - LightGBM: slightly more regularized to fix 7_day overfitting (negative holdout corr).
+MODEL_VERSION = "v6.0.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -695,14 +699,14 @@ class StockPredictor:
                         "subsample": 0.75,
                         "colsample_bytree": 0.7,
                     })
-                _SIGN_MIN_TREES = 80  # v5.0: need enough trees for meaningful signal
+                _SIGN_MIN_TREES = 80  # minimum trees for meaningful signal
+                _SIGN_NO_SIGNAL_TREES = 5  # v6.0: below this = no directional signal at all
                 if val_start < val_end and val_start < n:
                     sign_X_train = X_all[:train_end]
                     sign_y_train = sign_y[:train_end]
                     sign_X_val = X_all[val_start:val_end]
                     sign_y_val = sign_y[val_start:val_end]
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
-                        # v5.0: moderate recency weighting (2x ratio)
                         w_sign = np.exp(np.linspace(-0.7, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
                         sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
@@ -718,38 +722,57 @@ class StockPredictor:
                             ],
                         )
                         n_trees = sign_clf.booster_.num_trees()
-                        if n_trees < _SIGN_MIN_TREES:
+                        # v6.0: If early stopping found < 5 trees, there's NO directional
+                        # signal. Don't force-retrain — it produces anti-correlated
+                        # classifiers (v5.0 30_day: 1 tree → forced 80 → 41.6% accuracy).
+                        if n_trees < _SIGN_NO_SIGNAL_TREES:
+                            logger.warning(
+                                "POOLED-%s sign clf stopped at %d trees (< %d) — "
+                                "NO directional signal found. Skipping sign classifier.",
+                                window_name, n_trees, _SIGN_NO_SIGNAL_TREES,
+                            )
+                            pooled_meta["sign_classifier_accuracy"] = 0.50
+                        else:
+                            if n_trees < _SIGN_MIN_TREES:
+                                logger.info(
+                                    "POOLED-%s sign clf stopped at %d trees (< %d); "
+                                    "retraining with fixed %d rounds",
+                                    window_name, n_trees, _SIGN_MIN_TREES, _SIGN_MIN_TREES,
+                                )
+                                sign_params_fixed = {**sign_params, "n_estimators": _SIGN_MIN_TREES}
+                                sign_clf = lgb.LGBMClassifier(**sign_params_fixed)
+                                sign_clf.fit(
+                                    sign_X_train_df,
+                                    sign_y_train,
+                                    sample_weight=w_sign,
+                                    eval_set=[(sign_X_val_df, sign_y_val)],
+                                    callbacks=[lgb.log_evaluation(0)],
+                                )
+                            self.pooled_sign_models[window_name] = sign_clf
+                            # Platt-scale (sigmoid calibration) on the val set
+                            try:
+                                cal_clf = CalibratedClassifierCV(sign_clf, method="sigmoid", cv="prefit")
+                                cal_clf.fit(sign_X_val_df, sign_y_val)
+                                self.pooled_sign_models[window_name] = cal_clf
+                            except Exception as cal_err:
+                                logger.debug("Platt calibration skipped for pooled-%s: %s", window_name, cal_err)
+                            # Evaluate on val set
+                            sign_proba = self.pooled_sign_models[window_name].predict_proba(sign_X_val_df)[:, 1]
+                            sign_acc = float(np.mean((sign_proba > 0.5) == sign_y_val))
+                            pooled_meta["sign_classifier_accuracy"] = sign_acc
+                            n_final_trees = sign_clf.booster_.num_trees()
                             logger.info(
-                                "POOLED-%s sign clf stopped at %d trees (< %d); "
-                                "retraining with fixed %d rounds",
-                                window_name, n_trees, _SIGN_MIN_TREES, _SIGN_MIN_TREES,
+                                "POOLED-%s sign classifier: accuracy=%.1f%% trees=%d spw=%.3f",
+                                window_name, sign_acc * 100, n_final_trees, spw,
                             )
-                            sign_params_fixed = {**sign_params, "n_estimators": _SIGN_MIN_TREES}
-                            sign_clf = lgb.LGBMClassifier(**sign_params_fixed)
-                            sign_clf.fit(
-                                sign_X_train_df,
-                                sign_y_train,
-                                sample_weight=w_sign,
-                                eval_set=[(sign_X_val_df, sign_y_val)],
-                                callbacks=[lgb.log_evaluation(0)],
-                            )
-                        self.pooled_sign_models[window_name] = sign_clf
-                        # Platt-scale (sigmoid calibration) on the val set
-                        try:
-                            cal_clf = CalibratedClassifierCV(sign_clf, method="sigmoid", cv="prefit")
-                            cal_clf.fit(sign_X_val_df, sign_y_val)
-                            self.pooled_sign_models[window_name] = cal_clf
-                        except Exception as cal_err:
-                            logger.debug("Platt calibration skipped for pooled-%s: %s", window_name, cal_err)
-                        # Evaluate on val set
-                        sign_proba = self.pooled_sign_models[window_name].predict_proba(sign_X_val_df)[:, 1]
-                        sign_acc = float(np.mean((sign_proba > 0.5) == sign_y_val))
-                        pooled_meta["sign_classifier_accuracy"] = sign_acc
-                        n_final_trees = sign_clf.booster_.num_trees()
-                        logger.info(
-                            "POOLED-%s sign classifier: accuracy=%.1f%% trees=%d spw=%.3f",
-                            window_name, sign_acc * 100, n_final_trees, spw,
-                        )
+                            # v6.0: If accuracy < threshold, remove it — it hurts predictions
+                            if sign_acc < SIGN_CLF_MIN_ACCURACY:
+                                logger.warning(
+                                    "POOLED-%s sign clf accuracy %.1f%% < %.1f%% threshold — "
+                                    "REMOVING sign classifier (will use Gaussian CDF instead)",
+                                    window_name, sign_acc * 100, SIGN_CLF_MIN_ACCURACY * 100,
+                                )
+                                self.pooled_sign_models.pop(window_name, None)
             except Exception as e:
                 logger.warning("Could not train pooled sign classifier for %s: %s", window_name, e)
             pooled_meta.update(pooled_holdout_meta)
@@ -1267,38 +1290,48 @@ class StockPredictor:
                     continue
                 feature_coverage_penalty = max(0.5, 1.0 - missing_ratio)
 
-            # v5.0: Ensemble prediction — blend pooled + per-ticker predictions
+            # v6.0: Ensemble prediction — quality-weighted blend of pooled + per-ticker.
+            # v5.0 used fixed 60/40 or 30/70 weights. v6.0 uses holdout correlation
+            # to weight models by their proven out-of-sample predictive power.
             pred_return = 0.0
+            _pooled_pred = 0.0
+            _ticker_pred = 0.0
             model_source = "none"
 
             if has_pooled and has_ticker:
-                # Both available: weighted blend
                 pooled_cols = pooled_meta.get("feature_columns", model_cols)
                 ticker_cols = ticker_meta.get("feature_columns", model_cols)
 
                 X_pooled = self._select_features(X_full, current_cols, pooled_cols, ticker=ticker, window=window_name)
                 X_pooled_df = pd.DataFrame(X_pooled, columns=pooled_cols)
-                pooled_pred = float(pooled_model.predict(X_pooled_df)[0])
+                _pooled_pred = float(pooled_model.predict(X_pooled_df)[0])
 
                 X_ticker = self._select_features(X_full, current_cols, ticker_cols, ticker=ticker, window=window_name)
                 X_ticker_df = pd.DataFrame(X_ticker, columns=ticker_cols)
-                ticker_pred = float(ticker_model.predict(X_ticker_df)[0])
+                _ticker_pred = float(ticker_model.predict(X_ticker_df)[0])
 
-                # Sign-flip for anti-correlated per-ticker models
                 if ticker_meta.get("invert_signal", False):
-                    ticker_pred = -ticker_pred
+                    _ticker_pred = -_ticker_pred
 
-                # Blend weights: prod_ready per-ticker gets 60%, otherwise 30%
+                # v6.0: Quality-weighted blend using holdout correlation as a proxy
+                # for model reliability. Higher |correlation| = more weight.
+                pooled_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                ticker_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                # Add small epsilon to avoid division by zero
+                total_corr = pooled_corr + ticker_corr + 1e-6
+                # Per-ticker gets at least 20% weight, at most 80%
+                tk_weight_raw = ticker_corr / total_corr
+                tk_weight = max(0.20, min(0.80, tk_weight_raw))
+                # Bonus for production_ready tickers (proven OOS edge)
                 if ticker_prod_ready:
-                    tk_weight = 0.60
-                else:
-                    tk_weight = 0.30
-                pred_return = tk_weight * ticker_pred + (1 - tk_weight) * pooled_pred
+                    tk_weight = min(0.80, tk_weight + 0.15)
+                pred_return = tk_weight * _ticker_pred + (1 - tk_weight) * _pooled_pred
                 model_source = "ensemble"
             elif has_pooled:
                 X_pred = self._select_features(X_full, current_cols, model_cols, ticker=ticker, window=window_name)
                 X_pred_df = pd.DataFrame(X_pred, columns=model_cols)
                 pred_return = float(pooled_model.predict(X_pred_df)[0])
+                _pooled_pred = pred_return
                 model_source = "pooled"
             elif has_ticker:
                 ticker_cols = ticker_meta.get("feature_columns", model_cols)
@@ -1307,6 +1340,7 @@ class StockPredictor:
                 pred_return = float(ticker_model.predict(X_pred_df)[0])
                 if ticker_meta.get("invert_signal", False):
                     pred_return = -pred_return
+                _ticker_pred = pred_return
                 model_source = "per_ticker"
 
             alpha_implied_price = current_price * math.exp(pred_return)
@@ -1314,48 +1348,45 @@ class StockPredictor:
             alpha_pct = pred_return * 100
             
             sigma = float(meta_w.get("val_rmse", 0.0))
+
             # --- P(up) from sign classifier + Gaussian CDF blend ---
+            # v6.0: Gate sign classifier by accuracy — don't use when accuracy < 50%
             sign_model = self.pooled_sign_models.get(window_name)
             tk_sign = self.sign_models.get(key)
+            # Check pooled sign classifier accuracy threshold
+            _pooled_sign_acc = float(pooled_meta.get("sign_classifier_accuracy", 0.50))
+            if _pooled_sign_acc < SIGN_CLF_MIN_ACCURACY:
+                sign_model = None  # v6.0: don't use bad sign classifier
             if tk_sign is not None:
-                sign_model = tk_sign
+                sign_model = tk_sign  # per-ticker overrides pooled (usually better)
             gauss_prob = (
                 0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
             )
             if sign_model is not None:
                 try:
-                    # For sign classifier, use pooled features (most reliable)
                     _sign_cols = pooled_meta.get("feature_columns", model_cols) if has_pooled else model_cols
                     _X_sign = self._select_features(X_full, current_cols, _sign_cols, ticker=ticker, window=window_name)
                     _X_sign_df = pd.DataFrame(_X_sign, columns=_sign_cols)
                     clf_prob = float(sign_model.predict_proba(_X_sign_df)[0, 1])
-                    # v5.0: blend sign classifier with Gaussian CDF 50/50
-                    # This prevents a bad sign classifier from dominating
                     prob_positive = 0.5 * clf_prob + 0.5 * gauss_prob
                 except Exception:
                     prob_positive = gauss_prob
             else:
                 prob_positive = gauss_prob
 
-            # v5.0: Completely redesigned confidence calibration.
-            # Previous formula: directional_edge / 0.30 × quality_mult
-            # Problem: sign classifier at 50% → edge = 0 → confidence = 0 always.
+            # v6.0: Quality-driven confidence calibration.
+            # =============================================
+            # v5.0 formula was: magnitude_conf × quality_mult + dir_bonus
+            # Problem: magnitude_conf ≈ 0 for all tickers because regression predictions
+            # are heavily shrunk toward zero (regression-to-mean). AAPL-30_day had 71.7%
+            # hit rate + 0.371 correlation but only 4.5% confidence.
             #
-            # New formula: confidence = f(prediction_magnitude, model_quality, prob_edge)
-            # 1. Base confidence from prediction magnitude relative to noise (sigma)
-            # 2. Model quality multiplier from hit rate and correlation
-            # 3. Directional agreement bonus from sign classifier
+            # v6.0 formula: confidence is PRIMARILY driven by model quality (how well the
+            # model has performed on holdout data), modulated by directional conviction.
+            # This produces meaningful confidence in the 10-70% range.
             prob_positive = max(0.15, min(0.85, prob_positive))
 
-            # (1) Prediction magnitude confidence: |pred| / sigma, capped at 2.0
-            if sigma > 1e-8:
-                magnitude_ratio = min(2.0, abs(pred_return) / sigma)
-            else:
-                magnitude_ratio = min(2.0, abs(pred_return) / 0.01)
-            magnitude_conf = magnitude_ratio / 2.0  # normalized to [0, 1]
-
-            # (2) Model quality: based on hit rate and correlation
-            # Use the BEST available model's metrics
+            # (1) MODEL QUALITY BASE — the dominant factor [0.08, 0.65]
             best_hit = 0.50
             best_corr = 0.0
             if has_pooled:
@@ -1365,21 +1396,35 @@ class StockPredictor:
                 best_hit = max(best_hit, float(ticker_meta.get("hit_rate", 0.50)))
                 best_corr = max(best_corr, abs(float(ticker_meta.get("correlation", 0.0))))
 
-            # Hit rate quality: 50% → 0.3, 55% → 0.6, 60%+ → 1.0
-            hit_quality = min(1.0, max(0.3, (best_hit - 0.47) / 0.13))
-            # Correlation quality: 0 → 0.3, 0.05 → 0.6, 0.1+ → 1.0
-            corr_quality = min(1.0, max(0.3, best_corr / 0.10))
-            quality_mult = 0.6 * hit_quality + 0.4 * corr_quality
+            # Hit rate score: 48%→0.0, 50%→0.09, 55%→0.32, 60%→0.55, 70%→1.0
+            hit_score = max(0.0, min(1.0, (best_hit - 0.48) / 0.22))
+            # Correlation score: 0→0.0, 0.05→0.33, 0.10→0.67, 0.15+→1.0
+            corr_score = max(0.0, min(1.0, best_corr / 0.15))
+            # Combined quality: equal weight hit rate and correlation
+            quality_score = 0.5 * hit_score + 0.5 * corr_score
+            # Map to confidence base: 0.08 (no edge) to 0.65 (strong edge)
+            confidence_base = 0.08 + 0.57 * quality_score
 
-            # (3) Directional edge from prob_positive
-            dir_edge = abs(prob_positive - 0.50)  # 0 to 0.35
-            dir_bonus = min(0.3, dir_edge)  # up to 0.3 bonus
+            # (2) DIRECTIONAL CONVICTION MULTIPLIER [0.70, 1.30]
+            dir_prob_edge = abs(prob_positive - 0.50)
+            dir_mult = 0.70 + 0.60 * min(1.0, dir_prob_edge / 0.15)
 
-            # Final confidence: magnitude × quality + directional bonus
-            confidence = min(0.95, magnitude_conf * quality_mult + dir_bonus)
-            # Floor: never below 0.05 if model produced a non-zero prediction
-            if abs(pred_return) > 1e-6:
-                confidence = max(0.05, confidence)
+            # (3) MAGNITUDE BONUS [0.0, 0.10]
+            if sigma > 1e-8:
+                mag_ratio = min(1.0, abs(pred_return) / (1.5 * sigma))
+            else:
+                mag_ratio = 0.0
+            magnitude_bonus = 0.10 * mag_ratio
+
+            # (4) MODEL AGREEMENT BONUS [0.0, 0.08]
+            agreement_bonus = 0.0
+            if has_pooled and has_ticker:
+                if (_pooled_pred > 0) == (_ticker_pred > 0) and abs(_pooled_pred) > 1e-8 and abs(_ticker_pred) > 1e-8:
+                    agreement_bonus = 0.08
+
+            # Final confidence
+            confidence = confidence_base * dir_mult + magnitude_bonus + agreement_bonus
+            confidence = max(0.05, min(0.85, confidence))
 
             # Feature coverage penalty
             confidence *= feature_coverage_penalty
@@ -1433,14 +1478,16 @@ class StockPredictor:
             min_return_for_profit = (ROUND_TRIP_COST_BPS / 10000)
             covers_transaction_cost = abs(pred_return) >= min_return_for_profit
 
-            # Per-horizon probability threshold: next_day uses a lower bar (0.505)
-            # because its sign classifier accuracy is ~51.7% — the standard 0.52
-            # threshold was filtering out nearly all trades.
+            # Per-horizon probability threshold
             _min_prob = TRADE_MIN_PROB_BY_HORIZON.get(window_name, TRADE_MIN_PROB_POSITIVE)
+            # v6.0: Require minimum confidence for trade recommendation.
+            # Previous versions had no confidence floor — trades at 4-5% confidence
+            # were meaningless noise. Now requires TRADE_MIN_CONFIDENCE (12%).
             trade_recommended = (
                 pred_return >= min_alpha
                 and prob_positive >= _min_prob
-                and covers_transaction_cost  # Fix #21: must clear transaction costs
+                and covers_transaction_cost
+                and confidence >= TRADE_MIN_CONFIDENCE  # v6.0: confidence gate
             )
 
             # P(return > threshold) - classification-style (Losing Loonies v4: tradable moves)
@@ -1543,7 +1590,7 @@ class StockPredictor:
             if pooled_holdout_corr < -0.08 and pooled_model is not None:
                 pooled_model = None
 
-            # v5.0: Ensemble blending in batch mode
+            # v6.0: Ensemble blending in batch mode (mirrors predict_all_windows)
             has_pooled = pooled_model is not None
             has_ticker = (ticker_meta is not None and ticker_model is not None)
             ticker_prod_ready = has_ticker and ticker_meta.get("production_ready", False)
@@ -1553,7 +1600,7 @@ class StockPredictor:
 
             meta_w = pooled_meta if has_pooled else ticker_meta
 
-            # Compute ensemble prediction
+            # v6.0: Quality-weighted ensemble prediction (matches predict_all_windows)
             if has_pooled and has_ticker:
                 pooled_cols = pooled_meta.get("feature_columns")
                 ticker_cols = ticker_meta.get("feature_columns")
@@ -1567,7 +1614,13 @@ class StockPredictor:
                 if ticker_meta.get("invert_signal", False):
                     ticker_preds = -ticker_preds
 
-                tk_w = 0.60 if ticker_prod_ready else 0.30
+                # v6.0: Quality-weighted blend using holdout correlation
+                pooled_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                ticker_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                total_corr = pooled_corr + ticker_corr + 1e-6
+                tk_w = max(0.20, min(0.80, ticker_corr / total_corr))
+                if ticker_prod_ready:
+                    tk_w = min(0.80, tk_w + 0.15)
                 preds_ret = tk_w * ticker_preds + (1 - tk_w) * pooled_preds
             elif has_pooled:
                 model_cols = pooled_meta.get("feature_columns")
@@ -1592,16 +1645,19 @@ class StockPredictor:
             min_alpha = max(raw_threshold, TRADE_MIN_ALPHA)
 
             # Prob positive (vectorized)
-            # Use sign classifier when available, else Gaussian CDF fallback.
-            # Prefer per-ticker sign model (mirrors predict_all_windows).
+            # v6.0: Gate sign classifier by accuracy — don't use when accuracy < 50%
             sign_model = self.pooled_sign_models.get(window_name)
             tk_sign = self.sign_models.get(key)
+            _pooled_sign_acc = float(pooled_meta.get("sign_classifier_accuracy", 0.50))
+            if _pooled_sign_acc < SIGN_CLF_MIN_ACCURACY:
+                sign_model = None  # v6.0: don't use bad sign classifier
             if tk_sign is not None:
                 sign_model = tk_sign
 
             if sign_model is not None:
                 try:
-                    probs = sign_model.predict_proba(X_pred)[:, 1].astype(np.float64)
+                    _sign_X = X_pred if not (has_pooled and has_ticker) else X_pooled
+                    probs = sign_model.predict_proba(_sign_X)[:, 1].astype(np.float64)
                 except Exception:
                     sign_model = None  # fall through to Gaussian
 
@@ -1623,9 +1679,33 @@ class StockPredictor:
             min_return_for_profit = ROUND_TRIP_COST_BPS / 10000
             covers_cost = np.abs(preds_ret) >= min_return_for_profit
 
-            # Trade recommended mask (per-horizon probability threshold)
+            # v6.0: Vectorized confidence calculation (simplified batch version)
+            # Uses model quality base + directional conviction (no per-row agreement bonus)
+            best_hit = 0.50
+            best_corr = 0.0
+            if has_pooled:
+                best_hit = max(best_hit, float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50))))
+                best_corr = max(best_corr, abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0)))))
+            if has_ticker:
+                best_hit = max(best_hit, float(ticker_meta.get("hit_rate", 0.50)))
+                best_corr = max(best_corr, abs(float(ticker_meta.get("correlation", 0.0))))
+            hit_score = max(0.0, min(1.0, (best_hit - 0.48) / 0.22))
+            corr_score = max(0.0, min(1.0, best_corr / 0.15))
+            quality_score = 0.5 * hit_score + 0.5 * corr_score
+            confidence_base = 0.08 + 0.57 * quality_score
+            # Vectorized directional conviction
+            dir_prob_edge = np.abs(probs - 0.50)
+            dir_mult = 0.70 + 0.60 * np.minimum(1.0, dir_prob_edge / 0.15)
+            batch_confidence = np.clip(confidence_base * dir_mult, 0.05, 0.85)
+
+            # Trade recommended mask (per-horizon probability threshold + confidence gate)
             _min_prob = TRADE_MIN_PROB_BY_HORIZON.get(window_name, TRADE_MIN_PROB_POSITIVE)
-            trade_mask = (preds_ret >= min_alpha) & (probs >= _min_prob) & covers_cost
+            trade_mask = (
+                (preds_ret >= min_alpha)
+                & (probs >= _min_prob)
+                & covers_cost
+                & (batch_confidence >= TRADE_MIN_CONFIDENCE)  # v6.0: confidence gate
+            )
             
             # Normalized return
             horizon = TARGET_CONFIG.get(window_name, {}).get("horizon", 1)
