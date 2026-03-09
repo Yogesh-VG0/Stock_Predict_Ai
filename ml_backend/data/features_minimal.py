@@ -529,6 +529,29 @@ class MinimalFeatureEngineer:
                                  "si_available"):
                         df[_sic] = 0.0
 
+                # ── 15. v4.0 Cross-domain interaction features ──
+                # LightGBM can discover interactions, but explicit cross-domain
+                # product terms (momentum×volume, sentiment×momentum, etc.) give
+                # the model a head start on the most valuable signal combinations.
+                _mom_5d_s = _to_series(df.get("momentum_5d", pd.Series(0.0, index=df.index)))
+                _vol_ratio_s = _to_series(df.get("volume_ratio", pd.Series(1.0, index=df.index)))
+                _sent_7d_s = _to_series(df.get("sent_mean_7d", pd.Series(0.0, index=df.index))).fillna(0)
+                _vol_20d_s = _to_series(df.get("volatility_20d", pd.Series(0.01, index=df.index))).fillna(0.01)
+                _rsi_s = _to_series(df.get("rsi", pd.Series(50.0, index=df.index)))
+                _vix_s = _to_series(df.get("vix_level", pd.Series(0.0, index=df.index))).fillna(0)
+                _insider_net_s = _to_series(df.get("insider_net_value_30d", pd.Series(0.0, index=df.index))).fillna(0)
+
+                # Momentum × Volume: strong momentum with high volume is more reliable
+                df["momentum_volume_confirm"] = (_mom_5d_s * _vol_ratio_s).fillna(0).clip(-5, 5)
+                # Sentiment × Momentum: sentiment agrees with price direction → stronger signal
+                df["sentiment_momentum_align"] = (_sent_7d_s * _mom_5d_s).fillna(0).clip(-1, 1)
+                # Volatility × RSI: oversold + low vol = mean reversion opportunity
+                df["vol_rsi_interaction"] = (_vol_20d_s * (_rsi_s - 50) / 50).fillna(0).clip(-1, 1)
+                # VIX × Sentiment: fear + negative sentiment = capitulation signal
+                df["vix_sentiment_cross"] = (_vix_s * _sent_7d_s).fillna(0).clip(-5, 5)
+                # Insider × Momentum: insider buying + positive momentum = strong conviction
+                df["insider_momentum_cross"] = (_insider_net_s * np.sign(_mom_5d_s)).fillna(0).clip(-5, 5)
+
                 # Defragment DataFrame after all column-by-column additions
                 # to eliminate PerformanceWarnings from internal block fragmentation
                 df = df.copy()
