@@ -73,22 +73,23 @@ POOL_CONFIG = {
 }
 
 # LightGBM params — production-grade, tuned for 75-ticker pooled model (~91K samples)
-# Huber: robust to outliers (earnings surprises, black swans)
-# v3.2: rebalanced regularization — v3.1 was over-regularized (holdout corr ~0, hit ~48%).
-# With 91K pooled samples the model can learn deeper patterns without overfitting.
+# v3.0: switched from Huber to MSE (regression). Huber with alpha=0.9 was clipping
+# gradients on market-neutral targets (±2-5% range), crushing all predictions toward
+# zero — causing 0.000 correlations and coin-flip hit rates across all horizons.
+# MSE lets the model actually capture return magnitude while early stopping + L2
+# regularization prevent overfitting to outliers.
 LIGHTGBM_PARAMS = {
-    "objective": "huber",
-    "alpha": 0.9,              # Huber delta — 0.9 balances robustness vs capturing larger moves
+    "objective": "regression",
     "metric": "rmse",
     "boosting_type": "gbdt",
     "n_estimators": 500,       # More rounds with slower learning for gradual convergence
     "max_depth": 5,            # Depth-5 is appropriate for 91K samples
-    "learning_rate": 0.008,    # Slightly slower learning — lets early stopping find optimal point
-    "num_leaves": 24,          # Tighter constraint for depth-5
-    "min_child_samples": 25,   # Relaxed from 30 — 91K samples support finer splits
-    "min_split_gain": 0.01,    # Relaxed from 0.02 — let more genuine splits through
-    "reg_alpha": 0.3,          # Moderate L1 — sparsity without crushing weak but real signals
-    "reg_lambda": 1.5,         # Moderate L2 — prevents weight explosion while preserving signal
+    "learning_rate": 0.01,     # Slightly faster than v2 — MSE converges better than Huber
+    "num_leaves": 31,          # Standard 2^5-1 for depth-5 — more capacity than v2's 24
+    "min_child_samples": 25,   # 91K samples support finer splits
+    "min_split_gain": 0.005,   # Lower than v2 — let genuine splits through with MSE
+    "reg_alpha": 0.2,          # Moderate L1 — sparsity without crushing weak signals
+    "reg_lambda": 1.0,         # L2 replaces Huber's outlier robustness
     "subsample": 0.75,         # Row sampling for diversity
     "subsample_freq": 1,       # Apply row sampling every boosting round
     "colsample_bytree": 0.7,   # Feature diversity per tree
@@ -98,22 +99,22 @@ LIGHTGBM_PARAMS = {
 }
 
 # Next-day-specific LightGBM overrides — 1-day alpha is much noisier than 7d/30d,
-# so we use heavier regularization and shallower trees, but NOT so extreme that
-# the model can't learn anything (v3.1 had 48% hit rate = coin flip).
-# v3.2: significantly relaxed from v3.1's crippling over-regularization.
-# With 91K pooled samples, depth-4 / 14 leaves is still conservative.
+# so we use heavier regularization and shallower trees.
+# v3.0: relaxed from v2's over-regularization. With MSE loss the model can
+# actually learn short-term patterns; we just need enough regularization to
+# prevent overfitting on daily noise.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 600,       # More rounds with slow learning for gradual signal extraction
-    "max_depth": 4,            # One extra interaction level vs base — still very conservative
-    "learning_rate": 0.008,    # Slow but not cripplingly so — allows meaningful convergence
-    "num_leaves": 14,          # Modest for depth-4 — captures key interactions without overfit
-    "min_child_samples": 40,   # Large leaves for stability, but not so large it blocks all splits
-    "min_split_gain": 0.02,    # Relaxed from 0.08 — previous value blocked nearly ALL splits
-    "reg_alpha": 0.8,          # Moderate L1 sparsity
-    "reg_lambda": 3.0,         # Strong but not crushing L2
-    "subsample": 0.65,         # Row sampling — some diversity without throwing away too much data
-    "colsample_bytree": 0.55,  # See more features per tree than before
+    "n_estimators": 500,       # Adequate rounds with early stopping
+    "max_depth": 4,            # Shallower than base — limits overfit on daily noise
+    "learning_rate": 0.01,     # Same as base
+    "num_leaves": 20,          # Relaxed from 14 — depth-4 can handle 20 leaves with MSE
+    "min_child_samples": 30,   # Relaxed from 40 — let the model find patterns
+    "min_split_gain": 0.01,    # Relaxed from 0.02
+    "reg_alpha": 0.5,          # Moderate L1
+    "reg_lambda": 2.0,         # Stronger L2 than base for noisy target
+    "subsample": 0.7,          # Closer to base
+    "colsample_bytree": 0.6,   # Slightly more restricted for next_day
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
@@ -122,9 +123,9 @@ LIGHTGBM_PARAMS_NEXT_DAY = {
 # Per-horizon top_k: next_day gets fewer features (noisier target → simpler model)
 # v3.2: increased top_k to accommodate new MACD/ATR/52w/BB features
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 35,   # Increased from 30 — new features add diverse signal
-    "7_day": 50,      # Increased from 45
-    "30_day": 50,     # Increased from 45
+    "next_day": 45,   # v3.0: increased from 35 — preserving more signal with MSE
+    "7_day": 55,      # v3.0: increased from 50
+    "30_day": 60,     # v3.0: increased from 50
 }
 FEATURE_PRUNING = {
     "enabled": True,

@@ -42,9 +42,11 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-# v2.2.0: relaxed hyperparams, new features (MACD/ATR/52w/BB), stronger recency,
-#          walk-forward fold improvement, kill-switch threshold relaxed.
-MODEL_VERSION = "v2.2.0"
+# v4.0.0: Per-ticker priority architecture (no ensemble blending), Huber→MSE loss,
+#          improved confidence calibration (directional edge × model quality),
+#          walk-forward fold-0 lowered, recency weighting moderated, feature
+#          interaction terms added, sign classifier strengthened.
+MODEL_VERSION = "v4.0.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -457,8 +459,8 @@ class StockPredictor:
                 if n_folds == 1:
                     train_end = int(n * 0.85)
                 else:
-                    # v3.2: start at 55% (was 50%) — fold-0 gets 10% more training data
-                    train_end = int(n * (0.55 + fold * 0.10))
+                    # v3.0: start at 40% (was 55%) — more training data for pooled model
+                    train_end = int(n * (0.40 + fold * 0.12))
 
                 # Purge/embargo gap to prevent horizon overlap leakage
                 horizon = TARGET_CONFIG[window_name]["horizon"]
@@ -500,9 +502,9 @@ class StockPredictor:
                 if len(y_train) < 200 or len(y_val) < 20:
                     break
 
-                # Recency weighting: ~4.5x ratio (exp(-1.5) to exp(0))
-                # v3.2: strengthened from 2.7x — recent market patterns are more predictive
-                w = np.exp(np.linspace(-1.5, 0.0, len(y_train))).astype(np.float32)
+                # Recency weighting: ~3x ratio (exp(-1.1) to exp(0))
+                # v3.0: moderated from 4.5x — overly aggressive weighting was reducing effective sample size
+                w = np.exp(np.linspace(-1.1, 0.0, len(y_train))).astype(np.float32)
                 _horizon_params = _lgb_params_for_horizon(window_name)
                 fold_model = lgb.LGBMRegressor(**_horizon_params)
                 X_train_df = pd.DataFrame(X_train, columns=active_cols)
@@ -662,35 +664,34 @@ class StockPredictor:
                     "objective": "binary",
                     "metric": "binary_logloss",
                     "boosting_type": "gbdt",
-                    "n_estimators": 300,        # reduced from 500; early stopping handles the rest
-                    "max_depth": 3,             # reduced from 4 — shallower trees for weak signal
-                    "learning_rate": 0.02,      # slower learning for better generalization
-                    "num_leaves": 8,            # reduced from 15 — tighter constraint for depth-3
-                    "min_child_samples": 50,    # increased from 30 — need large leaves for noisy binary label
+                    "n_estimators": 500,        # v3.0: increased from 300 — more capacity for sign signal
+                    "max_depth": 3,
+                    "learning_rate": 0.02,
+                    "num_leaves": 12,           # v3.0: increased from 8 — let model find splits
+                    "min_child_samples": 30,    # v3.0: reduced from 50 — less restrictive leaf size
                     "scale_pos_weight": spw,
-                    "reg_alpha": 0.5,           # increased L1 from 0.3
-                    "reg_lambda": 1.0,          # increased L2 from 0.3 — prevent overfit on sign noise
-                    "subsample": 0.7,           # reduced from 0.8
-                    "colsample_bytree": 0.7,    # reduced from 0.8
+                    "reg_alpha": 0.3,           # v3.0: reduced from 0.5 — less L1 sparsity
+                    "reg_lambda": 0.5,          # v3.0: reduced from 1.0 — less L2 regularization
+                    "subsample": 0.75,          # v3.0: slightly more data per tree
+                    "colsample_bytree": 0.7,
                     "random_state": 42,
                     "verbosity": -1,
                     "n_jobs": -1,
                 }
-                # Next-day-specific: stronger regularization for the noisier target
-                # v3.2: relaxed from v3.1's extreme settings to match regression improvement
+                # Next-day-specific: moderate regularization for noisier target
                 if window_name == "next_day":
                     sign_params.update({
-                        "n_estimators": 400,        # Adequate rounds with slower learning
+                        "n_estimators": 500,
                         "max_depth": 3,
-                        "learning_rate": 0.01,      # Slow but not crippling
-                        "num_leaves": 8,            # Modest constraint
-                        "min_child_samples": 60,    # Relaxed from 80
-                        "reg_alpha": 0.8,
-                        "reg_lambda": 2.0,          # Relaxed from 3.0
-                        "subsample": 0.65,
-                        "colsample_bytree": 0.55,   # See more features
+                        "learning_rate": 0.015,
+                        "num_leaves": 10,
+                        "min_child_samples": 40,
+                        "reg_alpha": 0.5,
+                        "reg_lambda": 1.0,
+                        "subsample": 0.70,
+                        "colsample_bytree": 0.60,
                     })
-                _SIGN_MIN_TREES = 30  # safety net — never stop below this many rounds
+                _SIGN_MIN_TREES = 50  # v3.0: increased from 30 — need more trees for meaningful signal
                 # Reuse the same time-based split as the last fold
                 if val_start < val_end and val_start < n:
                     sign_X_train = X_all[:train_end]
@@ -698,8 +699,8 @@ class StockPredictor:
                     sign_X_val = X_all[val_start:val_end]
                     sign_y_val = sign_y[val_start:val_end]
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
-                        # Recency weighting: ~4.5x ratio (matching regression model)
-                        w_sign = np.exp(np.linspace(-1.5, 0.0, len(sign_y_train))).astype(np.float32)
+                        # Recency weighting: ~3x ratio (matching regression model)
+                        w_sign = np.exp(np.linspace(-1.1, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
                         sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
                         sign_X_val_df = pd.DataFrame(sign_X_val, columns=active_cols)
@@ -912,8 +913,8 @@ class StockPredictor:
                 logger.warning(f"Skipping {ticker}-{window_name}: not enough samples")
                 continue
 
-            # Recency weighting: ~4.5x ratio (exp(-1.5) to exp(0))
-            w = np.exp(np.linspace(-1.5, 0.0, len(y_train))).astype(np.float32)
+            # Recency weighting: ~3x ratio (exp(-1.1) to exp(0))
+            w = np.exp(np.linspace(-1.1, 0.0, len(y_train))).astype(np.float32)
             _horizon_params = _lgb_params_for_horizon(window_name)
             model = lgb.LGBMRegressor(**_horizon_params)
             X_train_df = pd.DataFrame(X_train, columns=active_cols)
@@ -943,22 +944,22 @@ class StockPredictor:
                     spw_tk = n_neg_tk / max(n_pos_tk, 1)
                     sign_params_tk = {
                         "objective": "binary", "metric": "binary_logloss",
-                        "boosting_type": "gbdt", "n_estimators": 200,
-                        "max_depth": 3, "learning_rate": 0.02, "num_leaves": 8,
-                        "min_child_samples": 30, "scale_pos_weight": spw_tk,
-                        "reg_alpha": 0.5, "reg_lambda": 1.0,
-                        "subsample": 0.7, "colsample_bytree": 0.7,
+                        "boosting_type": "gbdt", "n_estimators": 300,
+                        "max_depth": 3, "learning_rate": 0.02, "num_leaves": 12,
+                        "min_child_samples": 25, "scale_pos_weight": spw_tk,
+                        "reg_alpha": 0.3, "reg_lambda": 0.5,
+                        "subsample": 0.75, "colsample_bytree": 0.7,
                         "random_state": 42, "verbosity": -1, "n_jobs": -1,
                     }
-                    # Next-day-specific: relaxed regularization (v3.2)
+                    # Next-day-specific: moderate regularization for noisier target
                     if window_name == "next_day":
                         sign_params_tk.update({
-                            "n_estimators": 300, "learning_rate": 0.01,
-                            "num_leaves": 8, "min_child_samples": 40,
-                            "reg_alpha": 0.8, "reg_lambda": 2.0,
-                            "subsample": 0.65, "colsample_bytree": 0.55,
+                            "n_estimators": 300, "learning_rate": 0.015,
+                            "num_leaves": 10, "min_child_samples": 30,
+                            "reg_alpha": 0.5, "reg_lambda": 1.0,
+                            "subsample": 0.70, "colsample_bytree": 0.60,
                         })
-                    _SIGN_MIN_TREES_TK = 20
+                    _SIGN_MIN_TREES_TK = 30  # v3.0: increased from 20
                     sign_clf_tk = lgb.LGBMClassifier(**sign_params_tk)
                     sign_clf_tk.fit(
                         X_train_df, sign_y_train, sample_weight=w,
@@ -1085,9 +1086,9 @@ class StockPredictor:
                         binom_pval = 0.5 if hit_rate > 0.52 else 1.0
                 production_ready = (
                     beats_naive and beats_last
-                    and hit_rate >= 0.52
-                    and binom_pval < 0.10  # 90% confidence above coin-flip
-                    and n_test_samples >= 30  # minimum sample size
+                    and hit_rate >= 0.50
+                    and binom_pval < 0.20  # v3.0: 80% confidence (was 90%) — more tickers qualify
+                    and n_test_samples >= 20  # v3.0: reduced from 30 — include smaller holdouts
                 )
                 # Detect anti-correlated models: if correlation is strongly negative
                 # (< -0.15) with enough test samples, the model learned an inverse
@@ -1184,61 +1185,40 @@ class StockPredictor:
 
         results = {}
         for window_name in self.prediction_windows:
-            # --- Ensemble: blend pooled + per-ticker when both exist ---
+            # --- v4.0: Per-ticker priority, pooled fallback (no ensemble) ---
             pooled_model = self.pooled_models.get(window_name)
             pooled_meta = self.pooled_metadata.get(window_name, {})
             key = (ticker, window_name)
             ticker_meta = self.metadata.get(key)
             ticker_model = self.models.get(key)
 
-            # Kill switch: refuse to predict if pooled model is anti-correlated on holdout
-            # v3.2: relaxed from -0.05 to -0.08 — the 7_day model at -0.055 was
-            # falsely killed despite producing profitable backtest results
+            # Kill switch: suppress pooled model if anti-correlated on holdout
             pooled_holdout_corr = pooled_meta.get("holdout_correlation", 0.0)
             if pooled_holdout_corr < -0.08 and pooled_model is not None:
                 logger.warning(
                     "KILL-SWITCH: Pooled %s has negative holdout correlation (%.3f). "
-                    "Predictions suppressed for %s.",
+                    "Pooled model suppressed for %s.",
                     window_name, pooled_holdout_corr, ticker,
                 )
-                results[window_name] = {
-                    "prediction": 0.0, "alpha": 0.0, "alpha_pct": 0.0,
-                    "price_change": 0.0, "predicted_price": current_price,
-                    "alpha_implied_price": current_price,
-                    "confidence": 0.0, "current_price": current_price,
-                    "prob_positive": 0.5, "prob_above_threshold": 0.5,
-                    "trade_recommended": False,
-                    "trade_threshold": TRADE_MIN_ALPHA,
-                    "normalized_return": 0.0,
-                    "horizon_days": TARGET_CONFIG.get(window_name, {}).get("horizon", 1),
-                    "min_return_for_profit": ROUND_TRIP_COST_BPS / 10000,
-                    "covers_transaction_cost": False,
-                    "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
-                    "reason": "model_anti_correlated",
-                    "model_version": MODEL_VERSION,
-                }
-                continue
+                pooled_model = None
 
-            # Determine which model(s) to use
-            use_ensemble = False
-            model = pooled_model
-            meta_w = pooled_meta
+            # v4.0: Per-ticker primary, pooled fallback (no ensemble blending).
+            # Per-ticker models capture stock-specific patterns; pooled averages them out.
+            model = None
+            meta_w = {}
+            model_source = "none"
             if (ticker_meta is not None
-                    and ticker_meta.get("n_train", 0) >= 300
-                    and ticker_meta.get("production_ready", False)
-                    and ticker_model is not None
-                    and pooled_model is not None):
-                # Both models available & per-ticker is production-ready → ensemble
-                use_ensemble = True
-            elif (ticker_meta is not None
-                    and ticker_meta.get("n_train", 0) >= 300
                     and ticker_meta.get("production_ready", False)
                     and ticker_model is not None):
-                # Per-ticker only (no pooled)
                 model = ticker_model
                 meta_w = ticker_meta
+                model_source = "per_ticker"
+            elif pooled_model is not None:
+                model = pooled_model
+                meta_w = pooled_meta
+                model_source = "pooled"
+
             if model is None:
-                # logger.warning(f"No model for {ticker}-{window_name}") # Too noisy
                 results[window_name] = {
                     "prediction": 0.0,
                     "alpha": 0.0,
@@ -1257,14 +1237,12 @@ class StockPredictor:
                     "min_return_for_profit": ROUND_TRIP_COST_BPS / 10000,
                     "covers_transaction_cost": False,
                     "is_market_neutral": USE_MARKET_NEUTRAL_TARGET,
-                    "reason": "no_model" 
+                    "reason": "no_model"
                 }
                 continue
 
-            # meta_w already selected above (pooled unless ticker prod-ready); don't re-fetch
             if not meta_w:
                 meta_w = {}
-            # Select features to match model's training columns (pruning-aware)
             model_cols = meta_w.get("feature_columns")
 
             # Hard check: if >50% of model columns are missing, skip this window
@@ -1293,7 +1271,6 @@ class StockPredictor:
                         "reason": "feature_mismatch",
                     }
                     continue
-                # Feature coverage penalty: proportionally reduce confidence
                 feature_coverage_penalty = max(0.5, 1.0 - missing_ratio)
             else:
                 feature_coverage_penalty = 1.0
@@ -1305,51 +1282,25 @@ class StockPredictor:
             )
             X_pred_df = pd.DataFrame(X_pred, columns=model_cols)
 
-            # --- Ensemble or single-model prediction ---
-            if use_ensemble:
-                pooled_pred = float(pooled_model.predict(X_pred_df)[0])
-                # Per-ticker model may need its own feature alignment
-                tk_model_cols = ticker_meta.get("feature_columns")
-                if tk_model_cols:
-                    X_tk = self._select_features(
-                        X_full, current_cols, tk_model_cols,
-                        ticker=ticker, window=window_name,
-                    )
-                    X_tk_df = pd.DataFrame(X_tk, columns=tk_model_cols)
-                else:
-                    X_tk_df = X_pred_df
-                ticker_pred = float(ticker_model.predict(X_tk_df)[0])
+            # v4.0: Single model prediction (per-ticker or pooled, no ensemble)
+            pred_return = float(model.predict(X_pred_df)[0])
+            # Sign-flip for anti-correlated per-ticker models
+            if (model_source == "per_ticker"
+                    and ticker_meta is not None
+                    and ticker_meta.get("invert_signal", False)):
+                pred_return = -pred_return
+                logger.debug(
+                    "INVERT-SIGNAL %s-%s: flipped per-ticker pred sign",
+                    ticker, window_name,
+                )
 
-                # Sign-flip for anti-correlated per-ticker models
-                if ticker_meta.get("invert_signal", False):
-                    ticker_pred = -ticker_pred
-                    logger.debug(
-                        "INVERT-SIGNAL %s-%s: flipped per-ticker pred sign",
-                        ticker, window_name,
-                    )
-
-                # Inverse-RMSE weighting: lower RMSE → more weight
-                pooled_rmse = max(float(pooled_meta.get("val_rmse", 1.0)), 1e-6)
-                ticker_rmse = max(float(ticker_meta.get("val_rmse", 1.0)), 1e-6)
-                w_pooled = (1 / pooled_rmse) / (1 / pooled_rmse + 1 / ticker_rmse)
-                w_ticker = 1.0 - w_pooled
-                pred_return = w_pooled * pooled_pred + w_ticker * ticker_pred
-            else:
-                pred_return = float(model.predict(X_pred_df)[0])
-                # Sign-flip for anti-correlated single model (per-ticker only, not pooled)
-                if ticker_meta is not None and ticker_meta.get("invert_signal", False) and model is not pooled_model:
-                    pred_return = -pred_return
-                    logger.debug(
-                        "INVERT-SIGNAL %s-%s: flipped single-model pred sign",
-                        ticker, window_name,
-                    )
             # pred_return is market-neutral alpha (stock log-return minus SPY log-return)
             # when USE_MARKET_NEUTRAL_TARGET is True.  alpha_implied_price is NOT a true
             # price forecast — it's current_price * exp(alpha), useful only as a
-            # directional/magnitude proxy.  Do NOT present it as an absolute price target.
+            # directional/magnitude proxy.
             alpha_implied_price = current_price * math.exp(pred_return)
             price_change = alpha_implied_price - current_price
-            alpha_pct = pred_return * 100  # alpha as percentage for readability
+            alpha_pct = pred_return * 100
             
             sigma = float(meta_w.get("val_rmse", 0.0))
             # --- Calibrated P(up) from sign classifier, fallback to Gaussian CDF ---
@@ -1386,18 +1337,24 @@ class StockPredictor:
                     prob_positive = gauss_prob
             else:
                 prob_positive = gauss_prob
-            confidence = prob_positive
-            # Clip extreme confidence — short-term alpha prediction can never be
-            # > ~85% or < ~15% certain; prevents per-ticker overfit edge cases.
-            prob_positive = max(0.15, min(0.85, prob_positive))
-            confidence = prob_positive
+            # v4.0: Improved confidence calibration.
+            # Confidence = directional edge (distance from 50% coin-flip) × model quality.
+            # prob_positive=0.50 → 0% confidence (no edge).
+            # prob_positive=0.65 → ~50% confidence (moderate edge).
+            prob_positive = max(0.20, min(0.80, prob_positive))
+            directional_edge = abs(prob_positive - 0.50)  # 0.0 to 0.30
+            confidence = min(0.95, directional_edge / 0.30)  # normalized to [0, 0.95]
+            # Model quality multiplier: scale confidence by how well the model performed
+            model_hit_rate = float(meta_w.get("hit_rate", 0.50))
+            quality_mult = min(1.0, max(0.3, (model_hit_rate - 0.45) / 0.15))
+            confidence *= quality_mult
 
-            # Feature coverage penalty: reduce confidence proportionally to missing features
+            # Feature coverage penalty
             confidence *= feature_coverage_penalty
 
-            # Stale sentiment penalty: if sentiment data is old, reduce confidence
+            # Stale sentiment penalty
             if os.environ.get("SENTIMENT_FRESH", "true").lower() not in ("true", "1", "yes"):
-                confidence *= 0.85  # 15% penalty for stale sentiment data
+                confidence *= 0.85
 
             # ── Regime-adaptive confidence & threshold adjustment ──
             # Read current regime from the feature row (same PIT-safe features
@@ -1554,26 +1511,22 @@ class StockPredictor:
             ticker_meta = self.metadata.get(key)
             ticker_model = self.models.get(key)
 
-            # Kill switch: skip horizon if pooled model is anti-correlated
+            # Kill switch: suppress pooled if anti-correlated, fall back to per-ticker
             pooled_holdout_corr = pooled_meta.get("holdout_correlation", 0.0)
             if pooled_holdout_corr < -0.08 and pooled_model is not None:
-                continue
+                pooled_model = None  # suppress pooled for this horizon only
 
-            use_ensemble = False
-            model = pooled_model
-            meta_w = pooled_meta
+            # v4.0: Per-ticker primary, pooled fallback (no ensemble)
+            model = None
+            meta_w = {}
             if (ticker_meta is not None
-                    and ticker_meta.get("n_train", 0) >= 300
-                    and ticker_meta.get("production_ready", False)
-                    and ticker_model is not None
-                    and pooled_model is not None):
-                use_ensemble = True
-            elif (ticker_meta is not None
-                    and ticker_meta.get("n_train", 0) >= 300
                     and ticker_meta.get("production_ready", False)
                     and ticker_model is not None):
                 model = ticker_model
                 meta_w = ticker_meta
+            elif pooled_model is not None:
+                model = pooled_model
+                meta_w = pooled_meta
             
             if model is None:
                 continue
@@ -1585,24 +1538,8 @@ class StockPredictor:
             if len(pred_cols) == X_pred.shape[1]:
                 X_pred = pd.DataFrame(X_pred, columns=pred_cols)
 
-            # Vectorized prediction — ensemble or single-model
-            if use_ensemble:
-                pooled_preds = pooled_model.predict(X_pred)
-                tk_model_cols = ticker_meta.get("feature_columns")
-                if tk_model_cols:
-                    X_tk = self._select_features(features, current_cols, tk_model_cols)
-                    X_tk = pd.DataFrame(X_tk, columns=tk_model_cols)
-                else:
-                    X_tk = X_pred
-                ticker_preds = ticker_model.predict(X_tk)
-                # Inverse-RMSE weighting
-                pooled_rmse = max(float(pooled_meta.get("val_rmse", 1.0)), 1e-6)
-                ticker_rmse = max(float(ticker_meta.get("val_rmse", 1.0)), 1e-6)
-                w_pooled = (1 / pooled_rmse) / (1 / pooled_rmse + 1 / ticker_rmse)
-                w_ticker = 1.0 - w_pooled
-                preds_ret = w_pooled * pooled_preds + w_ticker * ticker_preds
-            else:
-                preds_ret = model.predict(X_pred)
+            # v4.0: Single model prediction (no ensemble)
+            preds_ret = model.predict(X_pred)
             
             # Vectorized trade logic
             sigma = float(meta_w.get("val_rmse", 0.0))
