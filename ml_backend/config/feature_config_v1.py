@@ -37,31 +37,34 @@ USE_EARNINGS_FEATURES = True       # Post-earnings drift (FMP earnings data)
 USE_FUNDAMENTAL_FEATURES = True    # Valuation ratios (Finnhub basic financials)
 USE_SHORT_INTEREST_FEATURES = True # Crowding signal (short interest data)
 
-# Walk-forward folds: 0 = single split; 3-4 = rolling folds, report median metrics (credibility upgrade)
-WALK_FORWARD_FOLDS = 4
+# Walk-forward folds: 0 = single split; 3-5 = rolling folds, report median metrics (credibility upgrade)
+# v5.0: increased to 5 for more robust cross-validation estimates
+WALK_FORWARD_FOLDS = 5
 
 # Trade filters: only recommend when model is both optimistic and confident
-TRADE_MIN_ALPHA = 0.0002  # Minimum predicted alpha (0.02%) — lowered to allow more trades in market-neutral regime
-TRADE_MIN_PROB_POSITIVE = 0.52  # P(return > 0) must exceed this — 0.50 was a no-op (any positive pred passes); 0.52 filters out noise
-# Per-horizon probability thresholds: next_day signal is much weaker so use
-# a lower bar (0.505) to allow *some* trades rather than zero.  7_day/30_day
-# keep the standard 0.52 threshold.
+# v5.0: substantially lowered thresholds — previous values were filtering out
+# nearly all trades (0 trades for next_day, <30 for others).
+TRADE_MIN_ALPHA = 0.0001  # Minimum predicted alpha (0.01%) — very low bar; let confidence do the filtering
+TRADE_MIN_PROB_POSITIVE = 0.50  # P(return > 0) must exceed this — 0.50 is the baseline (any bullish signal)
+# Per-horizon probability thresholds: v5.0 uses 0.50 across the board.
+# The previous 0.505/0.52 thresholds were filtering out nearly all trades
+# because sign classifiers were at ~50% accuracy (coin-flip). The real
+# filtering now comes from confidence calibration and alpha threshold.
 TRADE_MIN_PROB_BY_HORIZON = {
-    "next_day": 0.505,
-    "7_day": 0.52,
-    "30_day": 0.52,
+    "next_day": 0.50,
+    "7_day": 0.50,
+    "30_day": 0.50,
 }
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
-TRADE_SIGMA_MULT = 0.3  # Regime-adaptive threshold multiplier — lowered from 0.5 (pred_std was making threshold too strict)
+TRADE_SIGMA_MULT = 0.1  # v5.0: lowered from 0.3 — pred_std was making threshold too strict, killing trades
 
 # Per-horizon caps for adaptive trade_threshold.
-# Without caps, pred_mean + sigma*pred_std can be unreasonably high (killing
-# all trades) or negative (allowing garbage trades).  Caps are in log-return
-# units and scale with horizon length.
+# v5.0: lowered caps significantly — the previous values were too restrictive,
+# especially for next_day where predictions are small magnitude.
 TRADE_THRESHOLD_CAP = {
-    "next_day": {"min": 0.0001, "max": 0.004},   # 0.01% – 0.4%  (lowered min for 1d alpha)
-    "7_day":    {"min": 0.0003, "max": 0.012},    # 0.03% – 1.2%  (lowered min)
-    "30_day":   {"min": 0.0008, "max": 0.035},    # 0.08% – 3.5%  (lowered min)
+    "next_day": {"min": 0.00005, "max": 0.002},   # 0.005% – 0.2%
+    "7_day":    {"min": 0.0001,  "max": 0.006},   # 0.01% – 0.6%
+    "30_day":   {"min": 0.0003,  "max": 0.020},   # 0.03% – 2.0%
 }
 
 # Pooled model config (one model per horizon across all tickers)
@@ -73,59 +76,59 @@ POOL_CONFIG = {
 }
 
 # LightGBM params — production-grade, tuned for 75-ticker pooled model (~91K samples)
-# v3.0: switched from Huber to MSE (regression). Huber with alpha=0.9 was clipping
-# gradients on market-neutral targets (±2-5% range), crushing all predictions toward
-# zero — causing 0.000 correlations and coin-flip hit rates across all horizons.
-# MSE lets the model actually capture return magnitude while early stopping + L2
-# regularization prevent overfitting to outliers.
+# v5.0: Key changes from v4:
+# - Deeper trees (6 vs 5) with more leaves (50 vs 31) to capture nonlinear patterns
+# - Lower regularization to let the model find weak signals (previous was over-regularized)
+# - Faster learning rate (0.02) with more early-stopping patience to find optimal rounds
+# - Lower min_child_samples (20) to allow finer splits
+# - Lower min_split_gain (0.001) to not block genuine weak splits
 LIGHTGBM_PARAMS = {
     "objective": "regression",
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 500,       # More rounds with slower learning for gradual convergence
-    "max_depth": 5,            # Depth-5 is appropriate for 91K samples
-    "learning_rate": 0.01,     # Slightly faster than v2 — MSE converges better than Huber
-    "num_leaves": 31,          # Standard 2^5-1 for depth-5 — more capacity than v2's 24
-    "min_child_samples": 25,   # 91K samples support finer splits
-    "min_split_gain": 0.005,   # Lower than v2 — let genuine splits through with MSE
-    "reg_alpha": 0.2,          # Moderate L1 — sparsity without crushing weak signals
-    "reg_lambda": 1.0,         # L2 replaces Huber's outlier robustness
-    "subsample": 0.75,         # Row sampling for diversity
+    "n_estimators": 800,       # More capacity; early stopping will pick the right point
+    "max_depth": 6,            # Deeper trees to capture nonlinear interactions
+    "learning_rate": 0.02,     # Faster convergence; early stopping prevents overshoot
+    "num_leaves": 50,          # More leaves for finer partitioning of feature space
+    "min_child_samples": 20,   # Finer splits with 91K samples
+    "min_split_gain": 0.001,   # Let weak but genuine splits through
+    "reg_alpha": 0.05,         # Light L1 — don't crush weak signals
+    "reg_lambda": 0.5,         # Moderate L2 for outlier robustness
+    "subsample": 0.8,          # More data per tree
     "subsample_freq": 1,       # Apply row sampling every boosting round
-    "colsample_bytree": 0.7,   # Feature diversity per tree
+    "colsample_bytree": 0.8,   # More features per tree
     "random_state": 42,
     "verbosity": -1,
     "n_jobs": -1,
 }
 
-# Next-day-specific LightGBM overrides — 1-day alpha is much noisier than 7d/30d,
-# so we use heavier regularization and shallower trees.
-# v3.0: relaxed from v2's over-regularization. With MSE loss the model can
-# actually learn short-term patterns; we just need enough regularization to
-# prevent overfitting on daily noise.
+# Next-day-specific LightGBM overrides — 1-day alpha is noisier than 7d/30d.
+# v5.0: The previous next_day params were WAY too regularized (depth-4, 20 leaves,
+# reg_alpha=0.5, reg_lambda=2.0) producing 0.000 correlation and 49% hit rate.
+# Now using moderate regularization that still allows the model to find patterns.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 500,       # Adequate rounds with early stopping
-    "max_depth": 4,            # Shallower than base — limits overfit on daily noise
-    "learning_rate": 0.01,     # Same as base
-    "num_leaves": 20,          # Relaxed from 14 — depth-4 can handle 20 leaves with MSE
-    "min_child_samples": 30,   # Relaxed from 40 — let the model find patterns
-    "min_split_gain": 0.01,    # Relaxed from 0.02
-    "reg_alpha": 0.5,          # Moderate L1
-    "reg_lambda": 2.0,         # Stronger L2 than base for noisy target
-    "subsample": 0.7,          # Closer to base
-    "colsample_bytree": 0.6,   # Slightly more restricted for next_day
+    "n_estimators": 800,       # Same as base; early stopping picks the right point
+    "max_depth": 5,            # Depth-5 (was 4) — one level deeper to find patterns
+    "learning_rate": 0.02,     # Same as base
+    "num_leaves": 31,          # Standard 2^5-1 (was 20)
+    "min_child_samples": 25,   # Slightly more conservative than base
+    "min_split_gain": 0.002,   # Slightly higher than base to filter noise
+    "reg_alpha": 0.1,          # Light L1 (was 0.5 — way too aggressive)
+    "reg_lambda": 1.0,         # Moderate L2 (was 2.0)
+    "subsample": 0.75,         # Slightly less than base for noise reduction
+    "colsample_bytree": 0.7,   # Slightly restricted for next_day
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
 # Phase 1: train pooled with all features → extract top-k by gain
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
-# Per-horizon top_k: next_day gets fewer features (noisier target → simpler model)
-# v3.2: increased top_k to accommodate new MACD/ATR/52w/BB features
+# v5.0: increased top_k across all horizons — previous values were too aggressive
+# and were cutting features that had weak but genuine signal.
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 45,   # v3.0: increased from 35 — preserving more signal with MSE
-    "7_day": 55,      # v3.0: increased from 50
-    "30_day": 60,     # v3.0: increased from 50
+    "next_day": 60,   # v5.0: was 45 — keep more features for noisy target
+    "7_day": 70,      # v5.0: was 55
+    "30_day": 75,     # v5.0: was 60
 }
 FEATURE_PRUNING = {
     "enabled": True,
