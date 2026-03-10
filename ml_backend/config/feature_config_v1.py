@@ -62,7 +62,16 @@ TRADE_SIGMA_MULT = 0.1  # v5.0: lowered from 0.3 — pred_std was making thresho
 # v7.0: Minimum confidence to recommend a trade.
 # v6.0 used 12% but confidence was inflated (65% for models with 0.05 correlation).
 # v7.0 uses honest confidence formula, so 15% is meaningful.
-TRADE_MIN_CONFIDENCE = 0.15
+# v7.1.1: Per-horizon minimum confidence. 30_day backtest lost -7.30% because
+# weak pooled-only predictions (holdout corr=0.013) passed the 0.15 gate and
+# created 41 noise trades. Higher thresholds for longer horizons where the
+# model has weaker per-ticker signal and larger potential losses.
+TRADE_MIN_CONFIDENCE = 0.15  # Global fallback
+TRADE_MIN_CONFIDENCE_BY_HORIZON = {
+    "next_day": 0.10,  # Low bar — shrinkage + confidence cap (0.25) already limits next_day
+    "7_day":    0.18,  # Moderate — 7_day backtest was positive (9.89% return)
+    "30_day":   0.25,  # High bar — filter out weak pooled-only predictions
+}
 
 # v6.0: Sign classifier minimum accuracy threshold. When the sign classifier's
 # holdout accuracy is below this, it is IGNORED (Gaussian CDF used instead).

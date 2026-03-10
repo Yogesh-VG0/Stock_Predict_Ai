@@ -34,6 +34,7 @@ from ..config.feature_config_v1 import (
     TRADE_THRESHOLD_CAP,
     ROUND_TRIP_COST_BPS,
     TRADE_MIN_CONFIDENCE,
+    TRADE_MIN_CONFIDENCE_BY_HORIZON,
     SIGN_CLF_MIN_ACCURACY,
     CONFIDENCE_CAP_BY_HORIZON,
     PREDICTION_SHRINKAGE_ENABLED,
@@ -69,7 +70,12 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #   - Fixed shrinkage: now uses SIGNED correlation (negative corr → full shrinkage)
 #     instead of abs(corr) which gave anti-correlated models full signal pass.
 #   - Reduced protected features 27→15 so pruning actually removes noisy features.
-MODEL_VERSION = "v7.1.0"
+# v7.1.1: Fix 30_day backtest losing money (-7.30%):
+#   - Per-horizon minimum confidence: 30_day requires 25% (was 15% global).
+#     Filters out weak pooled-only predictions that created 41 noise trades.
+#   - Reduced shrinkage floor from 10% to 3%. Models with zero edge now produce
+#     near-zero predictions instead of 10% of raw (which still triggered trades).
+MODEL_VERSION = "v7.1.1"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -1394,8 +1400,10 @@ class StockPredictor:
                 _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
                 # Combined: require BOTH hit rate and correlation for full signal
                 _shrinkage = min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge)
-                # Minimum shrinkage floor: always keep at least 10% of prediction
-                _shrinkage = max(0.10, _shrinkage)
+                # v7.1.1: Reduced floor from 10% to 3%. v7.1.0's 10% floor meant
+                # models with ZERO edge still produced 10% of raw prediction,
+                # which triggered noise trades (esp. 30_day with large raw values).
+                _shrinkage = max(0.03, _shrinkage)
                 pred_return = pred_return * _shrinkage
 
             alpha_implied_price = current_price * math.exp(pred_return)
@@ -1532,7 +1540,7 @@ class StockPredictor:
                 pred_return >= min_alpha
                 and prob_positive >= _min_prob
                 and covers_transaction_cost
-                and confidence >= TRADE_MIN_CONFIDENCE  # v6.0: confidence gate
+                and confidence >= TRADE_MIN_CONFIDENCE_BY_HORIZON.get(window_name, TRADE_MIN_CONFIDENCE)  # v7.1.1: per-horizon
             )
 
             # P(return > threshold) - classification-style (Losing Loonies v4: tradable moves)
@@ -1742,7 +1750,7 @@ class StockPredictor:
             if PREDICTION_SHRINKAGE_ENABLED:
                 _hit_edge = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
                 _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
-                _shrinkage = max(0.10, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))
+                _shrinkage = max(0.03, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))  # v7.1.1: floor 10%→3%
                 preds_ret = preds_ret * _shrinkage
 
             # Transaction cost filter (after shrinkage so uses shrunk predictions)
@@ -1766,7 +1774,7 @@ class StockPredictor:
                 (preds_ret >= min_alpha)
                 & (probs >= _min_prob)
                 & covers_cost
-                & (batch_confidence >= TRADE_MIN_CONFIDENCE)  # v6.0: confidence gate
+                & (batch_confidence >= TRADE_MIN_CONFIDENCE_BY_HORIZON.get(window_name, TRADE_MIN_CONFIDENCE))  # v7.1.1: per-horizon
             )
             
             # Normalized return
