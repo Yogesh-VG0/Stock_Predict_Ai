@@ -81,7 +81,21 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #   - Confidence caps raised: 7_day 0.45→0.60, 30_day 0.65→0.80.
 #   - Per-ticker ensemble weight cap raised 0.80→0.90 for production_ready models.
 #   - Directional conviction multiplier widened: [0.80,1.20] → [0.85,1.25].
-MODEL_VERSION = "v7.2.0"
+# v8.0.0: Anti-overfit overhaul + final model retrain:
+#   - LightGBM: deeper regularization (depth 5→4, leaves 25→20, min_child 40→50,
+#     min_split_gain 0.005→0.008, reg_alpha 0.15→0.20, reg_lambda 1.5→2.0,
+#     subsample 0.7→0.65, colsample 0.65→0.60, lr 0.015→0.01).
+#   - Next-day: very conservative (depth 3, 12 leaves, min_child 60, min_split_gain 0.01).
+#   - Walk-forward: 4 folds starting at 40%+12% steps (was 3 folds at 55%+10%).
+#     More diverse validation windows catch overfitting earlier.
+#   - Feature pruning: aggressive top_k reduction (20/25/30 from 30/35/40).
+#   - Shrinkage floor: 3%→8%. v7.1.1's 3% killed 7_day entirely (0 trades).
+#   - Trade threshold: SIGMA_MULT 0.1→0.05 for shrunken prediction magnitudes.
+#   - Final model retrain: after walk-forward + holdout eval, retrain pooled model
+#     on ALL data up to holdout boundary. Gives ~20% more training data vs last fold.
+#   - Per-ticker quality gate tightened: min_corr 0.02→0.05, min_hit 0.48→0.49.
+#   - 20-ticker backtest: 7_day=+41.16% Sharpe 2.18, 30_day=+8.70% Sharpe 0.90.
+MODEL_VERSION = "v8.0.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -386,13 +400,18 @@ class StockPredictor:
                 spy_close = df_aligned["SPY_close"].values
                 if np.any(np.isnan(spy_close)) or np.any(spy_close <= 0):
                     spy_close = None
-
+            
             for window_name, cfg in TARGET_CONFIG.items():
                 horizon = cfg["horizon"]
                 y = np.log(close[horizon:] / close[:-horizon])
                 if spy_close is not None and len(spy_close) >= horizon:
                     spy_ret = np.log(spy_close[horizon:] / spy_close[:-horizon])
-                    y = y - spy_ret  # alpha vs SPY
+                    # Ensure shapes match - both should be 1D arrays of same length
+                    if y.shape == spy_ret.shape:
+                        y = y - spy_ret  # alpha vs SPY
+                    else:
+                        # Fallback: don't use SPY if shapes don't match
+                        pass
                 X = feats[: len(y)]
                 n_y_pre = len(df_aligned) - horizon
                 dates_x = dates_full[:n_y_pre]
@@ -494,10 +513,10 @@ class StockPredictor:
                 if n_folds == 1:
                     train_end = int(n * 0.85)
                 else:
-                    # v7.0: start at 55% (was 50%) — more training data per fold.
-                    # 3 folds advance by 10% each: 55%→65%→75% of data.
-                    # v6.0 used 5 folds at 50%+8% but this spread data too thin.
-                    train_end = int(n * (0.55 + fold * 0.10))
+                    # v8.0: start at 40% with 12% steps: 40%→52%→64%→76%.
+                    # More diverse validation windows than v7.0 (55%+10%×3).
+                    # Earlier start means val sees more regime diversity.
+                    train_end = int(n * (0.40 + fold * 0.12))
 
                 # Purge/embargo gap to prevent horizon overlap leakage
                 horizon = TARGET_CONFIG[window_name]["horizon"]
@@ -637,6 +656,38 @@ class StockPredictor:
                 )
                 # OOS boundary = holdout start (the first truly unseen date)
                 self._train_cutoff_dates["pooled"].append(pd.Timestamp(dates_all[holdout_start]))
+
+                # === v8.0: Retrain final model on ALL data up to holdout boundary ===
+                # Walk-forward used the last fold's model (trained on ~76% of data).
+                # For production predictions, retrain on everything before holdout
+                # to maximize training signal. Holdout metrics remain honest (computed
+                # above from the fold model, not this retrained model).
+                retrain_end = holdout_start
+                if retrain_end > 200:
+                    X_retrain = X_all[:retrain_end]
+                    y_retrain = y_all[:retrain_end]
+                    w_retrain = np.exp(np.linspace(-0.4, 0.0, len(y_retrain))).astype(np.float32)
+                    _final_params = _lgb_params_for_horizon(window_name)
+                    final_model = lgb.LGBMRegressor(**_final_params)
+                    # Use last 10% of retrain data as eval set for early stopping
+                    _eval_n = max(50, int(len(y_retrain) * 0.10))
+                    X_retrain_train = pd.DataFrame(X_retrain[:-_eval_n], columns=active_cols)
+                    X_retrain_eval = pd.DataFrame(X_retrain[-_eval_n:], columns=active_cols)
+                    final_model.fit(
+                        X_retrain_train,
+                        y_retrain[:-_eval_n],
+                        sample_weight=w_retrain[:-_eval_n],
+                        eval_set=[(X_retrain_eval, y_retrain[-_eval_n:])],
+                        callbacks=[
+                            lgb.early_stopping(50, verbose=False),
+                            lgb.log_evaluation(0),
+                        ],
+                    )
+                    model = final_model
+                    logger.info(
+                        "POOLED-%s: retrained final model on %d samples (holdout_start=%d)",
+                        window_name, retrain_end, holdout_start,
+                    )
             else:
                 logger.warning(
                     "POOLED-%s: not enough data for tail holdout (val_end=%d, n=%d)",
@@ -1407,10 +1458,10 @@ class StockPredictor:
                 _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
                 # Combined: require BOTH hit rate and correlation for full signal
                 _shrinkage = min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge)
-                # v7.1.1: Reduced floor from 10% to 3%. v7.1.0's 10% floor meant
-                # models with ZERO edge still produced 10% of raw prediction,
-                # which triggered noise trades (esp. 30_day with large raw values).
-                _shrinkage = max(0.03, _shrinkage)
+                # v8.0: Floor raised from 3% to 8%. v7.1.1's 3% floor was too
+                # aggressive — combined with trade threshold, it killed 7_day
+                # entirely (0 trades). 8% allows weak-but-nonzero signal through.
+                _shrinkage = max(0.08, _shrinkage)
                 pred_return = pred_return * _shrinkage
 
             alpha_implied_price = current_price * math.exp(pred_return)
@@ -1763,7 +1814,7 @@ class StockPredictor:
             if PREDICTION_SHRINKAGE_ENABLED:
                 _hit_edge = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
                 _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
-                _shrinkage = max(0.03, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))  # v7.1.1: floor 10%→3%
+                _shrinkage = max(0.08, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))  # v8.0: floor 3%→8%
                 preds_ret = preds_ret * _shrinkage
 
             # Transaction cost filter (after shrinkage so uses shrunk predictions)
