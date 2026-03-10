@@ -80,10 +80,14 @@ SIGN_CLF_MIN_ACCURACY = 0.52
 
 # v7.0: Per-horizon confidence caps — prevents inflated confidence when model has
 # limited genuine edge. next_day alpha is essentially random; 30_day has the most signal.
+# v7.2: Raised caps for 7_day and 30_day. v7.0/v7.1 caps were too restrictive:
+# AAPL-30d (68.6% hit, corr=0.506) was capped at 65% — should express its edge.
+# 7_day had the best backtest (Sharpe 0.657, +9.89%) — deserves higher cap.
+# next_day stays low since even the best per-ticker models have ~0 correlation.
 CONFIDENCE_CAP_BY_HORIZON = {
-    "next_day": 0.25,
-    "7_day":    0.45,
-    "30_day":   0.65,
+    "next_day": 0.30,
+    "7_day":    0.60,
+    "30_day":   0.80,
 }
 
 # v7.0: Prediction shrinkage — scale predictions toward 0 based on model quality.
