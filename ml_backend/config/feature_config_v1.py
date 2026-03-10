@@ -38,9 +38,10 @@ USE_FUNDAMENTAL_FEATURES = True    # Valuation ratios (Finnhub basic financials)
 USE_SHORT_INTEREST_FEATURES = True # Crowding signal (short interest data)
 
 # Walk-forward folds: 0 = single split; 3-5 = rolling folds, report median metrics (credibility upgrade)
-# v7.0: reduced from 5 to 3 — more training data per fold reduces overfitting.
-# v6.0 showed classic overfit: fold correlation positive but holdout correlation negative.
-WALK_FORWARD_FOLDS = 3
+# v8.0: increased from 3 to 4 — more diverse validation windows catch overfit better.
+# v7.0 used 3 folds starting at 55%, but this left too little diversity in val sets.
+# v8.0 starts at 40% and advances by 12% each fold: 40%→52%→64%→76%.
+WALK_FORWARD_FOLDS = 4
 
 # Trade filters: only recommend when model is both optimistic and confident
 # v5.0: substantially lowered thresholds — previous values were filtering out
@@ -57,7 +58,7 @@ TRADE_MIN_PROB_BY_HORIZON = {
     "30_day": 0.50,
 }
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
-TRADE_SIGMA_MULT = 0.1  # v5.0: lowered from 0.3 — pred_std was making threshold too strict, killing trades
+TRADE_SIGMA_MULT = 0.05  # v8.0: lowered from 0.1 — after shrinkage, pred magnitudes are very small; 0.1 was still too strict (7_day got 0 trades)
 
 # v7.0: Minimum confidence to recommend a trade.
 # v6.0 used 12% but confidence was inflated (65% for models with 0.05 correlation).
@@ -85,9 +86,9 @@ SIGN_CLF_MIN_ACCURACY = 0.52
 # 7_day had the best backtest (Sharpe 0.657, +9.89%) — deserves higher cap.
 # next_day stays low since even the best per-ticker models have ~0 correlation.
 CONFIDENCE_CAP_BY_HORIZON = {
-    "next_day": 0.30,
-    "7_day":    0.60,
-    "30_day":   0.80,
+    "next_day": 0.25,  # v8.0: lowered — next_day holdout corr ≈ 0 even with best models
+    "7_day":    0.55,  # v8.0: slight reduction — 7_day has moderate signal
+    "30_day":   0.75,  # v8.0: slight reduction — still strongest horizon
 }
 
 # v7.0: Prediction shrinkage — scale predictions toward 0 based on model quality.
@@ -102,8 +103,8 @@ PREDICTION_SHRINKAGE_ENABLED = True
 # from poisoning predictions. The pooled model is used alone instead.
 # v7.0 used INVERT-SIGNAL to flip anti-correlated models, but that assumes
 # negative correlation persists out-of-sample (it doesn't).
-PER_TICKER_MIN_CORRELATION = 0.02  # Must show at least slight positive correlation
-PER_TICKER_MIN_HIT_RATE = 0.48    # Must not be significantly worse than random
+PER_TICKER_MIN_CORRELATION = 0.05  # v8.0: raised from 0.02 — require meaningful positive correlation, not just noise
+PER_TICKER_MIN_HIT_RATE = 0.49    # v8.0: raised from 0.48 — tighter gate to exclude marginal models
 
 # Per-horizon caps for adaptive trade_threshold.
 # v5.0: lowered caps significantly — the previous values were too restrictive,
@@ -132,17 +133,17 @@ LIGHTGBM_PARAMS = {
     "objective": "regression",
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 500,       # v7: reduced from 800 — less capacity to memorize noise
-    "max_depth": 5,            # v7: reduced from 6 — shallower trees
-    "learning_rate": 0.015,    # v7: slower learning for better generalization
-    "num_leaves": 25,          # v7: reduced from 40 — simpler tree structure
-    "min_child_samples": 40,   # v7: increased from 25 — requires more support per split
-    "min_split_gain": 0.005,   # v7: 2.5x increase — only keep meaningful splits
-    "reg_alpha": 0.15,         # v7: increased from 0.08 — more L1 sparsity
-    "reg_lambda": 1.5,         # v7: nearly 2x increase — stronger L2 ridge penalty
-    "subsample": 0.7,          # v7: reduced from 0.8 — more randomness per tree
+    "n_estimators": 400,       # v8: reduced from 500 — less capacity; early stopping picks optimal count
+    "max_depth": 4,            # v8: reduced from 5 — shallower trees prevent fitting noise
+    "learning_rate": 0.01,     # v8: slower learning for better OOS generalization
+    "num_leaves": 20,          # v8: reduced from 25 — simpler tree structure
+    "min_child_samples": 50,   # v8: increased from 40 — requires more support per split
+    "min_split_gain": 0.008,   # v8: increased from 0.005 — only keep genuinely meaningful splits
+    "reg_alpha": 0.20,         # v8: increased from 0.15 — more L1 sparsity
+    "reg_lambda": 2.0,         # v8: increased from 1.5 — stronger L2 ridge penalty
+    "subsample": 0.65,         # v8: reduced from 0.7 — more randomness per tree
     "subsample_freq": 1,       # Apply row sampling every boosting round
-    "colsample_bytree": 0.65,  # v7: reduced from 0.75 — more feature dropout
+    "colsample_bytree": 0.60,  # v8: reduced from 0.65 — more feature dropout
     "random_state": 42,
     "verbosity": -1,
     "n_jobs": -1,
@@ -156,16 +157,16 @@ LIGHTGBM_PARAMS = {
 # Prediction shrinkage will scale down output if the model has no real edge.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 400,       # v7.1: was 300 — need more trees to find weak signal
-    "max_depth": 5,            # v7.1: was 4 — match base depth
-    "learning_rate": 0.01,     # v7.1: slower than base to prevent overfit
-    "num_leaves": 20,          # v7.1: was 15 — allow more tree complexity
-    "min_child_samples": 40,   # v7.1: was 50 — match base (still conservative)
-    "min_split_gain": 0.003,   # v7.1: was 0.008 — allow weaker splits through
-    "reg_alpha": 0.20,         # v7.1: slightly reduced from 0.25
-    "reg_lambda": 1.8,         # v7.1: reduced from 2.0
-    "subsample": 0.65,         # v7.1: same — more randomness
-    "colsample_bytree": 0.60,  # v7.1: was 0.55 — slightly more features per tree
+    "n_estimators": 300,       # v8.0: reduced — 1-day alpha is mostly noise; fewer trees = less overfit
+    "max_depth": 3,            # v8.0: very shallow — next_day signal is extremely weak
+    "learning_rate": 0.008,    # v8.0: slowest rate — forces model to find only strongest patterns
+    "num_leaves": 12,          # v8.0: very few leaves — prevents fitting intraday noise
+    "min_child_samples": 60,   # v8.0: high threshold — require strong support for every split
+    "min_split_gain": 0.01,    # v8.0: high gain threshold — only genuinely informative splits
+    "reg_alpha": 0.30,         # v8.0: strong L1 for feature selection
+    "reg_lambda": 2.5,         # v8.0: strong L2 ridge
+    "subsample": 0.60,         # v8.0: more randomness
+    "colsample_bytree": 0.55,  # v8.0: aggressive feature dropout
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
@@ -174,9 +175,9 @@ LIGHTGBM_PARAMS_NEXT_DAY = {
 # v7.0: Reduced top_k. v6.0 kept 45-46 features (from 113), but many were noise.
 # Fewer features = simpler model = less overfitting = better holdout performance.
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 30,   # v7: aggressive pruning for noisiest target
-    "7_day": 35,      # v7: moderate pruning
-    "30_day": 40,     # v7: keep more for longer horizon (more signal)
+    "next_day": 20,   # v8: very aggressive — 1-day alpha needs simplest model possible
+    "7_day": 25,      # v8: aggressive — 113→~30 features after adding protected
+    "30_day": 30,     # v8: moderate — longer horizon has most signal but still needs simplicity
 }
 FEATURE_PRUNING = {
     "enabled": True,
