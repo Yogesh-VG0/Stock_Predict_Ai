@@ -37,6 +37,8 @@ from ..config.feature_config_v1 import (
     SIGN_CLF_MIN_ACCURACY,
     CONFIDENCE_CAP_BY_HORIZON,
     PREDICTION_SHRINKAGE_ENABLED,
+    PER_TICKER_MIN_CORRELATION,
+    PER_TICKER_MIN_HIT_RATE,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,17 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #   - Walk-forward: 3 folds (from 5) — more training data per fold.
 #   - Feature pruning: reduced top_k (30/35/40 from 60/70/75).
 #   - Sign classifier accuracy threshold raised to 52%.
-MODEL_VERSION = "v7.0.0"
+# v7.1.0: Fix v7.0 regressions:
+#   - next_day model was DEAD (0 splits, 0 correlation) due to over-regularization.
+#     Relaxed min_split_gain 0.008→0.003, num_leaves 15→20, min_child 50→40.
+#   - Removed dangerous INVERT-SIGNAL mechanism. Anti-correlated models are now
+#     excluded entirely (negative corr doesn't persist OOS).
+#   - Added per-ticker quality gate: models with corr < 0.02 or hit_rate < 0.48
+#     are excluded from ensemble. Pooled-only prediction is used instead.
+#   - Fixed shrinkage: now uses SIGNED correlation (negative corr → full shrinkage)
+#     instead of abs(corr) which gave anti-correlated models full signal pass.
+#   - Reduced protected features 27→15 so pruning actually removes noisy features.
+MODEL_VERSION = "v7.1.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -1115,22 +1127,27 @@ class StockPredictor:
                     and binom_pval < 0.30  # v5.0: 70% confidence (was 80%) — more tickers qualify
                     and n_test_samples >= 15  # v5.0: reduced from 20 — include smaller holdouts
                 )
-                # Detect anti-correlated models: if correlation is strongly negative
-                # (< -0.15) with enough test samples, the model learned an inverse
-                # signal.  Flag for sign-flip at prediction time.
-                invert_signal = (
-                    correlation < -0.15
-                    and n_test_samples >= 30
-                    and hit_rate < 0.45  # clearly worse than random
+                # v7.1: Per-ticker quality gate. Models with negative correlation
+                # or very low hit rate are excluded from ensemble entirely.
+                # v7.0 used INVERT-SIGNAL (flip sign of anti-correlated models),
+                # but negative correlation on test data does NOT reliably persist
+                # out-of-sample. Better to exclude and rely on pooled model.
+                ticker_quality_ok = (
+                    correlation >= PER_TICKER_MIN_CORRELATION
+                    and hit_rate >= PER_TICKER_MIN_HIT_RATE
                 )
-                # If inverted, the model IS useful — just backwards. Mark as
-                # production_ready so the ensemble uses it (with flipped sign).
-                if invert_signal:
-                    production_ready = True
-                    logger.info(
-                        "INVERT-SIGNAL %s-%s: corr=%.3f hit=%.1f%% → will flip sign at prediction",
-                        ticker, window_name, correlation, hit_rate * 100,
-                    )
+                if not ticker_quality_ok:
+                    production_ready = False
+                    if correlation < 0:
+                        logger.info(
+                            "QUALITY-GATE %s-%s: corr=%.3f hit=%.1f%% — EXCLUDED (negative correlation)",
+                            ticker, window_name, correlation, hit_rate * 100,
+                        )
+                    elif hit_rate < PER_TICKER_MIN_HIT_RATE:
+                        logger.info(
+                            "QUALITY-GATE %s-%s: corr=%.3f hit=%.1f%% — EXCLUDED (low hit rate)",
+                            ticker, window_name, correlation, hit_rate * 100,
+                        )
                 meta_out.update({
                     "n_test": int(test_mask.sum()),
                     "test_rmse": test_rmse,
@@ -1145,7 +1162,7 @@ class StockPredictor:
                     "hit_rate": hit_rate,
                     "correlation": correlation,
                     "production_ready": production_ready,
-                    "invert_signal": invert_signal,
+                    "invert_signal": False,  # v7.1: INVERT-SIGNAL removed
                     "has_holdout": True,
                     "eval_rmse": test_rmse,
                 })
@@ -1313,13 +1330,14 @@ class StockPredictor:
                 X_ticker_df = pd.DataFrame(X_ticker, columns=ticker_cols)
                 _ticker_pred = float(ticker_model.predict(X_ticker_df)[0])
 
-                if ticker_meta.get("invert_signal", False):
-                    _ticker_pred = -_ticker_pred
+                # v7.1: INVERT-SIGNAL removed — anti-correlated models are excluded
+                # by the quality gate (production_ready=False), not sign-flipped.
 
                 # v6.0: Quality-weighted blend using holdout correlation as a proxy
                 # for model reliability. Higher |correlation| = more weight.
-                pooled_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
-                ticker_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                # v7.1: Use max(0, corr) — negative correlation means no useful signal.
+                pooled_corr = max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                ticker_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
                 # Add small epsilon to avoid division by zero
                 total_corr = pooled_corr + ticker_corr + 1e-6
                 # Per-ticker gets at least 20% weight, at most 80%
@@ -1341,8 +1359,7 @@ class StockPredictor:
                 X_pred = self._select_features(X_full, current_cols, ticker_cols, ticker=ticker, window=window_name)
                 X_pred_df = pd.DataFrame(X_pred, columns=ticker_cols)
                 pred_return = float(ticker_model.predict(X_pred_df)[0])
-                if ticker_meta.get("invert_signal", False):
-                    pred_return = -pred_return
+                # v7.1: invert_signal removed — quality gate excludes bad models
                 _ticker_pred = pred_return
                 model_source = "per_ticker"
 
@@ -1355,17 +1372,19 @@ class StockPredictor:
             if model_source == "ensemble":
                 # Use weighted quality from both models
                 _p_hit = float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50)))
-                _p_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                # v7.1: Use max(0, signed_corr) — negative corr means NO edge, not inverse edge.
+                # v7.0 used abs() which gave anti-correlated models full signal pass-through.
+                _p_corr = max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
                 _t_hit = float(ticker_meta.get("hit_rate", 0.50))
-                _t_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                _t_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
                 _shrink_hit = max(_p_hit, _t_hit)
                 _shrink_corr = max(_p_corr, _t_corr)
             elif model_source == "pooled":
                 _shrink_hit = float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50)))
-                _shrink_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                _shrink_corr = max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
             elif model_source == "per_ticker":
                 _shrink_hit = float(ticker_meta.get("hit_rate", 0.50))
-                _shrink_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                _shrink_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
 
             if PREDICTION_SHRINKAGE_ENABLED:
                 # Shrinkage: 0→full shrink (predict 0), 1→no shrink (full prediction)
@@ -1637,12 +1656,12 @@ class StockPredictor:
                 X_ticker = self._select_features(features, current_cols, ticker_cols)
                 X_ticker = pd.DataFrame(X_ticker, columns=ticker_cols)
                 ticker_preds = ticker_model.predict(X_ticker)
-                if ticker_meta.get("invert_signal", False):
-                    ticker_preds = -ticker_preds
+                # v7.1: invert_signal removed — quality gate excludes bad models
 
                 # v6.0: Quality-weighted blend using holdout correlation
-                pooled_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
-                ticker_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                # v7.1: Use max(0, corr) — negative correlation means no useful signal
+                pooled_corr = max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                ticker_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
                 total_corr = pooled_corr + ticker_corr + 1e-6
                 tk_w = max(0.20, min(0.80, ticker_corr / total_corr))
                 if ticker_prod_ready:
@@ -1658,8 +1677,7 @@ class StockPredictor:
                 X_pred = self._select_features(features, current_cols, model_cols)
                 X_pred = pd.DataFrame(X_pred, columns=model_cols)
                 preds_ret = ticker_model.predict(X_pred)
-                if ticker_meta.get("invert_signal", False):
-                    preds_ret = -preds_ret
+                # v7.1: invert_signal removed — quality gate excludes bad models
             
             # Vectorized trade logic
             sigma = float(meta_w.get("val_rmse", 0.0))
@@ -1702,6 +1720,7 @@ class StockPredictor:
             probs = np.clip(probs, 0.15, 0.85)
 
             # v7.0: Prediction shrinkage (batch version — matches predict_all_windows)
+            # v7.1: Use max(0, signed_corr) instead of abs(corr)
             _shrink_hit = 0.50
             _shrink_corr = 0.0
             if has_pooled and has_ticker:
@@ -1710,15 +1729,15 @@ class StockPredictor:
                     float(ticker_meta.get("hit_rate", 0.50)),
                 )
                 _shrink_corr = max(
-                    abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0)))),
-                    abs(float(ticker_meta.get("correlation", 0.0))),
+                    max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0)))),
+                    max(0.0, float(ticker_meta.get("correlation", 0.0))),
                 )
             elif has_pooled:
                 _shrink_hit = float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50)))
-                _shrink_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                _shrink_corr = max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
             elif has_ticker:
                 _shrink_hit = float(ticker_meta.get("hit_rate", 0.50))
-                _shrink_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                _shrink_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
 
             if PREDICTION_SHRINKAGE_ENABLED:
                 _hit_edge = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
