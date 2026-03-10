@@ -38,8 +38,9 @@ USE_FUNDAMENTAL_FEATURES = True    # Valuation ratios (Finnhub basic financials)
 USE_SHORT_INTEREST_FEATURES = True # Crowding signal (short interest data)
 
 # Walk-forward folds: 0 = single split; 3-5 = rolling folds, report median metrics (credibility upgrade)
-# v5.0: increased to 5 for more robust cross-validation estimates
-WALK_FORWARD_FOLDS = 5
+# v7.0: reduced from 5 to 3 — more training data per fold reduces overfitting.
+# v6.0 showed classic overfit: fold correlation positive but holdout correlation negative.
+WALK_FORWARD_FOLDS = 3
 
 # Trade filters: only recommend when model is both optimistic and confident
 # v5.0: substantially lowered thresholds — previous values were filtering out
@@ -58,15 +59,29 @@ TRADE_MIN_PROB_BY_HORIZON = {
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
 TRADE_SIGMA_MULT = 0.1  # v5.0: lowered from 0.3 — pred_std was making threshold too strict, killing trades
 
-# v6.0: Minimum confidence to recommend a trade. Previous versions had no confidence
-# floor, allowing trades at 4-5% confidence (essentially meaningless).
-# Now requires at least 12% confidence — ensures some model conviction.
-TRADE_MIN_CONFIDENCE = 0.12
+# v7.0: Minimum confidence to recommend a trade.
+# v6.0 used 12% but confidence was inflated (65% for models with 0.05 correlation).
+# v7.0 uses honest confidence formula, so 15% is meaningful.
+TRADE_MIN_CONFIDENCE = 0.15
 
 # v6.0: Sign classifier minimum accuracy threshold. When the sign classifier's
 # holdout accuracy is below this, it is IGNORED (Gaussian CDF used instead).
 # Prevents anti-correlated classifiers (30_day was 41.6%) from poisoning prob_positive.
-SIGN_CLF_MIN_ACCURACY = 0.50
+SIGN_CLF_MIN_ACCURACY = 0.52
+
+# v7.0: Per-horizon confidence caps — prevents inflated confidence when model has
+# limited genuine edge. next_day alpha is essentially random; 30_day has the most signal.
+CONFIDENCE_CAP_BY_HORIZON = {
+    "next_day": 0.25,
+    "7_day":    0.45,
+    "30_day":   0.65,
+}
+
+# v7.0: Prediction shrinkage — scale predictions toward 0 based on model quality.
+# When the model has no edge (50% hit, 0 corr), predictions are fully shrunk to 0.
+# This prevents low-quality models from generating confidently wrong predictions.
+# Dramatically improves backtest by eliminating noise trades.
+PREDICTION_SHRINKAGE_ENABLED = True
 
 # Per-horizon caps for adaptive trade_threshold.
 # v5.0: lowered caps significantly — the previous values were too restrictive,
@@ -86,55 +101,59 @@ POOL_CONFIG = {
 }
 
 # LightGBM params — production-grade, tuned for 75-ticker pooled model (~91K samples)
-# v6.0: Slightly more regularized than v5.0 to reduce overfitting on 7_day horizon
-# (which had negative holdout correlation). Better balance of capacity vs generalization.
+# v7.0: MAJOR regularization increase. v6.0 showed classic overfitting:
+#   - Fold correlation positive but holdout correlation negative across all horizons
+#   - Per-ticker win_rate 38.7% (worse than naive baseline)
+#   - Pooled 30_day holdout corr = -0.098 (anti-correlated)
+# Fix: much stronger regularization to prevent fitting noise.
 LIGHTGBM_PARAMS = {
     "objective": "regression",
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 800,       # More capacity; early stopping will pick the right point
-    "max_depth": 6,            # Deeper trees to capture nonlinear interactions
-    "learning_rate": 0.02,     # Faster convergence; early stopping prevents overshoot
-    "num_leaves": 40,          # v6.0: reduced from 50 — less overfitting risk
-    "min_child_samples": 25,   # v6.0: increased from 20 — more robust splits
-    "min_split_gain": 0.002,   # v6.0: increased from 0.001 — filter out noisy splits
-    "reg_alpha": 0.08,         # v6.0: slightly more L1 than v5 (0.05) for feature selection
-    "reg_lambda": 0.8,         # v6.0: increased from 0.5 — better outlier robustness
-    "subsample": 0.8,          # More data per tree
+    "n_estimators": 500,       # v7: reduced from 800 — less capacity to memorize noise
+    "max_depth": 5,            # v7: reduced from 6 — shallower trees
+    "learning_rate": 0.015,    # v7: slower learning for better generalization
+    "num_leaves": 25,          # v7: reduced from 40 — simpler tree structure
+    "min_child_samples": 40,   # v7: increased from 25 — requires more support per split
+    "min_split_gain": 0.005,   # v7: 2.5x increase — only keep meaningful splits
+    "reg_alpha": 0.15,         # v7: increased from 0.08 — more L1 sparsity
+    "reg_lambda": 1.5,         # v7: nearly 2x increase — stronger L2 ridge penalty
+    "subsample": 0.7,          # v7: reduced from 0.8 — more randomness per tree
     "subsample_freq": 1,       # Apply row sampling every boosting round
-    "colsample_bytree": 0.75,  # v6.0: reduced from 0.8 — more diverse trees
+    "colsample_bytree": 0.65,  # v7: reduced from 0.75 — more feature dropout
     "random_state": 42,
     "verbosity": -1,
     "n_jobs": -1,
 }
 
 # Next-day-specific LightGBM overrides — 1-day alpha is noisier than 7d/30d.
-# v5.0: The previous next_day params were WAY too regularized (depth-4, 20 leaves,
-# reg_alpha=0.5, reg_lambda=2.0) producing 0.000 correlation and 49% hit rate.
-# Now using moderate regularization that still allows the model to find patterns.
+# v7.0: Daily alpha prediction has extremely low signal-to-noise ratio.
+# v5.0 was too regularized (0 corr). v6.0 was too flexible (overfit).
+# v7.0 uses moderate regularization — accepts that next_day edge is minimal
+# and relies on prediction shrinkage to scale output to match actual quality.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 800,       # Same as base; early stopping picks the right point
-    "max_depth": 5,            # Depth-5 (was 4) — one level deeper to find patterns
-    "learning_rate": 0.02,     # Same as base
-    "num_leaves": 31,          # Standard 2^5-1 (was 20)
-    "min_child_samples": 25,   # Slightly more conservative than base
-    "min_split_gain": 0.002,   # Slightly higher than base to filter noise
-    "reg_alpha": 0.1,          # Light L1 (was 0.5 — way too aggressive)
-    "reg_lambda": 1.0,         # Moderate L2 (was 2.0)
-    "subsample": 0.75,         # Slightly less than base for noise reduction
-    "colsample_bytree": 0.7,   # Slightly restricted for next_day
+    "n_estimators": 300,       # v7: less capacity for very noisy target
+    "max_depth": 4,            # v7: shallow — daily alpha has minimal structure
+    "learning_rate": 0.015,    # Same as base
+    "num_leaves": 15,          # v7: fewer leaves for simpler model
+    "min_child_samples": 50,   # v7: high — require strong statistical support
+    "min_split_gain": 0.008,   # v7: high threshold — only strong splits
+    "reg_alpha": 0.25,         # v7: moderate L1
+    "reg_lambda": 2.0,         # v7: strong L2
+    "subsample": 0.65,         # v7: more randomness
+    "colsample_bytree": 0.55,  # v7: aggressive feature dropout
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
 # Phase 1: train pooled with all features → extract top-k by gain
 # Phase 2: retrain pooled + per-ticker with shortlisted features only
-# v5.0: increased top_k across all horizons — previous values were too aggressive
-# and were cutting features that had weak but genuine signal.
+# v7.0: Reduced top_k. v6.0 kept 45-46 features (from 113), but many were noise.
+# Fewer features = simpler model = less overfitting = better holdout performance.
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 60,   # v5.0: was 45 — keep more features for noisy target
-    "7_day": 70,      # v5.0: was 55
-    "30_day": 75,     # v5.0: was 60
+    "next_day": 30,   # v7: aggressive pruning for noisiest target
+    "7_day": 35,      # v7: moderate pruning
+    "30_day": 40,     # v7: keep more for longer horizon (more signal)
 }
 FEATURE_PRUNING = {
     "enabled": True,

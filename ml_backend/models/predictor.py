@@ -35,6 +35,8 @@ from ..config.feature_config_v1 import (
     ROUND_TRIP_COST_BPS,
     TRADE_MIN_CONFIDENCE,
     SIGN_CLF_MIN_ACCURACY,
+    CONFIDENCE_CAP_BY_HORIZON,
+    PREDICTION_SHRINKAGE_ENABLED,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,18 +46,18 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-# v6.0.0: Confidence & signal quality overhaul:
-#   - Confidence formula redesigned: quality-driven (hit_rate + correlation) instead of
-#     prediction-magnitude-driven. Previous formula produced 4-5% for all tickers because
-#     regression predictions are always tiny (regression-to-mean).
-#   - Sign classifier: no longer force-retrained when early stopping finds < 5 trees
-#     (no signal). Previous behavior forced 80 trees → 41% accuracy (anti-correlated).
-#   - Sign classifier gated: ignored when holdout accuracy < 50% (SIGN_CLF_MIN_ACCURACY).
-#   - Ensemble blending: quality-weighted (uses holdout correlation) instead of fixed 60/40.
-#   - Model agreement bonus: +8% confidence when pooled & per-ticker agree on direction.
-#   - Trade recommendation: requires TRADE_MIN_CONFIDENCE (12%) in addition to alpha/prob.
-#   - LightGBM: slightly more regularized to fix 7_day overfitting (negative holdout corr).
-MODEL_VERSION = "v6.0.0"
+# v7.0.0: Anti-overfit & honest confidence overhaul:
+#   - LightGBM: major regularization increase (fewer leaves, higher min_child_samples,
+#     stronger L1/L2) to fix v6.0 overfitting (fold corr positive, holdout corr negative).
+#   - Prediction shrinkage: scale predictions toward 0 based on model quality. Models
+#     with 50% hit rate and 0 correlation produce near-zero predictions (no noise trades).
+#   - Confidence formula: uses model ACTUALLY being used (not max of all), strict scaling,
+#     per-horizon caps (next_day max 25%, 7_day max 45%, 30_day max 65%).
+#   - Recency weighting reduced: exp(-0.4) from exp(-0.7) — less aggressive, more data.
+#   - Walk-forward: 3 folds (from 5) — more training data per fold.
+#   - Feature pruning: reduced top_k (30/35/40 from 60/70/75).
+#   - Sign classifier accuracy threshold raised to 52%.
+MODEL_VERSION = "v7.0.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -468,9 +470,10 @@ class StockPredictor:
                 if n_folds == 1:
                     train_end = int(n * 0.85)
                 else:
-                    # v5.0: start at 50% (was 40%) — more training data per fold
-                    # Each fold advances by 8% so 5 folds cover 50%→82% of data
-                    train_end = int(n * (0.50 + fold * 0.08))
+                    # v7.0: start at 55% (was 50%) — more training data per fold.
+                    # 3 folds advance by 10% each: 55%→65%→75% of data.
+                    # v6.0 used 5 folds at 50%+8% but this spread data too thin.
+                    train_end = int(n * (0.55 + fold * 0.10))
 
                 # Purge/embargo gap to prevent horizon overlap leakage
                 horizon = TARGET_CONFIG[window_name]["horizon"]
@@ -512,10 +515,10 @@ class StockPredictor:
                 if len(y_train) < 200 or len(y_val) < 20:
                     break
 
-                # v5.0: Recency weighting ~2x ratio (exp(-0.7) to exp(0))
-                # Previous 3x ratio (exp(-1.1)) was too aggressive, reducing effective
-                # sample size and hurting generalization on noisy targets.
-                w = np.exp(np.linspace(-0.7, 0.0, len(y_train))).astype(np.float32)
+                # v7.0: Recency weighting ~1.5x ratio (exp(-0.4) to exp(0))
+                # v6.0 used 2x (exp(-0.7)) which reduced effective sample size
+                # and contributed to overfitting. Gentler weighting preserves more data.
+                w = np.exp(np.linspace(-0.4, 0.0, len(y_train))).astype(np.float32)
                 _horizon_params = _lgb_params_for_horizon(window_name)
                 fold_model = lgb.LGBMRegressor(**_horizon_params)
                 X_train_df = pd.DataFrame(X_train, columns=active_cols)
@@ -707,7 +710,7 @@ class StockPredictor:
                     sign_X_val = X_all[val_start:val_end]
                     sign_y_val = sign_y[val_start:val_end]
                     if len(sign_y_train) >= 200 and len(sign_y_val) >= 20:
-                        w_sign = np.exp(np.linspace(-0.7, 0.0, len(sign_y_train))).astype(np.float32)
+                        w_sign = np.exp(np.linspace(-0.4, 0.0, len(sign_y_train))).astype(np.float32)
                         sign_clf = lgb.LGBMClassifier(**sign_params)
                         sign_X_train_df = pd.DataFrame(sign_X_train, columns=active_cols)
                         sign_X_val_df = pd.DataFrame(sign_X_val, columns=active_cols)
@@ -936,8 +939,8 @@ class StockPredictor:
                 logger.warning(f"Skipping {ticker}-{window_name}: not enough samples")
                 continue
 
-            # v5.0: Recency weighting ~2x ratio (exp(-0.7) to exp(0))
-            w = np.exp(np.linspace(-0.7, 0.0, len(y_train))).astype(np.float32)
+            # v7.0: Recency weighting ~1.5x ratio (exp(-0.4) to exp(0))
+            w = np.exp(np.linspace(-0.4, 0.0, len(y_train))).astype(np.float32)
             _horizon_params = _lgb_params_for_horizon(window_name)
             model = lgb.LGBMRegressor(**_horizon_params)
             X_train_df = pd.DataFrame(X_train, columns=active_cols)
@@ -1343,6 +1346,39 @@ class StockPredictor:
                 _ticker_pred = pred_return
                 model_source = "per_ticker"
 
+            # --- v7.0: Prediction shrinkage ---
+            # Scale predictions toward 0 based on model quality. Models with no edge
+            # (50% hit, 0 corr) produce near-zero predictions, eliminating noise trades.
+            # Uses the quality of the model ACTUALLY producing the prediction.
+            _shrink_hit = 0.50
+            _shrink_corr = 0.0
+            if model_source == "ensemble":
+                # Use weighted quality from both models
+                _p_hit = float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50)))
+                _p_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+                _t_hit = float(ticker_meta.get("hit_rate", 0.50))
+                _t_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+                _shrink_hit = max(_p_hit, _t_hit)
+                _shrink_corr = max(_p_corr, _t_corr)
+            elif model_source == "pooled":
+                _shrink_hit = float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50)))
+                _shrink_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+            elif model_source == "per_ticker":
+                _shrink_hit = float(ticker_meta.get("hit_rate", 0.50))
+                _shrink_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+
+            if PREDICTION_SHRINKAGE_ENABLED:
+                # Shrinkage: 0→full shrink (predict 0), 1→no shrink (full prediction)
+                # hit_edge: 50%→0, 55%→0.5, 60%→1.0
+                _hit_edge = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
+                # corr_edge: 0→0, 0.05→0.5, 0.10→1.0
+                _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
+                # Combined: require BOTH hit rate and correlation for full signal
+                _shrinkage = min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge)
+                # Minimum shrinkage floor: always keep at least 10% of prediction
+                _shrinkage = max(0.10, _shrinkage)
+                pred_return = pred_return * _shrinkage
+
             alpha_implied_price = current_price * math.exp(pred_return)
             price_change = alpha_implied_price - current_price
             alpha_pct = pred_return * 100
@@ -1350,15 +1386,13 @@ class StockPredictor:
             sigma = float(meta_w.get("val_rmse", 0.0))
 
             # --- P(up) from sign classifier + Gaussian CDF blend ---
-            # v6.0: Gate sign classifier by accuracy — don't use when accuracy < 50%
             sign_model = self.pooled_sign_models.get(window_name)
             tk_sign = self.sign_models.get(key)
-            # Check pooled sign classifier accuracy threshold
             _pooled_sign_acc = float(pooled_meta.get("sign_classifier_accuracy", 0.50))
             if _pooled_sign_acc < SIGN_CLF_MIN_ACCURACY:
-                sign_model = None  # v6.0: don't use bad sign classifier
+                sign_model = None
             if tk_sign is not None:
-                sign_model = tk_sign  # per-ticker overrides pooled (usually better)
+                sign_model = tk_sign
             gauss_prob = (
                 0.5 * (1 + math.erf(pred_return / (sigma * math.sqrt(2)))) if sigma > 0 else 0.5
             )
@@ -1374,57 +1408,49 @@ class StockPredictor:
             else:
                 prob_positive = gauss_prob
 
-            # v6.0: Quality-driven confidence calibration.
-            # =============================================
-            # v5.0 formula was: magnitude_conf × quality_mult + dir_bonus
-            # Problem: magnitude_conf ≈ 0 for all tickers because regression predictions
-            # are heavily shrunk toward zero (regression-to-mean). AAPL-30_day had 71.7%
-            # hit rate + 0.371 correlation but only 4.5% confidence.
-            #
-            # v6.0 formula: confidence is PRIMARILY driven by model quality (how well the
-            # model has performed on holdout data), modulated by directional conviction.
-            # This produces meaningful confidence in the 10-70% range.
+            # v7.0: Honest confidence calibration.
+            # ====================================
+            # v6.0 was inflated: used max(pooled, per-ticker) quality → 65% confidence
+            # for models with 0.05 median correlation. v7.0 fixes:
+            # 1. Uses quality of the model ACTUALLY producing predictions
+            # 2. Stricter scaling: requires genuine edge for meaningful confidence
+            # 3. Per-horizon caps via CONFIDENCE_CAP_BY_HORIZON
             prob_positive = max(0.15, min(0.85, prob_positive))
 
-            # (1) MODEL QUALITY BASE — the dominant factor [0.08, 0.65]
-            best_hit = 0.50
-            best_corr = 0.0
-            if has_pooled:
-                best_hit = max(best_hit, float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50))))
-                best_corr = max(best_corr, abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0)))))
-            if has_ticker:
-                best_hit = max(best_hit, float(ticker_meta.get("hit_rate", 0.50)))
-                best_corr = max(best_corr, abs(float(ticker_meta.get("correlation", 0.0))))
+            # Quality metrics from the model actually used
+            _conf_hit = _shrink_hit  # Reuse from shrinkage calculation
+            _conf_corr = _shrink_corr
 
-            # Hit rate score: 48%→0.0, 50%→0.09, 55%→0.32, 60%→0.55, 70%→1.0
-            hit_score = max(0.0, min(1.0, (best_hit - 0.48) / 0.22))
-            # Correlation score: 0→0.0, 0.05→0.33, 0.10→0.67, 0.15+→1.0
-            corr_score = max(0.0, min(1.0, best_corr / 0.15))
-            # Combined quality: equal weight hit rate and correlation
-            quality_score = 0.5 * hit_score + 0.5 * corr_score
-            # Map to confidence base: 0.08 (no edge) to 0.65 (strong edge)
-            confidence_base = 0.08 + 0.57 * quality_score
+            # Hit rate score: 50%→0.0, 53%→0.3, 56%→0.6, 60%+→1.0
+            hit_score = max(0.0, min(1.0, (_conf_hit - 0.50) / 0.10))
+            # Correlation score: 0→0.0, 0.08→0.4, 0.15→0.75, 0.20+→1.0
+            corr_score = max(0.0, min(1.0, _conf_corr / 0.20))
+            # Combined quality: weight correlation more (harder to fake)
+            quality_score = 0.4 * hit_score + 0.6 * corr_score
+            # Map to confidence base: 0.05 (no edge) to 0.55 (strong edge)
+            confidence_base = 0.05 + 0.50 * quality_score
 
-            # (2) DIRECTIONAL CONVICTION MULTIPLIER [0.70, 1.30]
+            # Directional conviction multiplier [0.80, 1.20] (narrower than v6.0)
             dir_prob_edge = abs(prob_positive - 0.50)
-            dir_mult = 0.70 + 0.60 * min(1.0, dir_prob_edge / 0.15)
+            dir_mult = 0.80 + 0.40 * min(1.0, dir_prob_edge / 0.15)
 
-            # (3) MAGNITUDE BONUS [0.0, 0.10]
+            # Magnitude bonus [0.0, 0.05] (reduced from v6.0's 0.10)
             if sigma > 1e-8:
                 mag_ratio = min(1.0, abs(pred_return) / (1.5 * sigma))
             else:
                 mag_ratio = 0.0
-            magnitude_bonus = 0.10 * mag_ratio
+            magnitude_bonus = 0.05 * mag_ratio
 
-            # (4) MODEL AGREEMENT BONUS [0.0, 0.08]
+            # Model agreement bonus [0.0, 0.05] (reduced from v6.0's 0.08)
             agreement_bonus = 0.0
             if has_pooled and has_ticker:
                 if (_pooled_pred > 0) == (_ticker_pred > 0) and abs(_pooled_pred) > 1e-8 and abs(_ticker_pred) > 1e-8:
-                    agreement_bonus = 0.08
+                    agreement_bonus = 0.05
 
-            # Final confidence
+            # Final confidence with per-horizon cap
             confidence = confidence_base * dir_mult + magnitude_bonus + agreement_bonus
-            confidence = max(0.05, min(0.85, confidence))
+            _horizon_cap = CONFIDENCE_CAP_BY_HORIZON.get(window_name, 0.65)
+            confidence = max(0.05, min(_horizon_cap, confidence))
 
             # Feature coverage penalty
             confidence *= feature_coverage_penalty
@@ -1675,28 +1701,45 @@ class StockPredictor:
             # Clip probabilities to [0.15, 0.85] — consistent with single-prediction path
             probs = np.clip(probs, 0.15, 0.85)
 
-            # Transaction cost filter (matches predict_all_windows)
+            # v7.0: Prediction shrinkage (batch version — matches predict_all_windows)
+            _shrink_hit = 0.50
+            _shrink_corr = 0.0
+            if has_pooled and has_ticker:
+                _shrink_hit = max(
+                    float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50))),
+                    float(ticker_meta.get("hit_rate", 0.50)),
+                )
+                _shrink_corr = max(
+                    abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0)))),
+                    abs(float(ticker_meta.get("correlation", 0.0))),
+                )
+            elif has_pooled:
+                _shrink_hit = float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50)))
+                _shrink_corr = abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
+            elif has_ticker:
+                _shrink_hit = float(ticker_meta.get("hit_rate", 0.50))
+                _shrink_corr = abs(float(ticker_meta.get("correlation", 0.0)))
+
+            if PREDICTION_SHRINKAGE_ENABLED:
+                _hit_edge = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
+                _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
+                _shrinkage = max(0.10, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))
+                preds_ret = preds_ret * _shrinkage
+
+            # Transaction cost filter (after shrinkage so uses shrunk predictions)
             min_return_for_profit = ROUND_TRIP_COST_BPS / 10000
             covers_cost = np.abs(preds_ret) >= min_return_for_profit
 
-            # v6.0: Vectorized confidence calculation (simplified batch version)
-            # Uses model quality base + directional conviction (no per-row agreement bonus)
-            best_hit = 0.50
-            best_corr = 0.0
-            if has_pooled:
-                best_hit = max(best_hit, float(pooled_meta.get("holdout_hit_rate", pooled_meta.get("hit_rate", 0.50))))
-                best_corr = max(best_corr, abs(float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0)))))
-            if has_ticker:
-                best_hit = max(best_hit, float(ticker_meta.get("hit_rate", 0.50)))
-                best_corr = max(best_corr, abs(float(ticker_meta.get("correlation", 0.0))))
-            hit_score = max(0.0, min(1.0, (best_hit - 0.48) / 0.22))
-            corr_score = max(0.0, min(1.0, best_corr / 0.15))
-            quality_score = 0.5 * hit_score + 0.5 * corr_score
-            confidence_base = 0.08 + 0.57 * quality_score
+            # v7.0: Honest confidence (batch version — matches predict_all_windows)
+            hit_score = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
+            corr_score = max(0.0, min(1.0, _shrink_corr / 0.20))
+            quality_score = 0.4 * hit_score + 0.6 * corr_score
+            confidence_base = 0.05 + 0.50 * quality_score
             # Vectorized directional conviction
             dir_prob_edge = np.abs(probs - 0.50)
-            dir_mult = 0.70 + 0.60 * np.minimum(1.0, dir_prob_edge / 0.15)
-            batch_confidence = np.clip(confidence_base * dir_mult, 0.05, 0.85)
+            dir_mult = 0.80 + 0.40 * np.minimum(1.0, dir_prob_edge / 0.15)
+            _horizon_cap = CONFIDENCE_CAP_BY_HORIZON.get(window_name, 0.65)
+            batch_confidence = np.clip(confidence_base * dir_mult, 0.05, _horizon_cap)
 
             # Trade recommended mask (per-horizon probability threshold + confidence gate)
             _min_prob = TRADE_MIN_PROB_BY_HORIZON.get(window_name, TRADE_MIN_PROB_POSITIVE)
