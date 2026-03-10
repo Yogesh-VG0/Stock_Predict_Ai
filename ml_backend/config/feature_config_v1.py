@@ -83,6 +83,15 @@ CONFIDENCE_CAP_BY_HORIZON = {
 # Dramatically improves backtest by eliminating noise trades.
 PREDICTION_SHRINKAGE_ENABLED = True
 
+# v7.1: Per-ticker model quality gate.
+# Per-ticker models with correlation below this threshold are EXCLUDED from
+# the ensemble. This prevents anti-correlated models (e.g. QCOM-30d corr=-0.63)
+# from poisoning predictions. The pooled model is used alone instead.
+# v7.0 used INVERT-SIGNAL to flip anti-correlated models, but that assumes
+# negative correlation persists out-of-sample (it doesn't).
+PER_TICKER_MIN_CORRELATION = 0.02  # Must show at least slight positive correlation
+PER_TICKER_MIN_HIT_RATE = 0.48    # Must not be significantly worse than random
+
 # Per-horizon caps for adaptive trade_threshold.
 # v5.0: lowered caps significantly — the previous values were too restrictive,
 # especially for next_day where predictions are small magnitude.
@@ -127,22 +136,23 @@ LIGHTGBM_PARAMS = {
 }
 
 # Next-day-specific LightGBM overrides — 1-day alpha is noisier than 7d/30d.
-# v7.0: Daily alpha prediction has extremely low signal-to-noise ratio.
-# v5.0 was too regularized (0 corr). v6.0 was too flexible (overfit).
-# v7.0 uses moderate regularization — accepts that next_day edge is minimal
-# and relies on prediction shrinkage to scale output to match actual quality.
+# v7.1: v7.0 was TOO regularized — min_split_gain=0.008 + min_child_samples=50
+# + max_depth=4 + num_leaves=15 produced a model with ZERO splits (constant output).
+# All 75 tickers showed corr=0.000 and 0% feature gain. The model learned nothing.
+# v7.1 relaxes just enough to allow learning while still preventing overfitting.
+# Prediction shrinkage will scale down output if the model has no real edge.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 300,       # v7: less capacity for very noisy target
-    "max_depth": 4,            # v7: shallow — daily alpha has minimal structure
-    "learning_rate": 0.015,    # Same as base
-    "num_leaves": 15,          # v7: fewer leaves for simpler model
-    "min_child_samples": 50,   # v7: high — require strong statistical support
-    "min_split_gain": 0.008,   # v7: high threshold — only strong splits
-    "reg_alpha": 0.25,         # v7: moderate L1
-    "reg_lambda": 2.0,         # v7: strong L2
-    "subsample": 0.65,         # v7: more randomness
-    "colsample_bytree": 0.55,  # v7: aggressive feature dropout
+    "n_estimators": 400,       # v7.1: was 300 — need more trees to find weak signal
+    "max_depth": 5,            # v7.1: was 4 — match base depth
+    "learning_rate": 0.01,     # v7.1: slower than base to prevent overfit
+    "num_leaves": 20,          # v7.1: was 15 — allow more tree complexity
+    "min_child_samples": 40,   # v7.1: was 50 — match base (still conservative)
+    "min_split_gain": 0.003,   # v7.1: was 0.008 — allow weaker splits through
+    "reg_alpha": 0.20,         # v7.1: slightly reduced from 0.25
+    "reg_lambda": 1.8,         # v7.1: reduced from 2.0
+    "subsample": 0.65,         # v7.1: same — more randomness
+    "colsample_bytree": 0.60,  # v7.1: was 0.55 — slightly more features per tree
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
@@ -159,21 +169,18 @@ FEATURE_PRUNING = {
     "enabled": True,
     "top_k": 50,                       # v3.2: 45→50 for new features
     "protected_features": [            # Core stability features — never prune
+        # v7.1: Reduced from 27 to 15 protected features. v7.0 had top_k=30
+        # but 27 protected features, so pruning only removed 3 features —
+        # effectively useless. Now pruning can actually remove noisy features.
         "log_return_1d", "log_return_5d", "log_return_21d",
         "volatility_20d", "volume_ratio", "rsi",
         "sector_id", "ticker_id",
-        "vix_return_1d", "vix_level",
+        "vix_level",
         "sent_mean_7d", "sent_available",
-        "insider_available",
-        "regime_score", "vol_ratio_5_20",
-        # Short-term microstructure (critical for next_day)
-        "clv", "ret_zscore_5d", "volume_spike_z",
-        "volume_return_interaction", "consecutive_days",
-        "candle_body_ratio", "obv_slope_10d",
-        # v3.2: new technical features — proven alpha signals
-        "macd_norm", "macd_hist_norm",
-        "atr_norm", "dist_52w_high", "bb_width",
+        "regime_score",
+        "dist_52w_high", "dist_52w_low",
+        "atr_norm",
     ],
-    "min_features": 22,                # Raised from 20 for additional new features
+    "min_features": 18,                # v7.1: lowered from 22 — allow more aggressive pruning
 }
 
