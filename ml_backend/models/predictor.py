@@ -75,7 +75,13 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #     Filters out weak pooled-only predictions that created 41 noise trades.
 #   - Reduced shrinkage floor from 10% to 3%. Models with zero edge now produce
 #     near-zero predictions instead of 10% of raw (which still triggered trades).
-MODEL_VERSION = "v7.1.1"
+# v7.2.0: Improve confidence for strong per-ticker models:
+#   - Confidence base formula widened: 0.05-0.55 → 0.05-0.65. Strong models
+#     (68.6% hit, 0.506 corr) now get ~0.65 base instead of 0.55.
+#   - Confidence caps raised: 7_day 0.45→0.60, 30_day 0.65→0.80.
+#   - Per-ticker ensemble weight cap raised 0.80→0.90 for production_ready models.
+#   - Directional conviction multiplier widened: [0.80,1.20] → [0.85,1.25].
+MODEL_VERSION = "v7.2.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -1346,12 +1352,13 @@ class StockPredictor:
                 ticker_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
                 # Add small epsilon to avoid division by zero
                 total_corr = pooled_corr + ticker_corr + 1e-6
-                # Per-ticker gets at least 20% weight, at most 80%
+                # v7.2: Per-ticker gets at least 20% weight, at most 90% (was 80%).
+                # When per-ticker has 0.506 corr vs pooled's 0.013, it should dominate.
                 tk_weight_raw = ticker_corr / total_corr
-                tk_weight = max(0.20, min(0.80, tk_weight_raw))
+                tk_weight = max(0.20, min(0.90, tk_weight_raw))
                 # Bonus for production_ready tickers (proven OOS edge)
                 if ticker_prod_ready:
-                    tk_weight = min(0.80, tk_weight + 0.15)
+                    tk_weight = min(0.90, tk_weight + 0.15)
                 pred_return = tk_weight * _ticker_pred + (1 - tk_weight) * _pooled_pred
                 model_source = "ensemble"
             elif has_pooled:
@@ -1448,31 +1455,37 @@ class StockPredictor:
             _conf_hit = _shrink_hit  # Reuse from shrinkage calculation
             _conf_corr = _shrink_corr
 
-            # Hit rate score: 50%→0.0, 53%→0.3, 56%→0.6, 60%+→1.0
+            # v7.2: Improved confidence formula for strong per-ticker models.
+            # v7.0-v7.1 had confidence_base max of 0.55, which meant even models
+            # with 68.6% hit and 0.506 corr couldn't exceed ~0.65 after bonuses.
+            # v7.2 widens the range so genuine edge is properly reflected.
+            #
+            # Hit rate score: 50%→0.0, 55%→0.5, 60%+→1.0
             hit_score = max(0.0, min(1.0, (_conf_hit - 0.50) / 0.10))
-            # Correlation score: 0→0.0, 0.08→0.4, 0.15→0.75, 0.20+→1.0
+            # Correlation score: 0→0.0, 0.10→0.5, 0.20+→1.0
             corr_score = max(0.0, min(1.0, _conf_corr / 0.20))
             # Combined quality: weight correlation more (harder to fake)
             quality_score = 0.4 * hit_score + 0.6 * corr_score
-            # Map to confidence base: 0.05 (no edge) to 0.55 (strong edge)
-            confidence_base = 0.05 + 0.50 * quality_score
+            # v7.2: Map to confidence base: 0.05 (no edge) to 0.65 (strong edge)
+            # Was 0.05-0.55 in v7.0-v7.1
+            confidence_base = 0.05 + 0.60 * quality_score
 
-            # Directional conviction multiplier [0.80, 1.20] (narrower than v6.0)
+            # v7.2: Directional conviction multiplier [0.85, 1.25] (was [0.80, 1.20])
             dir_prob_edge = abs(prob_positive - 0.50)
-            dir_mult = 0.80 + 0.40 * min(1.0, dir_prob_edge / 0.15)
+            dir_mult = 0.85 + 0.40 * min(1.0, dir_prob_edge / 0.15)
 
-            # Magnitude bonus [0.0, 0.05] (reduced from v6.0's 0.10)
+            # Magnitude bonus [0.0, 0.05]
             if sigma > 1e-8:
                 mag_ratio = min(1.0, abs(pred_return) / (1.5 * sigma))
             else:
                 mag_ratio = 0.0
             magnitude_bonus = 0.05 * mag_ratio
 
-            # Model agreement bonus [0.0, 0.05] (reduced from v6.0's 0.08)
+            # Model agreement bonus [0.0, 0.08] — v7.2: raised from 0.05
             agreement_bonus = 0.0
             if has_pooled and has_ticker:
                 if (_pooled_pred > 0) == (_ticker_pred > 0) and abs(_pooled_pred) > 1e-8 and abs(_ticker_pred) > 1e-8:
-                    agreement_bonus = 0.05
+                    agreement_bonus = 0.08
 
             # Final confidence with per-horizon cap
             confidence = confidence_base * dir_mult + magnitude_bonus + agreement_bonus
@@ -1671,9 +1684,9 @@ class StockPredictor:
                 pooled_corr = max(0.0, float(pooled_meta.get("holdout_correlation", pooled_meta.get("correlation", 0.0))))
                 ticker_corr = max(0.0, float(ticker_meta.get("correlation", 0.0)))
                 total_corr = pooled_corr + ticker_corr + 1e-6
-                tk_w = max(0.20, min(0.80, ticker_corr / total_corr))
+                tk_w = max(0.20, min(0.90, ticker_corr / total_corr))  # v7.2: cap 0.80→0.90
                 if ticker_prod_ready:
-                    tk_w = min(0.80, tk_w + 0.15)
+                    tk_w = min(0.90, tk_w + 0.15)
                 preds_ret = tk_w * ticker_preds + (1 - tk_w) * pooled_preds
             elif has_pooled:
                 model_cols = pooled_meta.get("feature_columns")
@@ -1757,14 +1770,14 @@ class StockPredictor:
             min_return_for_profit = ROUND_TRIP_COST_BPS / 10000
             covers_cost = np.abs(preds_ret) >= min_return_for_profit
 
-            # v7.0: Honest confidence (batch version — matches predict_all_windows)
+            # v7.2: Honest confidence (batch version — matches predict_all_windows)
             hit_score = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
             corr_score = max(0.0, min(1.0, _shrink_corr / 0.20))
             quality_score = 0.4 * hit_score + 0.6 * corr_score
-            confidence_base = 0.05 + 0.50 * quality_score
+            confidence_base = 0.05 + 0.60 * quality_score  # v7.2: was 0.50
             # Vectorized directional conviction
             dir_prob_edge = np.abs(probs - 0.50)
-            dir_mult = 0.80 + 0.40 * np.minimum(1.0, dir_prob_edge / 0.15)
+            dir_mult = 0.85 + 0.40 * np.minimum(1.0, dir_prob_edge / 0.15)  # v7.2: was 0.80
             _horizon_cap = CONFIDENCE_CAP_BY_HORIZON.get(window_name, 0.65)
             batch_confidence = np.clip(confidence_base * dir_mult, 0.05, _horizon_cap)
 
