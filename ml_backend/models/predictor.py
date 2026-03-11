@@ -95,7 +95,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #     on ALL data up to holdout boundary. Gives ~20% more training data vs last fold.
 #   - Per-ticker quality gate tightened: min_corr 0.02→0.05, min_hit 0.48→0.49.
 #   - 20-ticker backtest: 7_day=+41.16% Sharpe 2.18, 30_day=+8.70% Sharpe 0.90.
-MODEL_VERSION = "v8.1.0"
+MODEL_VERSION = "v8.2.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -1458,10 +1458,10 @@ class StockPredictor:
                 _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
                 # Combined: require BOTH hit rate and correlation for full signal
                 _shrinkage = min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge)
-                # v8.1: Floor 5%. v8.0 used 8% which was safe but production
-                # showed even weak positive signal (holdout corr 0.013-0.016) being
-                # over-suppressed. 5% lets genuine weak signal through.
-                _shrinkage = max(0.05, _shrinkage)
+                # v8.2: Floor 8%. v8.1 used 5% but production showed overfitting
+                # (holdout corr went negative). 8% is safer — only lets signal through
+                # when model has genuine edge (hit_rate > 50% AND corr > 0).
+                _shrinkage = max(0.08, _shrinkage)
                 pred_return = pred_return * _shrinkage
 
             alpha_implied_price = current_price * math.exp(pred_return)
@@ -1814,7 +1814,7 @@ class StockPredictor:
             if PREDICTION_SHRINKAGE_ENABLED:
                 _hit_edge = max(0.0, min(1.0, (_shrink_hit - 0.50) / 0.10))
                 _corr_edge = max(0.0, min(1.0, _shrink_corr / 0.10))
-                _shrinkage = max(0.05, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))  # v8.1: floor 8%→5%
+                _shrinkage = max(0.08, min(1.0, 0.5 * _hit_edge + 0.5 * _corr_edge))  # v8.2: floor back to 8%
                 preds_ret = preds_ret * _shrinkage
 
             # Transaction cost filter (after shrinkage so uses shrunk predictions)
