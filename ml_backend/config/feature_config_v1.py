@@ -58,7 +58,7 @@ TRADE_MIN_PROB_BY_HORIZON = {
     "30_day": 0.50,
 }
 ROUND_TRIP_COST_BPS = 10  # Round-trip transaction cost in basis points
-TRADE_SIGMA_MULT = 0.03  # v8.1: lowered from 0.05 — with shrinkage, prediction magnitudes are small; need low threshold to generate trades
+TRADE_SIGMA_MULT = 0.05  # v8.2: back to v8.0 value — v8.1's 0.03 let through too many weak trades
 
 # v7.0: Minimum confidence to recommend a trade.
 # v6.0 used 12% but confidence was inflated (65% for models with 0.05 correlation).
@@ -133,17 +133,17 @@ LIGHTGBM_PARAMS = {
     "objective": "regression",
     "metric": "rmse",
     "boosting_type": "gbdt",
-    "n_estimators": 600,       # v8.1: increased from 400 — early stopping picks optimal; more capacity for 92K samples
-    "max_depth": 5,            # v8.1: increased from 4 — 92K samples can support deeper trees without overfitting
-    "learning_rate": 0.02,     # v8.1: increased from 0.01 — faster convergence, early stopping prevents overfit
-    "num_leaves": 31,          # v8.1: increased from 20 — standard default, good for 92K samples
-    "min_child_samples": 35,   # v8.1: decreased from 50 — still conservative but allows finer splits
-    "min_split_gain": 0.003,   # v8.1: decreased from 0.008 — 0.008 was killing useful splits in production
-    "reg_alpha": 0.10,         # v8.1: decreased from 0.20 — moderate L1 sparsity
-    "reg_lambda": 1.0,         # v8.1: decreased from 2.0 — moderate L2 ridge
-    "subsample": 0.75,         # v8.1: increased from 0.65 — more data per tree
+    "n_estimators": 500,       # v8.2: between v8.0(400) and v8.1(600)
+    "max_depth": 5,            # v8.2: keep v8.1 depth — 92K samples can support it
+    "learning_rate": 0.015,    # v8.2: between v8.0(0.01) and v8.1(0.02)
+    "num_leaves": 25,          # v8.2: between v8.0(20) and v8.1(31)
+    "min_child_samples": 40,   # v8.2: between v8.0(50) and v8.1(35)
+    "min_split_gain": 0.005,   # v8.2: between v8.0(0.008) and v8.1(0.003)
+    "reg_alpha": 0.15,         # v8.2: between v8.0(0.20) and v8.1(0.10)
+    "reg_lambda": 1.5,         # v8.2: between v8.0(2.0) and v8.1(1.0)
+    "subsample": 0.70,         # v8.2: between v8.0(0.65) and v8.1(0.75)
     "subsample_freq": 1,       # Apply row sampling every boosting round
-    "colsample_bytree": 0.70,  # v8.1: increased from 0.60 — more features per tree
+    "colsample_bytree": 0.65,  # v8.2: between v8.0(0.60) and v8.1(0.70)
     "random_state": 42,
     "verbosity": -1,
     "n_jobs": -1,
@@ -157,16 +157,16 @@ LIGHTGBM_PARAMS = {
 # Prediction shrinkage will scale down output if the model has no real edge.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 400,       # v8.1: more trees than v8.0 but early stopping keeps it honest
-    "max_depth": 4,            # v8.1: slightly deeper than v8.0's 3 — allow some pattern discovery
-    "learning_rate": 0.01,     # v8.1: slow but not glacial
-    "num_leaves": 15,          # v8.1: slightly more than v8.0's 12
-    "min_child_samples": 50,   # v8.1: reduced from 60 — still conservative for noisy 1-day alpha
-    "min_split_gain": 0.005,   # v8.1: reduced from 0.01 — allow more splits to find weak patterns
-    "reg_alpha": 0.25,         # v8.1: still strong L1
-    "reg_lambda": 2.0,         # v8.1: still strong L2
-    "subsample": 0.65,         # v8.1: moderate randomness
-    "colsample_bytree": 0.60,  # v8.1: moderate feature dropout
+    "n_estimators": 350,       # v8.2: conservative for noisy 1-day alpha
+    "max_depth": 4,            # v8.2: keep v8.1 — slightly deeper than v8.0's 3
+    "learning_rate": 0.01,     # v8.2: slow learning for noisy target
+    "num_leaves": 15,          # v8.2: keep v8.1 value
+    "min_child_samples": 50,   # v8.2: conservative
+    "min_split_gain": 0.008,   # v8.2: stricter than v8.1(0.005) — next_day needs heavy filtering
+    "reg_alpha": 0.25,         # v8.2: strong L1
+    "reg_lambda": 2.0,         # v8.2: strong L2
+    "subsample": 0.65,         # v8.2: moderate randomness
+    "colsample_bytree": 0.60,  # v8.2: moderate feature dropout
 }
 
 # Feature pruning: remove noisy features based on pooled model importance
@@ -175,9 +175,9 @@ LIGHTGBM_PARAMS_NEXT_DAY = {
 # v7.0: Reduced top_k. v6.0 kept 45-46 features (from 113), but many were noise.
 # Fewer features = simpler model = less overfitting = better holdout performance.
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 25,   # v8.1: slightly relaxed from 20 — with 92K samples, model can handle more
-    "7_day": 40,      # v8.1: doubled from 25 — 92K samples support more features without overfitting
-    "30_day": 50,     # v8.1: increased from 30 — longer horizon benefits from more diverse signals
+    "next_day": 25,   # v8.2: keep v8.1 (was 20 in v8.0)
+    "7_day": 35,      # v8.2: between v8.0(25) and v8.1(40) — avoid too many noisy features
+    "30_day": 40,     # v8.2: between v8.0(30) and v8.1(50) — v8.1's 50 caused overfitting
 }
 FEATURE_PRUNING = {
     "enabled": True,
