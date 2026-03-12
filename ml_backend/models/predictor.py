@@ -17,6 +17,7 @@ import lightgbm as lgb
 from sklearn.calibration import CalibratedClassifierCV
 
 from ..config.constants import PREDICTION_WINDOWS
+from .lstm_features import LSTMFeatureExtractor, LSTM_CONFIG
 from ..config.feature_config_v1 import (
     FEATURE_CONFIG_V1,
     FEATURE_PRUNING,
@@ -95,7 +96,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #     on ALL data up to holdout boundary. Gives ~20% more training data vs last fold.
 #   - Per-ticker quality gate tightened: min_corr 0.02→0.05, min_hit 0.48→0.49.
 #   - 20-ticker backtest: 7_day=+41.16% Sharpe 2.18, 30_day=+8.70% Sharpe 0.90.
-MODEL_VERSION = "v8.2.0"
+MODEL_VERSION = "v9.0.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -133,10 +134,123 @@ class StockPredictor:
         # so the backtest can restrict itself to OOS dates only.
         self._train_cutoff_dates = {"pooled": [], "ticker": []}  # per model type
         self._feature_shortlist = {}  # {window_name: [col_names]} — pruned feature set per horizon
+        # v9.0: LSTM temporal feature extractor (hybrid model)
+        self.lstm_extractor = LSTMFeatureExtractor()
 
     def set_feature_engineer(self, feature_engineer):
         """Set the feature engineer (MinimalFeatureEngineer or compatible)."""
         self.feature_engineer = feature_engineer
+
+    # ------------------------------------------------------------------
+    # LSTM hybrid helpers (v9.0)
+    # ------------------------------------------------------------------
+    def _train_lstm_extractors(
+        self, historical_data: Dict[str, pd.DataFrame], feature_engineer
+    ) -> None:
+        """Phase 0: Train LSTM temporal feature extractors for each horizon.
+
+        The LSTM learns sequential patterns from rolling windows of core
+        price/volume features. Its hidden states are then extracted as
+        additional features for LightGBM, giving it temporal awareness.
+        """
+        if not self.lstm_extractor.is_available():
+            return
+
+        input_feature_names = LSTM_CONFIG.get("input_features", [])
+        logger.info("Phase 0: Training LSTM extractors (%d input features)...", len(input_feature_names))
+
+        # Prepare per-ticker feature matrices and targets for each horizon
+        ticker_features = {}  # {ticker: (lstm_input_matrix, feature_cols, close, spy_close, dates)}
+
+        for ticker, df in historical_data.items():
+            if df is None or df.empty or len(df) < FEATURE_CONFIG_V1["min_rows"]:
+                continue
+            feats, meta = feature_engineer.prepare_features(
+                df, ticker=ticker, mongo_client=self.mongo_client
+            )
+            if feats is None:
+                continue
+            df_aligned = meta.get("df_aligned")
+            if df_aligned is None or "Close" not in df_aligned.columns:
+                continue
+            feature_cols = meta.get("feature_columns", [])
+
+            # Extract LSTM input features (subset of full feature set)
+            col_indices = [feature_cols.index(c) for c in input_feature_names if c in feature_cols]
+            if len(col_indices) < 3:
+                continue
+            lstm_input = feats[:, col_indices].astype(np.float32)
+
+            close = df_aligned["Close"].values
+            spy_close = None
+            if USE_MARKET_NEUTRAL_TARGET and "SPY_close" in df_aligned.columns:
+                spy_close = df_aligned["SPY_close"].values
+                if np.any(np.isnan(spy_close)) or np.any(spy_close <= 0):
+                    spy_close = None
+
+            ticker_features[ticker] = (lstm_input, close, spy_close)
+
+        if not ticker_features:
+            logger.warning("LSTM: no ticker data available for training")
+            return
+
+        # Train one LSTM per horizon
+        for window_name, cfg in TARGET_CONFIG.items():
+            horizon = cfg["horizon"]
+            feat_mats = []
+            target_list = []
+
+            for ticker, (lstm_input, close, spy_close) in ticker_features.items():
+                y = np.log(close[horizon:] / close[:-horizon])
+                if spy_close is not None and len(spy_close) >= horizon:
+                    spy_ret = np.log(spy_close[horizon:] / spy_close[:-horizon])
+                    if y.shape == spy_ret.shape:
+                        y = y - spy_ret
+                X = lstm_input[:len(y)]
+                valid = np.isfinite(y)
+                X = X[valid]
+                y = y[valid]
+                if len(X) < 50:
+                    continue
+                feat_mats.append(X)
+                target_list.append(y)
+
+            if feat_mats:
+                success = self.lstm_extractor.train_for_horizon(
+                    feat_mats, target_list, window_name
+                )
+                if success:
+                    logger.info("LSTM-%s: training complete", window_name)
+            else:
+                logger.warning("LSTM-%s: no data", window_name)
+
+    def _append_lstm_features(
+        self, feats: np.ndarray, feature_cols: list,
+        df_aligned: pd.DataFrame, window_name: str,
+    ) -> tuple:
+        """Append LSTM temporal features to the feature matrix if available.
+
+        Returns (augmented_feats, augmented_cols).
+        """
+        if not LSTM_CONFIG.get("enabled", False) or not self.lstm_extractor.is_available():
+            return feats, feature_cols
+        if window_name not in self.lstm_extractor.models:
+            return feats, feature_cols
+
+        input_feature_names = LSTM_CONFIG.get("input_features", [])
+        col_indices = [feature_cols.index(c) for c in input_feature_names if c in feature_cols]
+        if len(col_indices) < 3:
+            return feats, feature_cols
+
+        lstm_input = feats[:, col_indices].astype(np.float32)
+        lstm_feats = self.lstm_extractor.extract_features(lstm_input, window_name)
+        if lstm_feats is None:
+            return feats, feature_cols
+
+        lstm_col_names = self.lstm_extractor.get_feature_names(window_name)
+        augmented = np.hstack([feats, lstm_feats])
+        augmented_cols = feature_cols + lstm_col_names
+        return augmented, augmented_cols
 
     # ------------------------------------------------------------------
     # Feature pruning helpers
@@ -281,6 +395,10 @@ class StockPredictor:
                 from ..data.features_minimal import MinimalFeatureEngineer
                 fe = MinimalFeatureEngineer(self.mongo_client)
                 self.feature_engineer = fe
+
+            # Phase 0: Train LSTM temporal feature extractors (v9.0)
+            if LSTM_CONFIG.get("enabled", False) and self.lstm_extractor.is_available():
+                self._train_lstm_extractors(historical_data, fe)
             
             # Phase 1: train pooled with ALL features → extract importance
             self.train_pooled_models(historical_data, fe)
