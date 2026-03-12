@@ -17,7 +17,6 @@ import lightgbm as lgb
 from sklearn.calibration import CalibratedClassifierCV
 
 from ..config.constants import PREDICTION_WINDOWS
-from .lstm_features import LSTMFeatureExtractor, LSTM_CONFIG
 from ..config.feature_config_v1 import (
     FEATURE_CONFIG_V1,
     FEATURE_PRUNING,
@@ -50,53 +49,11 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-# v7.0.0: Anti-overfit & honest confidence overhaul:
-#   - LightGBM: major regularization increase (fewer leaves, higher min_child_samples,
-#     stronger L1/L2) to fix v6.0 overfitting (fold corr positive, holdout corr negative).
-#   - Prediction shrinkage: scale predictions toward 0 based on model quality. Models
-#     with 50% hit rate and 0 correlation produce near-zero predictions (no noise trades).
-#   - Confidence formula: uses model ACTUALLY being used (not max of all), strict scaling,
-#     per-horizon caps (next_day max 25%, 7_day max 45%, 30_day max 65%).
-#   - Recency weighting reduced: exp(-0.4) from exp(-0.7) — less aggressive, more data.
-#   - Walk-forward: 3 folds (from 5) — more training data per fold.
-#   - Feature pruning: reduced top_k (30/35/40 from 60/70/75).
-#   - Sign classifier accuracy threshold raised to 52%.
-# v7.1.0: Fix v7.0 regressions:
-#   - next_day model was DEAD (0 splits, 0 correlation) due to over-regularization.
-#     Relaxed min_split_gain 0.008→0.003, num_leaves 15→20, min_child 50→40.
-#   - Removed dangerous INVERT-SIGNAL mechanism. Anti-correlated models are now
-#     excluded entirely (negative corr doesn't persist OOS).
-#   - Added per-ticker quality gate: models with corr < 0.02 or hit_rate < 0.48
-#     are excluded from ensemble. Pooled-only prediction is used instead.
-#   - Fixed shrinkage: now uses SIGNED correlation (negative corr → full shrinkage)
-#     instead of abs(corr) which gave anti-correlated models full signal pass.
-#   - Reduced protected features 27→15 so pruning actually removes noisy features.
-# v7.1.1: Fix 30_day backtest losing money (-7.30%):
-#   - Per-horizon minimum confidence: 30_day requires 25% (was 15% global).
-#     Filters out weak pooled-only predictions that created 41 noise trades.
-#   - Reduced shrinkage floor from 10% to 3%. Models with zero edge now produce
-#     near-zero predictions instead of 10% of raw (which still triggered trades).
-# v7.2.0: Improve confidence for strong per-ticker models:
-#   - Confidence base formula widened: 0.05-0.55 → 0.05-0.65. Strong models
-#     (68.6% hit, 0.506 corr) now get ~0.65 base instead of 0.55.
-#   - Confidence caps raised: 7_day 0.45→0.60, 30_day 0.65→0.80.
-#   - Per-ticker ensemble weight cap raised 0.80→0.90 for production_ready models.
-#   - Directional conviction multiplier widened: [0.80,1.20] → [0.85,1.25].
-# v8.0.0: Anti-overfit overhaul + final model retrain:
-#   - LightGBM: deeper regularization (depth 5→4, leaves 25→20, min_child 40→50,
-#     min_split_gain 0.005→0.008, reg_alpha 0.15→0.20, reg_lambda 1.5→2.0,
-#     subsample 0.7→0.65, colsample 0.65→0.60, lr 0.015→0.01).
-#   - Next-day: very conservative (depth 3, 12 leaves, min_child 60, min_split_gain 0.01).
-#   - Walk-forward: 4 folds starting at 40%+12% steps (was 3 folds at 55%+10%).
-#     More diverse validation windows catch overfitting earlier.
-#   - Feature pruning: aggressive top_k reduction (20/25/30 from 30/35/40).
-#   - Shrinkage floor: 3%→8%. v7.1.1's 3% killed 7_day entirely (0 trades).
-#   - Trade threshold: SIGMA_MULT 0.1→0.05 for shrunken prediction magnitudes.
-#   - Final model retrain: after walk-forward + holdout eval, retrain pooled model
-#     on ALL data up to holdout boundary. Gives ~20% more training data vs last fold.
-#   - Per-ticker quality gate tightened: min_corr 0.02→0.05, min_hit 0.48→0.49.
-#   - 20-ticker backtest: 7_day=+41.16% Sharpe 2.18, 30_day=+8.70% Sharpe 0.90.
-MODEL_VERSION = "v9.0.0"
+# See git log for full version history (v7.0→v8.2).
+# v9.1.0: Code cleanup — removed incomplete LSTM dead code, fixed GH Actions
+#   Node.js deprecation. LightGBM config unchanged from v8.2 (best production
+#   result: 30_day +4.17% Sharpe 0.711, beats SPY).
+MODEL_VERSION = "v9.1.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -134,123 +91,10 @@ class StockPredictor:
         # so the backtest can restrict itself to OOS dates only.
         self._train_cutoff_dates = {"pooled": [], "ticker": []}  # per model type
         self._feature_shortlist = {}  # {window_name: [col_names]} — pruned feature set per horizon
-        # v9.0: LSTM temporal feature extractor (hybrid model)
-        self.lstm_extractor = LSTMFeatureExtractor()
 
     def set_feature_engineer(self, feature_engineer):
         """Set the feature engineer (MinimalFeatureEngineer or compatible)."""
         self.feature_engineer = feature_engineer
-
-    # ------------------------------------------------------------------
-    # LSTM hybrid helpers (v9.0)
-    # ------------------------------------------------------------------
-    def _train_lstm_extractors(
-        self, historical_data: Dict[str, pd.DataFrame], feature_engineer
-    ) -> None:
-        """Phase 0: Train LSTM temporal feature extractors for each horizon.
-
-        The LSTM learns sequential patterns from rolling windows of core
-        price/volume features. Its hidden states are then extracted as
-        additional features for LightGBM, giving it temporal awareness.
-        """
-        if not self.lstm_extractor.is_available():
-            return
-
-        input_feature_names = LSTM_CONFIG.get("input_features", [])
-        logger.info("Phase 0: Training LSTM extractors (%d input features)...", len(input_feature_names))
-
-        # Prepare per-ticker feature matrices and targets for each horizon
-        ticker_features = {}  # {ticker: (lstm_input_matrix, feature_cols, close, spy_close, dates)}
-
-        for ticker, df in historical_data.items():
-            if df is None or df.empty or len(df) < FEATURE_CONFIG_V1["min_rows"]:
-                continue
-            feats, meta = feature_engineer.prepare_features(
-                df, ticker=ticker, mongo_client=self.mongo_client
-            )
-            if feats is None:
-                continue
-            df_aligned = meta.get("df_aligned")
-            if df_aligned is None or "Close" not in df_aligned.columns:
-                continue
-            feature_cols = meta.get("feature_columns", [])
-
-            # Extract LSTM input features (subset of full feature set)
-            col_indices = [feature_cols.index(c) for c in input_feature_names if c in feature_cols]
-            if len(col_indices) < 3:
-                continue
-            lstm_input = feats[:, col_indices].astype(np.float32)
-
-            close = df_aligned["Close"].values
-            spy_close = None
-            if USE_MARKET_NEUTRAL_TARGET and "SPY_close" in df_aligned.columns:
-                spy_close = df_aligned["SPY_close"].values
-                if np.any(np.isnan(spy_close)) or np.any(spy_close <= 0):
-                    spy_close = None
-
-            ticker_features[ticker] = (lstm_input, close, spy_close)
-
-        if not ticker_features:
-            logger.warning("LSTM: no ticker data available for training")
-            return
-
-        # Train one LSTM per horizon
-        for window_name, cfg in TARGET_CONFIG.items():
-            horizon = cfg["horizon"]
-            feat_mats = []
-            target_list = []
-
-            for ticker, (lstm_input, close, spy_close) in ticker_features.items():
-                y = np.log(close[horizon:] / close[:-horizon])
-                if spy_close is not None and len(spy_close) >= horizon:
-                    spy_ret = np.log(spy_close[horizon:] / spy_close[:-horizon])
-                    if y.shape == spy_ret.shape:
-                        y = y - spy_ret
-                X = lstm_input[:len(y)]
-                valid = np.isfinite(y)
-                X = X[valid]
-                y = y[valid]
-                if len(X) < 50:
-                    continue
-                feat_mats.append(X)
-                target_list.append(y)
-
-            if feat_mats:
-                success = self.lstm_extractor.train_for_horizon(
-                    feat_mats, target_list, window_name
-                )
-                if success:
-                    logger.info("LSTM-%s: training complete", window_name)
-            else:
-                logger.warning("LSTM-%s: no data", window_name)
-
-    def _append_lstm_features(
-        self, feats: np.ndarray, feature_cols: list,
-        df_aligned: pd.DataFrame, window_name: str,
-    ) -> tuple:
-        """Append LSTM temporal features to the feature matrix if available.
-
-        Returns (augmented_feats, augmented_cols).
-        """
-        if not LSTM_CONFIG.get("enabled", False) or not self.lstm_extractor.is_available():
-            return feats, feature_cols
-        if window_name not in self.lstm_extractor.models:
-            return feats, feature_cols
-
-        input_feature_names = LSTM_CONFIG.get("input_features", [])
-        col_indices = [feature_cols.index(c) for c in input_feature_names if c in feature_cols]
-        if len(col_indices) < 3:
-            return feats, feature_cols
-
-        lstm_input = feats[:, col_indices].astype(np.float32)
-        lstm_feats = self.lstm_extractor.extract_features(lstm_input, window_name)
-        if lstm_feats is None:
-            return feats, feature_cols
-
-        lstm_col_names = self.lstm_extractor.get_feature_names(window_name)
-        augmented = np.hstack([feats, lstm_feats])
-        augmented_cols = feature_cols + lstm_col_names
-        return augmented, augmented_cols
 
     # ------------------------------------------------------------------
     # Feature pruning helpers
@@ -396,10 +240,6 @@ class StockPredictor:
                 fe = MinimalFeatureEngineer(self.mongo_client)
                 self.feature_engineer = fe
 
-            # Phase 0: Train LSTM temporal feature extractors (v9.0)
-            if LSTM_CONFIG.get("enabled", False) and self.lstm_extractor.is_available():
-                self._train_lstm_extractors(historical_data, fe)
-            
             # Phase 1: train pooled with ALL features → extract importance
             self.train_pooled_models(historical_data, fe)
 
