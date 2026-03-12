@@ -134,29 +134,48 @@ class StockPredictor:
 
         # Collect per-ticker features + prices for LSTM training
         ticker_features = {}
-        input_size = None
+        feature_sizes = set()
         for ticker, df in historical_data.items():
             if df is None or df.empty or len(df) < FEATURE_CONFIG_V1["min_rows"]:
                 continue
-            feats, meta = feature_engineer.prepare_features(
-                df, ticker=ticker, mongo_client=self.mongo_client
-            )
-            df_aligned = meta.get("df_aligned")
-            if feats is None or df_aligned is None or "Close" not in df_aligned.columns:
-                continue
-            close = df_aligned["Close"].values
-            spy_close = None
-            if USE_MARKET_NEUTRAL_TARGET and "SPY_close" in df_aligned.columns:
-                spy_close = df_aligned["SPY_close"].values
-                if np.any(np.isnan(spy_close)) or np.any(spy_close <= 0):
-                    spy_close = None
-            ticker_features[ticker] = (feats, close, spy_close)
-            if input_size is None:
-                input_size = feats.shape[1]
+            try:
+                feats, meta = feature_engineer.prepare_features(
+                    df, ticker=ticker, mongo_client=self.mongo_client
+                )
+                df_aligned = meta.get("df_aligned")
+                if feats is None or df_aligned is None or "Close" not in df_aligned.columns:
+                    continue
+                close = df_aligned["Close"].values
+                spy_close = None
+                if USE_MARKET_NEUTRAL_TARGET and "SPY_close" in df_aligned.columns:
+                    spy_close = df_aligned["SPY_close"].values
+                    if np.any(np.isnan(spy_close)) or np.any(spy_close <= 0):
+                        spy_close = None
+                ticker_features[ticker] = (feats, close, spy_close)
+                feature_sizes.add(feats.shape[1])
+            except Exception as e:
+                logger.debug("LSTM: feature prep failed for %s: %s", ticker, e)
 
-        if not ticker_features or input_size is None:
+        if not ticker_features:
             logger.warning("LSTM: no valid ticker features — skipping")
             return
+
+        # All tickers must have the same feature count; if not, use the majority
+        if len(feature_sizes) > 1:
+            majority_size = max(feature_sizes, key=lambda s: sum(1 for _, (f, _, _) in ticker_features.items() if f.shape[1] == s))
+            dropped = [t for t, (f, _, _) in ticker_features.items() if f.shape[1] != majority_size]
+            if dropped:
+                logger.info("LSTM: dropping %d tickers with mismatched feature count (expected %d): %s",
+                            len(dropped), majority_size, dropped[:5])
+                for t in dropped:
+                    del ticker_features[t]
+            if not ticker_features:
+                logger.warning("LSTM: all tickers dropped due to feature mismatch")
+                return
+
+        # Determine input_size from actual data (not assumed from first ticker)
+        first_feats = next(iter(ticker_features.values()))[0]
+        input_size = first_feats.shape[1]
 
         target_hz_name = cfg.get("target_horizon", "30_day")
         target_horizon = TARGET_CONFIG.get(target_hz_name, {}).get("horizon", 21)
@@ -181,7 +200,7 @@ class StockPredictor:
         if success:
             self._lstm_extractor = extractor
             self._lstm_cols = [f"lstm_{i}" for i in range(cfg["hidden_size"])]
-            logger.info("LSTM extractor trained: %d embedding dims", cfg["hidden_size"])
+            logger.info("LSTM extractor trained: %d embedding dims (input_size=%d)", cfg["hidden_size"], input_size)
         else:
             logger.warning("LSTM training failed — continuing without LSTM features")
 
@@ -197,10 +216,21 @@ class StockPredictor:
         """
         if self._lstm_extractor is None or not self._lstm_extractor.is_trained:
             return feats, feature_cols
-        embeddings = self._lstm_extractor.extract_embeddings(feats)
-        augmented = np.hstack([feats, embeddings])
-        augmented_cols = list(feature_cols) + self._lstm_cols
-        return augmented, augmented_cols
+        # Guard: skip if feature count doesn't match what LSTM was trained on
+        if feats.shape[1] != self._lstm_extractor.input_size:
+            logger.debug(
+                "LSTM augment skipped: feature count %d != LSTM input_size %d",
+                feats.shape[1], self._lstm_extractor.input_size,
+            )
+            return feats, feature_cols
+        try:
+            embeddings = self._lstm_extractor.extract_embeddings(feats)
+            augmented = np.hstack([feats, embeddings])
+            augmented_cols = list(feature_cols) + self._lstm_cols
+            return augmented, augmented_cols
+        except Exception as e:
+            logger.debug("LSTM augment failed: %s", e)
+            return feats, feature_cols
 
     # ------------------------------------------------------------------
     # Feature pruning helpers
@@ -347,8 +377,12 @@ class StockPredictor:
                 self.feature_engineer = fe
 
             # Phase 0 (v10.0): Train LSTM temporal feature extractor
+            # Wrapped in its own try/except so LSTM failure never kills the pipeline
             if USE_LSTM_FEATURES:
-                self._train_lstm_extractor(historical_data, fe)
+                try:
+                    self._train_lstm_extractor(historical_data, fe)
+                except Exception as lstm_err:
+                    logger.warning("LSTM training failed (non-fatal): %s — continuing without LSTM features", lstm_err)
 
             # Phase 1: train pooled with ALL features → extract importance
             self.train_pooled_models(historical_data, fe)
