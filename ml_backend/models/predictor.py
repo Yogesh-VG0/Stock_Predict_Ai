@@ -200,7 +200,7 @@ class StockPredictor:
         if success:
             self._lstm_extractor = extractor
             self._lstm_cols = [f"lstm_{i}" for i in range(cfg["hidden_size"])]
-            logger.info("LSTM extractor trained: %d embedding dims (input_size=%d)", cfg["hidden_size"], input_size)
+            logger.info("LSTM extractor trained: %d embedding dims (input_size=%d)", cfg["hidden_size"], extractor.input_size)
         else:
             logger.warning("LSTM training failed — continuing without LSTM features")
 
@@ -493,14 +493,15 @@ class StockPredictor:
 
             close = df_aligned["Close"].values
             dates_full = pd.to_datetime(df_aligned["date"]).values
-            if feature_cols_ref is None:
-                feature_cols_ref = meta.get("feature_columns", [])
-                # v10.0: extend column reference with LSTM embedding names
-                if self._lstm_extractor is not None and self._lstm_extractor.is_trained:
-                    feature_cols_ref = list(feature_cols_ref) + self._lstm_cols
+            # v10.1: Augment features with LSTM temporal embeddings FIRST,
+            # then set feature_cols_ref from the actual augmented result.
+            # This prevents column count mismatch when LSTM skips augmentation
+            # (e.g. LSTM trained on 30 features but pooled data has 113).
+            orig_cols = meta.get("feature_columns", [])
+            feats, actual_cols = self._augment_with_lstm(feats, orig_cols)
 
-            # v10.0: Augment features with LSTM temporal embeddings
-            feats, _ = self._augment_with_lstm(feats, meta.get("feature_columns", []))
+            if feature_cols_ref is None:
+                feature_cols_ref = actual_cols
 
             # SPY for market-neutral target (alpha = stock return - SPY return)
             spy_close = None
@@ -988,7 +989,8 @@ class StockPredictor:
             logger.error(f"Alignment mismatch {ticker}: df_aligned={len(df)} features={len(features)}")
             return
 
-        # v10.0: Augment features with LSTM temporal embeddings
+        # v10.1: Augment features with LSTM temporal embeddings.
+        # _aug_cols reflects actual columns (with or without LSTM, depending on match).
         features, _aug_cols = self._augment_with_lstm(features, meta.get("feature_columns", []))
 
         purge = FEATURE_CONFIG_V1["purge_days"]
@@ -996,7 +998,7 @@ class StockPredictor:
         train_r = FEATURE_CONFIG_V1["train_ratio"]
         val_r = FEATURE_CONFIG_V1["val_ratio"]
         holdout_r = FEATURE_CONFIG_V1["holdout_ratio"]
-        feature_cols = _aug_cols if self._lstm_extractor and self._lstm_extractor.is_trained else meta.get("feature_columns", [])
+        feature_cols = _aug_cols
 
         for window_name, cfg in TARGET_CONFIG.items():
             horizon = cfg["horizon"]
