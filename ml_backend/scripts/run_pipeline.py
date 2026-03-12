@@ -24,7 +24,7 @@ from ml_backend.models.predictor import StockPredictor
 from ml_backend.data.features_minimal import MinimalFeatureEngineer
 from ml_backend.utils.mongodb import MongoDBClient
 from ml_backend.config.constants import TOP_100_TICKERS
-from ml_backend.config.feature_config_v1 import TARGET_CONFIG
+from ml_backend.config.feature_config_v1 import TARGET_CONFIG, USE_CROSS_SECTIONAL_RANKING, RANKING_CONFIG
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -402,22 +402,21 @@ def main():
         logger.info("Generating and storing live predictions...")
         horizons_seen = set()
         consecutive_failures = 0
+
+        # v10.0: Collect all predictions first, then apply cross-sectional ranking
+        all_ticker_preds = {}
         for ticker in tickers:
             try:
                 df = historical_data.get(ticker)
                 if df is None or df.empty:
                     health.predictions_skipped += 1
                     continue
-                
                 if len(df) < 100:
                     logger.warning(f"Not enough data for {ticker} predictions (n={len(df)})")
                     health.predictions_skipped += 1
                     continue
-
                 preds = predictor.predict_all_windows(ticker, df)
-                
                 if preds:
-                    # Skip tickers where no horizon has a production-ready or meaningful prediction
                     real_horizons = {k: v for k, v in preds.items() if k != "_meta" and isinstance(v, dict)}
                     all_suppressed = all(
                         v.get("reason") in ("model_anti_correlated", "no_model", "feature_mismatch")
@@ -427,26 +426,47 @@ def main():
                         logger.info(f"Skipping {ticker}: all horizons suppressed (kill-switch / no model)")
                         health.predictions_skipped += 1
                         continue
-                    # Only count actual prediction horizons, not metadata keys like _meta
-                    horizons_seen.update(k for k in preds.keys() if k != "_meta")
-                    success = mongo_client.store_predictions(ticker, preds)
-                    if success:
-                        health.predictions_stored += 1
-                        consecutive_failures = 0
-                        logger.info(f"Stored predictions for {ticker}")
-                    else:
-                        health.predictions_failed += 1
-                        consecutive_failures += 1
-                        logger.error(f"Failed to store predictions for {ticker}")
-                        if consecutive_failures >= 3:
-                            logger.error("3 consecutive storage failures (likely quota exceeded) — aborting prediction loop to save CI time")
-                            break
+                    all_ticker_preds[ticker] = preds
                 else:
                     health.predictions_failed += 1
             except Exception as e:
                 health.predictions_failed += 1
+                logger.error(f"Error generating predictions for {ticker}: {e}")
+
+        # v10.0: Apply cross-sectional ranking across all tickers
+        if USE_CROSS_SECTIONAL_RANKING and len(all_ticker_preds) >= RANKING_CONFIG.get("min_tickers", 5):
+            try:
+                from ml_backend.models.cross_sectional import CrossSectionalRanker
+                ranker = CrossSectionalRanker(
+                    top_pct=RANKING_CONFIG.get("top_pct", 0.20),
+                    min_tickers=RANKING_CONFIG.get("min_tickers", 5),
+                    confidence_boost=RANKING_CONFIG.get("confidence_boost", 0.10),
+                )
+                for hz in TARGET_CONFIG.keys():
+                    all_ticker_preds = ranker.apply_ranking(all_ticker_preds, hz)
+            except Exception as e:
+                logger.warning("Cross-sectional ranking failed: %s — storing without ranking", e)
+
+        # Store predictions
+        for ticker, preds in all_ticker_preds.items():
+            try:
+                horizons_seen.update(k for k in preds.keys() if k != "_meta")
+                success = mongo_client.store_predictions(ticker, preds)
+                if success:
+                    health.predictions_stored += 1
+                    consecutive_failures = 0
+                    logger.info(f"Stored predictions for {ticker}")
+                else:
+                    health.predictions_failed += 1
+                    consecutive_failures += 1
+                    logger.error(f"Failed to store predictions for {ticker}")
+                    if consecutive_failures >= 3:
+                        logger.error("3 consecutive storage failures (likely quota exceeded) — aborting prediction loop to save CI time")
+                        break
+            except Exception as e:
+                health.predictions_failed += 1
                 consecutive_failures += 1
-                logger.error(f"Error generating/storing predictions for {ticker}: {e}")
+                logger.error(f"Error storing predictions for {ticker}: {e}")
                 if consecutive_failures >= 3:
                     logger.error("3 consecutive storage failures — aborting prediction loop")
                     break

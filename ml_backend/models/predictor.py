@@ -40,6 +40,8 @@ from ..config.feature_config_v1 import (
     PREDICTION_SHRINKAGE_ENABLED,
     PER_TICKER_MIN_CORRELATION,
     PER_TICKER_MIN_HIT_RATE,
+    USE_LSTM_FEATURES,
+    LSTM_CONFIG,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,11 +51,12 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
 # Model version — bump when feature set, hyperparams, or architecture changes.
 # Stored in every prediction document for reproducibility.
-# See git log for full version history (v7.0→v8.2).
-# v9.1.0: Code cleanup — removed incomplete LSTM dead code, fixed GH Actions
-#   Node.js deprecation. LightGBM config unchanged from v8.2 (best production
-#   result: 30_day +4.17% Sharpe 0.711, beats SPY).
-MODEL_VERSION = "v9.1.0"
+# See git log for full version history (v7.0→v9.1).
+# v10.0.0: Cross-sectional ranking + LSTM temporal feature extractor.
+#   Ranking uses predicted alpha to select top quintile (proven quant approach).
+#   LSTM captures sequential patterns LightGBM misses; 32-dim embeddings
+#   appended to feature set. LightGBM config unchanged from v8.2.
+MODEL_VERSION = "v10.0.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
@@ -91,10 +94,113 @@ class StockPredictor:
         # so the backtest can restrict itself to OOS dates only.
         self._train_cutoff_dates = {"pooled": [], "ticker": []}  # per model type
         self._feature_shortlist = {}  # {window_name: [col_names]} — pruned feature set per horizon
+        self._lstm_extractor = None  # v10.0: LSTM temporal feature extractor
+        self._lstm_cols = []  # column names for LSTM embeddings
 
     def set_feature_engineer(self, feature_engineer):
         """Set the feature engineer (MinimalFeatureEngineer or compatible)."""
         self.feature_engineer = feature_engineer
+
+    # ------------------------------------------------------------------
+    # v10.0: LSTM temporal feature extractor
+    # ------------------------------------------------------------------
+    def _train_lstm_extractor(
+        self, historical_data: Dict[str, pd.DataFrame], feature_engineer
+    ) -> None:
+        """Train LSTM feature extractor on early data from all tickers.
+
+        The LSTM is trained on the first 50% of each ticker's chronological
+        data to predict 30_day market-neutral alpha.  After training, it is
+        frozen and used purely as a feature extractor — its 32-dim hidden
+        state is appended to the LightGBM feature set.
+        """
+        try:
+            from .lstm_extractor import LSTMFeatureExtractor
+        except ImportError:
+            logger.warning("LSTM extractor module not available — skipping")
+            return
+
+        cfg = LSTM_CONFIG
+        min_tickers_lstm = cfg.get("min_tickers", 20)
+        if len(historical_data) < min_tickers_lstm:
+            logger.info(
+                "LSTM: skipping — only %d tickers (need ≥%d for meaningful training)",
+                len(historical_data), min_tickers_lstm,
+            )
+            return
+
+        logger.info("Training LSTM feature extractor (window=%d, hidden=%d) ...",
+                     cfg["window_size"], cfg["hidden_size"])
+
+        # Collect per-ticker features + prices for LSTM training
+        ticker_features = {}
+        input_size = None
+        for ticker, df in historical_data.items():
+            if df is None or df.empty or len(df) < FEATURE_CONFIG_V1["min_rows"]:
+                continue
+            feats, meta = feature_engineer.prepare_features(
+                df, ticker=ticker, mongo_client=self.mongo_client
+            )
+            df_aligned = meta.get("df_aligned")
+            if feats is None or df_aligned is None or "Close" not in df_aligned.columns:
+                continue
+            close = df_aligned["Close"].values
+            spy_close = None
+            if USE_MARKET_NEUTRAL_TARGET and "SPY_close" in df_aligned.columns:
+                spy_close = df_aligned["SPY_close"].values
+                if np.any(np.isnan(spy_close)) or np.any(spy_close <= 0):
+                    spy_close = None
+            ticker_features[ticker] = (feats, close, spy_close)
+            if input_size is None:
+                input_size = feats.shape[1]
+
+        if not ticker_features or input_size is None:
+            logger.warning("LSTM: no valid ticker features — skipping")
+            return
+
+        target_hz_name = cfg.get("target_horizon", "30_day")
+        target_horizon = TARGET_CONFIG.get(target_hz_name, {}).get("horizon", 21)
+
+        extractor = LSTMFeatureExtractor(
+            input_size=input_size,
+            hidden_size=cfg["hidden_size"],
+            num_layers=cfg["num_layers"],
+            window_size=cfg["window_size"],
+            dropout=cfg["dropout"],
+        )
+
+        success = extractor.train_extractor(
+            ticker_features=ticker_features,
+            target_horizon=target_horizon,
+            train_pct=cfg["train_pct"],
+            epochs=cfg["epochs"],
+            batch_size=cfg["batch_size"],
+            lr=cfg["lr"],
+        )
+
+        if success:
+            self._lstm_extractor = extractor
+            self._lstm_cols = [f"lstm_{i}" for i in range(cfg["hidden_size"])]
+            logger.info("LSTM extractor trained: %d embedding dims", cfg["hidden_size"])
+        else:
+            logger.warning("LSTM training failed — continuing without LSTM features")
+
+    def _augment_with_lstm(self, feats: np.ndarray, feature_cols: list) -> tuple:
+        """Append LSTM temporal embeddings to a feature matrix.
+
+        Args:
+            feats: (n_rows, n_features) for one ticker
+            feature_cols: list of column names
+
+        Returns:
+            (augmented_feats, augmented_cols) — original + LSTM embeddings
+        """
+        if self._lstm_extractor is None or not self._lstm_extractor.is_trained:
+            return feats, feature_cols
+        embeddings = self._lstm_extractor.extract_embeddings(feats)
+        augmented = np.hstack([feats, embeddings])
+        augmented_cols = list(feature_cols) + self._lstm_cols
+        return augmented, augmented_cols
 
     # ------------------------------------------------------------------
     # Feature pruning helpers
@@ -240,6 +346,10 @@ class StockPredictor:
                 fe = MinimalFeatureEngineer(self.mongo_client)
                 self.feature_engineer = fe
 
+            # Phase 0 (v10.0): Train LSTM temporal feature extractor
+            if USE_LSTM_FEATURES:
+                self._train_lstm_extractor(historical_data, fe)
+
             # Phase 1: train pooled with ALL features → extract importance
             self.train_pooled_models(historical_data, fe)
 
@@ -351,6 +461,12 @@ class StockPredictor:
             dates_full = pd.to_datetime(df_aligned["date"]).values
             if feature_cols_ref is None:
                 feature_cols_ref = meta.get("feature_columns", [])
+                # v10.0: extend column reference with LSTM embedding names
+                if self._lstm_extractor is not None and self._lstm_extractor.is_trained:
+                    feature_cols_ref = list(feature_cols_ref) + self._lstm_cols
+
+            # v10.0: Augment features with LSTM temporal embeddings
+            feats, _ = self._augment_with_lstm(feats, meta.get("feature_columns", []))
 
             # SPY for market-neutral target (alpha = stock return - SPY return)
             spy_close = None
@@ -838,12 +954,15 @@ class StockPredictor:
             logger.error(f"Alignment mismatch {ticker}: df_aligned={len(df)} features={len(features)}")
             return
 
+        # v10.0: Augment features with LSTM temporal embeddings
+        features, _aug_cols = self._augment_with_lstm(features, meta.get("feature_columns", []))
+
         purge = FEATURE_CONFIG_V1["purge_days"]
         embargo = FEATURE_CONFIG_V1["embargo_days"]
         train_r = FEATURE_CONFIG_V1["train_ratio"]
         val_r = FEATURE_CONFIG_V1["val_ratio"]
         holdout_r = FEATURE_CONFIG_V1["holdout_ratio"]
-        feature_cols = meta.get("feature_columns", [])
+        feature_cols = _aug_cols if self._lstm_extractor and self._lstm_extractor.is_trained else meta.get("feature_columns", [])
 
         for window_name, cfg in TARGET_CONFIG.items():
             horizon = cfg["horizon"]
@@ -1223,6 +1342,12 @@ class StockPredictor:
         )
         if features is None or len(features) == 0:
             return {}
+
+        # v10.0: Augment features with LSTM temporal embeddings
+        orig_cols = meta.get("feature_columns", [])
+        features, augmented_cols = self._augment_with_lstm(features, orig_cols)
+        if augmented_cols != orig_cols:
+            meta["feature_columns"] = augmented_cols
 
         # --- SEC/FMP consistency check at inference ---
         infer_skip_sec_fmp = os.environ.get("SKIP_SEC_FMP", "false").lower() == "true"
@@ -1640,6 +1765,12 @@ class StockPredictor:
         if features is None or len(features) == 0:
             return pd.DataFrame()
 
+        # v10.0: Augment features with LSTM temporal embeddings
+        orig_cols = meta.get("feature_columns", [])
+        features, augmented_cols = self._augment_with_lstm(features, orig_cols)
+        if augmented_cols != orig_cols:
+            meta["feature_columns"] = augmented_cols
+
         df_aligned = meta.get("df_aligned")
         if df_aligned is None or "date" not in df_aligned.columns:
             return pd.DataFrame()
@@ -1933,6 +2064,18 @@ class StockPredictor:
                                 logger.warning(f"Could not load {path}: {e}")
         logger.info(f"Loaded {len(self.models)} models + {len(self.sign_models)} sign classifiers")
 
+        # v10.0: Load LSTM feature extractor
+        if USE_LSTM_FEATURES:
+            lstm_path = os.path.join(base, "_pooled", "lstm_extractor.pt")
+            try:
+                from .lstm_extractor import LSTMFeatureExtractor
+                extractor = LSTMFeatureExtractor(input_size=1)  # placeholder, load() overrides
+                if extractor.load(lstm_path):
+                    self._lstm_extractor = extractor
+                    self._lstm_cols = [f"lstm_{i}" for i in range(extractor.hidden_size)]
+            except Exception as e:
+                logger.info("No LSTM extractor found or failed to load: %s", e)
+
     def save_models(self) -> None:
         """Save models to disk (per-ticker + pooled) with SHA-256 integrity hashes."""
         base = os.path.join(MODEL_DIR, "v1")
@@ -1975,6 +2118,12 @@ class StockPredictor:
                         json.dump(self._feature_shortlist, f, indent=2)
                 except Exception as e:
                     logger.warning("Could not save feature shortlist: %s", e)
+            # v10.0: Save LSTM feature extractor
+            if self._lstm_extractor is not None and self._lstm_extractor.is_trained:
+                try:
+                    self._lstm_extractor.save(os.path.join(pooled_path, "lstm_extractor.pt"))
+                except Exception as e:
+                    logger.warning("Could not save LSTM extractor: %s", e)
         for (ticker, window), model in self.models.items():
             path = os.path.join(base, ticker)
             os.makedirs(path, exist_ok=True)
