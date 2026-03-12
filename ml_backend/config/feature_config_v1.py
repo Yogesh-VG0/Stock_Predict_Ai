@@ -198,3 +198,33 @@ FEATURE_PRUNING = {
     "min_features": 18,                # v7.1: lowered from 22 — allow more aggressive pruning
 }
 
+# ── v10.0: Cross-Sectional Ranking ──
+# Instead of predicting each ticker in isolation, rank all tickers by predicted
+# alpha and only go long the top quintile. Even a pooled model with corr=0.019
+# becomes useful when you only need it to RANK tickers correctly.
+USE_CROSS_SECTIONAL_RANKING = True
+RANKING_CONFIG = {
+    "top_pct": 0.20,       # Go long top 20% of tickers (15 out of 75)
+    "min_tickers": 5,      # Need at least 5 tickers with predictions to rank
+    "confidence_boost": 0.10,  # Boost confidence for top-ranked tickers
+}
+
+# ── v10.0: LSTM Temporal Feature Extractor ──
+# Train a lightweight LSTM on 30-day rolling windows to capture temporal patterns
+# that LightGBM misses (momentum regimes, mean-reversion cycles).
+# The LSTM hidden state (32-dim) is appended as additional features for LightGBM.
+# If LSTM training fails, gracefully falls back to standard features.
+USE_LSTM_FEATURES = True
+LSTM_CONFIG = {
+    "hidden_size": 32,     # Embedding dimension
+    "num_layers": 2,       # LSTM depth
+    "window_size": 30,     # 30 trading days lookback (~6 weeks)
+    "dropout": 0.1,        # Between LSTM layers
+    "epochs": 15,          # Training epochs
+    "batch_size": 256,     # Mini-batch size
+    "lr": 1e-3,            # Adam learning rate
+    "train_pct": 0.50,     # Use first 50% of each ticker for LSTM training
+    "target_horizon": "30_day",  # Train on strongest-signal horizon
+    "min_tickers": 20,     # Need ≥20 tickers for meaningful LSTM training
+                           # (10 tickers = ~5K sequences → overfits; 75 tickers = ~44K → useful)
+}

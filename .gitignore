@@ -61,8 +61,12 @@ Thumbs.db
 # Sessions & temp
 sessions/
 
-# Models (large files - too big for GitHub, use Git LFS or download separately)
+# Models (large binary files - too big for GitHub, use Git LFS or download separately)
 models/
+# But DO track Python source files in ml_backend/models/
+!ml_backend/models/
+!ml_backend/models/*.py
+!ml_backend/models/__init__.py
 
 # ML pipeline logs & temp data
 pipeline_log*.txt

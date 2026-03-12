@@ -17,7 +17,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from .config.feature_config_v1 import TARGET_CONFIG, ROUND_TRIP_COST_BPS, TRADE_MIN_ALPHA, USE_MARKET_NEUTRAL_TARGET
+from .config.feature_config_v1 import TARGET_CONFIG, ROUND_TRIP_COST_BPS, TRADE_MIN_ALPHA, USE_MARKET_NEUTRAL_TARGET, USE_CROSS_SECTIONAL_RANKING, RANKING_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -189,26 +189,28 @@ def run_backtest(
 
     
     # Pre-compute all predictions for all tickers
-    # ticker -> DataFrame with columns [date, window, trade_recommended, normalized_return, current_price]
-    all_preds_cache = {} 
+    # ticker -> DataFrame with columns [date, window, trade_recommended, normalized_return, current_price, prediction]
+    all_preds_cache = {}
+    # v10.0: When cross-sectional ranking is enabled, store ALL predictions
+    # (not just trade_recommended) so we can rank across tickers on each date.
+    use_ranking = USE_CROSS_SECTIONAL_RANKING and len(tickers) >= RANKING_CONFIG.get("min_tickers", 5)
     
-    logger.info("Pre-computing predictions for backtest...")
+    logger.info("Pre-computing predictions for backtest...%s",
+                " (cross-sectional ranking enabled)" if use_ranking else "")
     for ticker in tickers:
         try:
             df = historical_data[ticker]
             if df is None or df.empty or len(df) < 100:
                 continue
-            # We only need predictions for the simulation period
-            # But feature eng requires lookback. Pass full df, filter output.
             preds_df = predictor.predict_batch(ticker, df)
             if not preds_df.empty:
-                # Filter for trade_recommended only to save space/time lookup
                 preds_df["date"] = pd.to_datetime(preds_df["date"])
-                # We only care about rows where trade is recommended for the requested horizon
-                mask = (preds_df["window"] == horizon) & (preds_df["trade_recommended"])
+                mask = preds_df["window"] == horizon
+                if not use_ranking:
+                    # Original: only keep trade_recommended rows
+                    mask = mask & preds_df["trade_recommended"]
                 relevant = preds_df[mask].copy()
                 if not relevant.empty:
-                    # Index by date for fast lookup
                     all_preds_cache[ticker] = relevant.set_index("date")
         except Exception as e:
             logger.warning(f"Batch predict failed for {ticker}: {e}")
@@ -295,19 +297,34 @@ def run_backtest(
                 if ticker in all_preds_cache:
                     p_df = all_preds_cache[ticker]
                     if trade_date in p_df.index:
-                        # Handle duplicate index (rare but possible if multiple windows collide or data issue)
                         row = p_df.loc[trade_date]
                         if isinstance(row, pd.DataFrame):
-                            row = row.iloc[0] # Take first if multiple
-                        
-                        candidates.append((ticker, float(row["normalized_return"]), float(row["current_price"])))
-            
-            if candidates:
+                            row = row.iloc[0]
+                        pred_val = float(row.get("prediction", row.get("normalized_return", 0)))
+                        is_recommended = bool(row.get("trade_recommended", False))
+                        candidates.append((ticker, pred_val, float(row["current_price"]), is_recommended))
+
+            if candidates and use_ranking:
+                # v10.0: Cross-sectional ranking — rank by prediction, pick top quintile
                 candidates.sort(key=lambda x: x[1], reverse=True)
-                to_buy = candidates[: max_positions - n_open]
+                n_top = max(1, int(len(candidates) * RANKING_CONFIG.get("top_pct", 0.20)))
+                # Only go long on positive predicted alpha from top quintile
+                ranked_candidates = [
+                    (t, p, price) for t, p, price, _ in candidates[:n_top] if p > 0
+                ]
+                to_buy = ranked_candidates[: max_positions - n_open]
                 for ticker, _, price in to_buy:
-                    positions[ticker] = (i, trade_date, price, 0.0)  # (bar_idx, date, price, _)
+                    positions[ticker] = (i, trade_date, price, 0.0)
                     prev_prices[ticker] = price
+            elif candidates:
+                # Original logic: use trade_recommended filter
+                rec_candidates = [(t, p, price) for t, p, price, rec in candidates if rec]
+                if rec_candidates:
+                    rec_candidates.sort(key=lambda x: x[1], reverse=True)
+                    to_buy = rec_candidates[: max_positions - n_open]
+                    for ticker, _, price in to_buy:
+                        positions[ticker] = (i, trade_date, price, 0.0)
+                        prev_prices[ticker] = price
 
         daily_returns.append(day_return)
 
