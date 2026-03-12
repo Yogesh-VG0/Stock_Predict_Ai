@@ -442,7 +442,11 @@ def main():
                     min_tickers=RANKING_CONFIG.get("min_tickers", 5),
                     confidence_boost=RANKING_CONFIG.get("confidence_boost", 0.10),
                 )
+                _disabled_hz = RANKING_CONFIG.get("disabled_horizons", [])
                 for hz in TARGET_CONFIG.keys():
+                    if hz in _disabled_hz:
+                        logger.info("Cross-sectional ranking skipped for %s (disabled)", hz)
+                        continue
                     all_ticker_preds = ranker.apply_ranking(all_ticker_preds, hz)
             except Exception as e:
                 logger.warning("Cross-sectional ranking failed: %s — storing without ranking", e)

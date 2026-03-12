@@ -253,9 +253,14 @@ class LSTMFeatureExtractor:
         # Replace NaN/inf with 0 after normalization
         X_all = np.nan_to_num(X_all, nan=0.0, posinf=0.0, neginf=0.0)
 
+        # Update input_size from actual training data (may differ from __init__ value
+        # if feature pruning or caching changed the feature count)
+        actual_input_size = X_all.shape[2]
+        self.input_size = actual_input_size
+
         # Create encoder
         self._encoder = _LSTMEncoder(
-            input_size=self.input_size,
+            input_size=actual_input_size,
             hidden_size=self.hidden_size,
             num_layers=self.num_layers,
             dropout=self.dropout,

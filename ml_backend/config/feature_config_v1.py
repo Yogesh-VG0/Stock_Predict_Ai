@@ -207,6 +207,8 @@ RANKING_CONFIG = {
     "top_pct": 0.20,       # Go long top 20% of tickers (15 out of 75)
     "min_tickers": 5,      # Need at least 5 tickers with predictions to rank
     "confidence_boost": 0.10,  # Boost confidence for top-ranked tickers
+    "disabled_horizons": ["next_day"],  # v10.1: disable ranking for horizons with zero signal
+                                        # next_day corr=0.000 → ranking on noise amplifies losses
 }
 
 # ── v10.0: LSTM Temporal Feature Extractor ──

@@ -193,7 +193,12 @@ def run_backtest(
     all_preds_cache = {}
     # v10.0: When cross-sectional ranking is enabled, store ALL predictions
     # (not just trade_recommended) so we can rank across tickers on each date.
-    use_ranking = USE_CROSS_SECTIONAL_RANKING and len(tickers) >= RANKING_CONFIG.get("min_tickers", 5)
+    _disabled_hz = RANKING_CONFIG.get("disabled_horizons", [])
+    use_ranking = (
+        USE_CROSS_SECTIONAL_RANKING
+        and len(tickers) >= RANKING_CONFIG.get("min_tickers", 5)
+        and horizon not in _disabled_hz
+    )
     
     logger.info("Pre-computing predictions for backtest...%s",
                 " (cross-sectional ranking enabled)" if use_ranking else "")
