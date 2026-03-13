@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Full-stack stock analytics &amp; ML prediction platform for the S&amp;P 100</strong><br/>
-  Real-time data · 10+ sentiment sources · 77 engineered features · plain-English AI explanations
+  Real-time data · 10+ sentiment sources · 113 engineered features · LSTM + LightGBM · SHAP + Groq AI explanations
 </p>
 
 <p align="center">
@@ -30,9 +30,17 @@
 
 ## Overview
 
-StockPredict AI predicts stock prices for **all 100 S&P 100 companies** across three time horizons (1-day, 7-day, 30-day) using a **LightGBM gradient-boosted decision tree** trained on 42+ engineered features. Every prediction is explained in plain English by Google Gemini, backed by SHAP feature-importance decomposition.
+StockPredict AI predicts stock prices for **75 S&P 100 companies** across three time horizons (1-day, 7-day, 30-day) using a **LightGBM + LSTM hybrid** trained on **113 engineered features** with cross-sectional ranking. Every prediction is explained in plain English by **Groq AI** (Llama 3.1), backed by SHAP feature-importance decomposition.
 
-A **fully automated nightly pipeline** (GitHub Actions) runs after market close — fetching data from 10+ sources, training models, generating predictions, running SHAP analysis, writing AI explanations, and evaluating accuracy — all stored in MongoDB and served through a three-tier architecture.
+A **fully automated nightly pipeline** (GitHub Actions, ~2 hours) runs after market close — fetching data from 10+ sources, training models, generating predictions, running SHAP analysis, writing AI explanations, and evaluating accuracy — all stored in MongoDB and served through a three-tier architecture.
+
+### Latest Production Backtest (Sep 2025 — Mar 2026, market-neutral)
+
+| Horizon | Return | Sharpe | Max DD | Win Rate | vs SPY (+1.9%) |
+|---------|--------|--------|--------|----------|----------------|
+| **30-day** | **+13.71%** | **2.683** | -3.11% | 64.3% | +11.81% alpha |
+| **7-day** | **+8.05%** | **1.614** | -3.40% | 50.4% | +6.15% alpha |
+| **next-day** | 0.00% | — | — | — | Model correctly abstained (no edge) |
 
 **Live at [stockpredict.dev](https://stockpredict.dev)**
 
@@ -51,6 +59,7 @@ A **fully automated nightly pipeline** (GitHub Actions) runs after market close 
 - [Frontend Architecture](#frontend-architecture)
 - [Pipeline Hardening & Reliability](#pipeline-hardening--reliability)
 - [Model Validation & Backtesting](#model-validation--backtesting)
+- [Deployment & Cost](#deployment--cost)
 - [Full Documentation](#full-documentation)
 - [License](#license)
 
@@ -77,11 +86,11 @@ A **fully automated nightly pipeline** (GitHub Actions) runs after market close 
 
 ### 1. The Predictor — LightGBM
 
-The **only** component that predicts stock prices. A gradient-boosted decision tree trained on 42+ numeric features (price history, sentiment scores, macro data, insider activity). Outputs a predicted log-return per stock per horizon.
+The **only** component that predicts stock prices. A gradient-boosted decision tree (v10.1.0) trained on **113 numeric features** (price history, sentiment scores, macro data, insider activity, fundamentals, earnings, short interest) with an optional **LSTM temporal feature extractor** (32-dim embeddings from 30-day rolling windows). Cross-sectional ranking selects the top quintile of tickers. Outputs a predicted log-return (alpha vs SPY) per stock per horizon.
 
-### 2. The Explainer — SHAP + Gemini
+### 2. The Explainer — SHAP + Groq AI (Llama 3.1)
 
-SHAP mathematically decomposes _why_ LightGBM made its prediction (which features pushed the price up or down). Gemini then reads the SHAP results, sentiment data, news headlines, macro indicators, insider trades, and short interest — and writes a structured plain-English explanation. **Gemini does not predict prices.**
+SHAP mathematically decomposes _why_ LightGBM made its prediction (which features pushed the price up or down). **Groq** (Llama 3.1-8b-instant, primary) or Google Gemini (fallback) then reads the SHAP results, sentiment data, news headlines, macro indicators, insider trades, and short interest — and writes a structured plain-English explanation. **The AI explainer does not predict prices.**
 
 ### 3. The Sentiment Scorers — FinBERT, RoBERTa, VADER
 
@@ -104,7 +113,7 @@ Price history        →  Feature engineering          →  42+ features (NUMBER
                                             feature contributions
                                                   │
                                                   ▼
-                                            Gemini AI Explainer
+                                            Groq / Gemini AI Explainer
                                                   │
                                             plain-English explanation (TEXT)
                                                   │
@@ -135,7 +144,7 @@ Price history        →  Feature engineering          →  42+ features (NUMBER
 │  Port 8000             │                │  wss://ws.finnhub.io   │
 │  Predictions · SHAP    │                │  Real-time trades      │
 │  Sentiment · Training  │                └───────────────────────┘
-│  Gemini Explanations   │
+│  Groq/Gemini AI        │
 └──────────┬─────────────┘
            │
            ▼
@@ -165,28 +174,28 @@ Price history        →  Feature engineering          →  42+ features (NUMBER
 
 ## Daily Automated Pipeline
 
-Runs every weeknight via **GitHub Actions** (~6:15 PM ET, after market close). Total runtime: ~60 minutes on a standard runner (7 GB RAM, 2 CPUs).
+Runs every weeknight via **GitHub Actions** (~6:15 PM ET, after market close). Total runtime: **~2 hours** on a free Ubuntu runner (7 GB RAM, 2 CPUs).
 
 ```
  ╔════════════════════════════════════════════════════════════════════╗
- ║  STEP 1: Gather Sentiment (~5 min)                                ║
- ║  Fetch news/social data for all 100 tickers from 10+ sources.     ║
+ ║  STEP 1: Gather Sentiment (~25 min)                               ║
+ ║  Fetch news/social data for all 75 tickers from 10+ sources.      ║
  ║  Score with FinBERT, RoBERTa, VADER. Blend into composite score.  ║
  ║  Non-fatal — pipeline continues with stale sentiment if needed.   ║
  ╠════════════════════════════════════════════════════════════════════╣
- ║  STEP 2: Train Models (~15 min)                                   ║
- ║  Ingest OHLCV from Yahoo Finance. Engineer 42+ features.          ║
- ║  Train ONE pooled LightGBM model per horizon (3 models total).    ║
+ ║  STEP 2: Train Models (~25 min)                                   ║
+ ║  Ingest OHLCV from Yahoo Finance. Engineer 113 features.          ║
+ ║  Train LSTM extractor + pooled LightGBM per horizon (3 models).   ║
  ║  FATAL if fails — no predictions without trained models.          ║
  ╠════════════════════════════════════════════════════════════════════╣
- ║  STEP 3: Generate Predictions (~20 min)                           ║
- ║  Run models on all 100 tickers (10 batches × 10).                 ║
- ║  Per stock: predicted return, price, confidence, trade signal.     ║
+ ║  STEP 3: Generate Predictions (~10 min)                           ║
+ ║  Load saved models, predict all 75 tickers in one process.        ║
+ ║  Cross-sectional ranking: top quintile boosted, bottom suppressed. ║
  ║  Canary verification: checks 8 benchmark tickers for freshness.   ║
  ╠════════════════════════════════════════════════════════════════════╣
- ║  STEP 4: Explain Predictions (~15 min)                            ║
+ ║  STEP 4: Explain Predictions (~50 min)                            ║
  ║  SHAP analysis decomposes each prediction into feature drivers.   ║
- ║  Gemini reads 11 data sources and writes per-stock explanations.  ║
+ ║  Groq AI reads 11 data sources and writes per-stock explanations. ║
  ╠════════════════════════════════════════════════════════════════════╣
  ║  STEP 5: Evaluate & Monitor (~5 min)                              ║
  ║  Compare last 60 days of predictions vs actuals.                  ║
@@ -211,29 +220,32 @@ Runs every weeknight via **GitHub Actions** (~6:15 PM ET, after market close). T
 
 ## Machine Learning Deep Dive
 
-### Why LightGBM?
+### Why LightGBM + LSTM Hybrid?
 
-LightGBM (gradient-boosted decision trees) was chosen over deep learning approaches like LSTMs because:
+The core predictor is **LightGBM** (gradient-boosted decision trees), augmented with an **LSTM temporal feature extractor** (v10.0):
 
-- **Tabular data advantage** — The 42+ pre-engineered numeric features are cross-sectional (many tickers × many features), which suits tree models far better than sequential RNNs
-- **Speed** — Trains across 100 stocks in ~15 minutes on a free GitHub Actions runner
+- **Tabular data advantage** — The 113 pre-engineered numeric features are cross-sectional (75 tickers × many features), which suits tree models far better than end-to-end deep learning
+- **LSTM complements, not replaces** — A 2-layer LSTM trained on 30-day rolling windows extracts 32-dimensional temporal embeddings that capture momentum regimes and mean-reversion cycles LightGBM misses. These embeddings are appended as additional features, not used for direct prediction
+- **Speed** — Trains across 75 stocks in ~25 minutes on a free GitHub Actions runner
 - **Handles missing values natively** — Critical when some API sources fail on any given day
 - **Interpretable** — Built-in feature importance + fast TreeSHAP for explanations
 - **Robust** — Huber loss function is resilient to outlier returns
 
-### Hyperparameters
+### Hyperparameters (v8.2 — tuned for 75 tickers, ~92K samples)
 
 | Parameter | Value | Rationale |
 |-----------|-------|----------|
-| Objective | Huber (delta=0.8) | Robust to outlier returns (earnings gaps, black swans) |
-| Learning rate | 0.02 | Slow learning for stability |
-| Max depth | 5 | Allows slightly deeper feature interactions |
-| Num leaves | 20 | Conservative tree complexity |
-| N estimators | 300 | More rounds with slower learning rate |
-| Min child samples | 30 | Requires sufficient evidence per leaf |
-| Regularization | L1=0.5, L2=0.5 | Strong regularization prevents overfitting |
-| Subsampling | 70% rows, 70% columns | Reduces variance, forces diverse feature usage |
-| Walk-forward folds | 4 | Rolling validation for robust evaluation |
+| Objective | Huber | Robust to outlier returns (earnings gaps, black swans) |
+| Learning rate | 0.015 | Balanced between stability and convergence |
+| Max depth | 5 | Deep enough for feature interactions without overfitting |
+| Num leaves | 25 | Conservative tree complexity |
+| N estimators | 500 | With early stopping patience |
+| Min child samples | 40 | Strong evidence required per leaf |
+| Min split gain | 0.005 | Filters out noise splits |
+| Regularization | L1=0.15, L2=1.5 | Strong regularization prevents overfitting |
+| Subsampling | 70% rows, 65% columns | Reduces variance, forces diverse feature usage |
+| Walk-forward folds | 4 | Rolling validation (50% start, 10% steps) |
+| Feature pruning | 25/35/40 per horizon | Removes noisy features after first training pass |
 
 ### Market-Neutral Alpha
 
@@ -252,9 +264,9 @@ A prediction generates a `trade_recommended = True` signal only when:
 - P(return > 0) > 52%
 - Predicted return exceeds transaction costs (10 basis points)
 
-### 77 Engineered Features
+### 113 Engineered Features (77 base + interaction features + LSTM embeddings)
 
-Features are organized into ten categories, all using `shift(1)` to ensure **point-in-time safety** (no future data leakage):
+Features are organized into ten categories, all using `shift(1)` to ensure **point-in-time safety** (no future data leakage). After feature pruning, the model uses 25–40 features per horizon:
 
 <details>
 <summary><strong>Price & Return Features (6)</strong></summary>
@@ -388,6 +400,17 @@ Features are organized into ten categories, all using `shift(1)` to ensure **poi
 
 </details>
 
+### Cross-Sectional Ranking (v10.0)
+
+Instead of predicting each ticker in isolation, the model ranks all 75 tickers by predicted alpha and selects the **top quintile** (top 15). Bottom quintile trades are suppressed. Even a pooled model with weak individual correlation becomes useful when it only needs to rank tickers correctly.
+
+### Prediction Shrinkage & Kill-Switches (v7.0+)
+
+- **Prediction shrinkage** — Scales predictions toward 0 based on model quality (hit rate + correlation). Models with 50% hit rate / 0 correlation produce near-zero predictions
+- **Kill-switch** — If pooled model has negative holdout correlation, it's suppressed for that ticker
+- **Per-horizon confidence caps** — Prevents inflated confidence (next_day capped at 25%, 7_day at 65%, 30_day at 80%)
+- **Sign classifier gate** — If sign classifier accuracy < 52%, it's removed and Gaussian CDF is used instead
+
 ### Confidence Scoring
 
 A separate LightGBM binary classifier predicts **P(return > 0)** — the probability the stock will go up:
@@ -428,7 +451,7 @@ Sentiment is collected from **10+ sources**, scored with three NLP models, and b
 
 > **Resilience guarantee**: Even if all rate-limited APIs are exhausted, **42% of blend weight** comes from free, unlimited sources that never fail.
 
-### What Gemini Reads for Explanations (11 Data Sources)
+### What Groq AI Reads for Explanations (11 Data Sources)
 
 The AI explanation prompt is **stock-specific** — tailored with company name, sector, and industry context:
 
@@ -460,8 +483,8 @@ The AI explanation prompt is **stock-specific** — tailored with company name, 
 | **Seeking Alpha** | Comment sentiment (Playwright scraping) | Sentiment scores in MongoDB |
 | **Finviz** | News headlines + short interest (fallback) | Sentiment scores in MongoDB |
 | **Nasdaq** | Short interest data (settlement-cycle updates) | Short interest in MongoDB |
-| **Groq (Llama 3.1)** | Primary AI explanation generation | Explanations in MongoDB |
-| **Google Gemini** | Fallback AI explanation generation (auto-fallback: pro → flash → flash-lite) | Explanations in MongoDB |
+| **Groq (Llama 3.1)** | Primary AI explanation generation (14.4K RPD free tier) | Explanations in MongoDB |
+| **Google Gemini** | Fallback AI explanation generation (auto-fallback: pro → flash) | Explanations in MongoDB |
 | **TradingView** | Chart widgets, heatmaps, economic calendar | Not stored (client-side embed) |
 | **Calendarific** | US market holidays for market-status detection | Redis (1-year TTL) |
 
@@ -473,7 +496,7 @@ The AI explanation prompt is **stock-specific** — tailored with company name, 
 |-------|-------------|
 | **Frontend** | Next.js 15, React 18, TypeScript 5, Tailwind CSS, Shadcn/UI, Framer Motion, TradingView Widgets, Apache ECharts (Sankey), Recharts |
 | **Backend** | Node.js 18+, Express.js, MongoDB Atlas, Redis |
-| **ML / AI** | Python 3.11+, FastAPI, LightGBM, SHAP (TreeSHAP), Groq (Llama 3.1-8b), Google Gemini 2.5, yfinance, FinBERT, RoBERTa, VADER |
+| **ML / AI** | Python 3.11+, FastAPI, LightGBM, PyTorch (LSTM), SHAP (TreeSHAP), Groq (Llama 3.1-8b), Google Gemini 2.5, yfinance, FinBERT, RoBERTa, VADER |
 | **Data** | Finnhub, Yahoo Finance, FRED, FMP, Marketaux, Reddit (PRAW), Seeking Alpha (Playwright), SEC/Kaleidoscope, Nasdaq |
 | **Infrastructure** | Vercel (frontend), Koyeb (backends), GitHub Actions (daily pipeline), MongoDB Atlas, Redis Cloud |
 | **Monitoring** | Drift monitor (PSI), stored prediction evaluation, quality gates, Vercel Analytics |
@@ -503,7 +526,7 @@ Built with **Next.js 15 App Router** — fully server-side rendered, SEO-friendl
 
 | Component | Purpose |
 |-----------|---------|
-| `AIExplanationWidget` | Displays Gemini-generated structured explanation with outlook, key drivers, and bottom line |
+| `AIExplanationWidget` | Displays Groq/Gemini-generated structured explanation with outlook, key drivers, and bottom line |
 | `EnhancedQuickPredictionWidget` | Prediction lookup showing price targets, confidence, and trade signals |
 | `SankeyChart` | Apache ECharts Sankey diagram — revenue sources → expenses → profit paths |
 | `MarketSentimentBanner` | Fear & Greed Index with visual gauge |
@@ -580,9 +603,27 @@ Training uses a rolling split with purge gaps to prevent data leakage:
 
 ---
 
+## Deployment & Cost
+
+The entire platform runs on **free tiers** with zero monthly cost:
+
+| Service | Provider | Tier | Monthly Cost |
+|---------|----------|------|--------------|
+| **Frontend** | Vercel | Hobby (free) | $0 |
+| **Backend API** | Koyeb | Free (scale-to-zero) | $0 |
+| **ML Pipeline** | GitHub Actions | Free (2,000 min/mo) | $0 |
+| **Database** | MongoDB Atlas | M0 (free, 512 MB) | $0 |
+| **Cache** | Redis Cloud | Free (30 MB) | $0 |
+| **AI Explanations** | Groq | Free (14.4K RPD) | $0 |
+| **Domain** | stockpredict.dev | — | ~$12/yr |
+
+Koyeb free instance scales to zero after inactivity and uses light sleep (~200ms cold start) to minimize costs.
+
+---
+
 ## Full Documentation
 
-**[DOCUMENTATION.md](DOCUMENTATION.md)** — 2,500+ lines covering architecture, data flow, every API endpoint, database schemas, field-level data mappings, MongoDB document structures, file-by-file breakdown, pipeline details, and more.
+**[DOCUMENTATION.md](DOCUMENTATION.md)** — 2,600+ lines covering architecture, data flow, every API endpoint, database schemas, field-level data mappings, MongoDB document structures, file-by-file breakdown, pipeline details, and more.
 
 ---
 
