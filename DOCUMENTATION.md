@@ -1,6 +1,7 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-02-28
+> **Last updated**: 2026-03-13  
+> **Model version**: v10.1.0 (LightGBM + LSTM hybrid, cross-sectional ranking)
 
 ---
 
@@ -43,9 +44,9 @@
 
 StockPredict AI is a **full-stack stock market prediction and analysis platform** that:
 
-- **Predicts** stock prices for 75 S&P stocks across 3 time horizons (1 day, 1 week, 1 month) using machine learning (LightGBM)
+- **Predicts** stock prices for 75 S&P 100 stocks across 3 time horizons (1 day, 7 day, 30 day) using a **LightGBM + LSTM hybrid** (v10.1.0) with cross-sectional ranking
 - **Analyzes** market sentiment from 10+ news/social sources using NLP models (FinBERT, RoBERTa, VADER)
-- **Explains** predictions in plain English using Groq AI (Llama-3.1-8b) with Google Gemini as fallback
+- **Explains** predictions in plain English using **Groq AI** (Llama-3.1-8b-instant, primary) with Google Gemini as fallback
 - **Displays** real-time stock prices, TradingView charts, technical indicators, Sankey financial flow charts, and news
 - **Manages** user watchlists with real-time price alerts
 - **Visualizes** income statement flows as interactive Sankey diagrams showing revenue breakdown, expenses, and profit paths
@@ -71,12 +72,14 @@ This project uses the word "model" for three very different things. Beginners of
 ### 1. The Predictor — LightGBM (the only model that predicts prices)
 
 - **What it is**: A gradient-boosted decision tree (a math/statistics algorithm)
-- **Input**: 77 numeric features (price history, sentiment scores, macro data, earnings, fundamentals, short interest, etc.)
+- **Input**: 113 numeric features (price history, sentiment scores, macro data, earnings, fundamentals, short interest, LSTM temporal embeddings, interaction features, etc.)
 - **Output**: A number — predicted log-return (e.g., +0.002 means ~+0.2%)
 - **Where it runs**: Python ML backend, during the daily GitHub Actions pipeline
 - **File**: `ml_backend/models/predictor.py`
 
 This is the **only** component that actually predicts stock prices. Everything else supports it.
+
+**v10.0 additions**: An optional **LSTM temporal feature extractor** (2-layer, 32-dim hidden state) trained on 30-day rolling windows captures momentum regimes and mean-reversion cycles. The LSTM embeddings are appended as additional features for LightGBM. **Cross-sectional ranking** ranks all 75 tickers by predicted alpha and selects the top quintile (15 stocks), suppressing the bottom quintile.
 
 ### 2. The Explainer — SHAP + Groq / Google Gemini (translates numbers into English)
 
@@ -87,6 +90,14 @@ This is the **only** component that actually predicts stock prices. Everything e
 - **Files**: `ml_backend/explain/shap_analysis.py`, `ml_backend/scripts/generate_explanations.py`
 
 Groq/Gemini do NOT predict prices. They read the LightGBM prediction and explain it in words.
+
+### Latest Production Backtest (v10.1.0, Sep 2025 — Mar 2026, market-neutral, 75 tickers)
+
+| Horizon | Return | Sharpe | Max DD | Win Rate | Trades | vs SPY (+1.9%) |
+|---------|--------|--------|--------|----------|--------|----------------|
+| **30-day** | **+13.71%** | **2.683** | -3.11% | 64.3% | 28 | +11.81% alpha |
+| **7-day** | **+8.05%** | **1.614** | -3.40% | 50.4% | 129 | +6.15% alpha |
+| **next-day** | 0.00% | 0.000 | 0.00% | — | 0 | Model correctly abstained |
 
 ### 3. The Sentiment Scorers — FinBERT, RoBERTa, VADER (produce input features)
 
@@ -1129,24 +1140,31 @@ This means the model predicts how much the stock will beat or lag the market, no
 - Tabular cross-sectional features (many tickers, many numeric features) suit tree models better than sequential RNNs; LSTMs excel at long raw sequences (e.g. tick-by-tick), not pre-engineered panel data.
 - LightGBM needs less data and compute, is easier to tune and deploy in CI, and gives interpretable feature importance and fast TreeSHAP for explanations.
 
-**Hyperparameters** (v3.1 — stronger regularization to combat holdout degradation):
+**Hyperparameters** (v8.2 — tuned for 75-ticker pooled model, ~92K samples):
 ```
-Objective:        huber (robust to outlier returns)
-Learning rate:    0.01 (very slow learning — best generalization with 400 rounds)
-Max depth:        5 (reduced from 6 to prevent overfitting)
-Num leaves:       24 (reduced from 31; tighter constraint for depth-5)
-N estimators:     400 (early stopping patience 30 prevents overfit)
-Min child samples: 30 (increased from 20 for stronger regularization)
-Min split gain:   0.02 (filter out more noise splits)
-Regularization:   L1=0.5, L2=2.0 (increased for feature sparsity and weight stability)
-Subsampling:      75% rows, 70% columns (more diversity per tree)
+Objective:        regression (RMSE) with Huber-like robustness
+Learning rate:    0.015 (balanced between v8.0's 0.01 and v8.1's 0.02)
+Max depth:        5
+Num leaves:       25
+N estimators:     500 (with early stopping)
+Min child samples: 40
+Min split gain:   0.005
+Regularization:   L1=0.15, L2=1.5
+Subsampling:      70% rows, 65% columns
 ```
 
-**Training Strategy — Pooled Model:**
-1. Combine data from all 75 tickers
-2. Train ONE model per horizon (3 models total)
-3. Uses walk-forward validation with purge/embargo gaps
-4. Feature pruning: Keep top 35 features per horizon (protected features always kept)
+**Next-day overrides** (noisier 1-day alpha):
+```
+Max depth: 4, Num leaves: 15, Min child samples: 50
+Min split gain: 0.008, L1=0.25, L2=2.0
+```
+
+**Training Strategy — Pooled Model (v10.1.0):**
+1. **Phase 0**: Train LSTM temporal feature extractor on 30-day rolling windows (if ≥20 tickers). Produces 32-dim temporal embeddings appended to feature matrix
+2. **Phase 1**: Combine data from all 75 tickers. Feature pruning: train pooled model with all features → extract top-k by gain (25/35/40 per horizon) → retrain with shortlisted features
+3. **Phase 2**: Train per-ticker models with quality gates (min correlation 0.03, min hit rate 48%)
+4. Walk-forward validation: 4 folds starting at 50%, 10% steps
+5. Cross-sectional ranking applied at prediction time (top quintile boosted, bottom suppressed)
 
 **Why Pooled?**
 A pooled model sees patterns across all stocks (e.g., "when VIX spikes, tech stocks drop"), making it more robust than per-ticker models which have limited data.
@@ -1348,7 +1366,7 @@ A prediction only generates a `trade_recommended = True` signal when:
 - **Why this time?** US markets close at 4:00 PM ET (9:00 PM UTC in winter / 8:00 PM UTC in summer). The 10:15 PM UTC schedule gives ~1-2 hours buffer after close.
 - **Manual trigger**: Can also be run manually via `workflow_dispatch`
 - **Concurrency**: Only one run at a time (`cancel-in-progress: false`)
-- **Timeout**: 120 minutes max
+- **Timeout**: 350 minutes max (accommodates SHAP + AI explanation generation for 75 tickers)
 
 ### Step-by-Step Execution
 
@@ -1369,23 +1387,26 @@ Step 4: RUN SENTIMENT CRON (non-fatal if fails)
   → Env vars: MONGODB_URI, FINNHUB_API_KEY, FMP_API_KEY, MARKETAUX_API_KEY,
               GOOGLE_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
 
-Step 5: TRAIN POOLED MODEL
+Step 5: TRAIN POOLED MODEL (+ LSTM extractor)
   → python -m ml_backend.scripts.run_pipeline --all-tickers --no-predict
   → Fetches historical data for all 75 tickers
-  → Engineers features
-  → Trains ONE pooled LightGBM model per horizon (3 models)
+  → Engineers 113 features
+  → Phase 0: Train LSTM temporal feature extractor (if ≥20 tickers)
+  → Phase 1: Train pooled LightGBM with feature pruning per horizon (3 models)
+  → Phase 2: Train per-ticker models with quality gates
   → Models saved to disk (models/v1/_pooled/)
+  → Also runs market-neutral backtest on all 3 horizons
   → Does NOT generate predictions yet (--no-predict flag)
   → Env vars: All API keys + FRED_API_KEY, ALPHAVANTAGE_API_KEY
 
-Step 6: GENERATE PREDICTIONS (10 batches x 10 tickers)
-  → python -m ml_backend.scripts.run_pipeline --predict-only --tickers [batch]
-  → Loads trained models from disk
-  → Generates predictions for each batch
-  → Stores in MongoDB stock_predictions collection
-  → 3 retry attempts per batch with exponential backoff (20s, 40s, 60s)
-  → 5s pause between batches
-  → Fails job if > 3 batches fail (> 30%)
+Step 6: GENERATE PREDICTIONS (all 75 tickers in one process)
+  → python -m ml_backend.scripts.run_pipeline --predict-only --all-tickers
+  → Loads trained models from disk (pooled + per-ticker + LSTM)
+  → Generates predictions for all 75 tickers
+  → Cross-sectional ranking: top quintile boosted, bottom quintile suppressed
+  → Stores 225 predictions (75 × 3 horizons) in MongoDB stock_predictions
+  → 3 retry attempts with exponential backoff
+  → Fails job if predictions cannot be stored
 
 Step 7: VERIFY PREDICTIONS ARE FRESH
   → Python script checks MongoDB for canary tickers (AAPL, AMZN, JPM, etc.)
@@ -1393,21 +1414,22 @@ Step 7: VERIFY PREDICTIONS ARE FRESH
   → Asserts >= 200 fresh prediction documents
   → Fails if any canary ticker is missing or stale
 
-Step 8: GENERATE SHAP FEATURE IMPORTANCE (10 batches x 10 tickers)
-  → python -m ml_backend.explain.shap_analysis --tickers [batch]
+Step 8: GENERATE SHAP FEATURE IMPORTANCE (8 batches)
+  → python -m ml_backend.explain.shap_analysis --tickers [batch] --max-minutes 15
   → Computes SHAP values for each ticker (math, not AI)
   → Stores in MongoDB feature_importance collection
   → Non-fatal: fails if > 5 batches fail
 
-Step 9: GENERATE AI EXPLANATIONS (Groq / Gemini)
+Step 9: GENERATE AI EXPLANATIONS (Groq / Gemini, 90-min time budget)
   → python -m ml_backend.scripts.generate_explanations
   → Uses all MongoDB data (predictions, sentiment, technicals, SHAP, macro, insider, short interest)
   → Calls Groq API (primary: llama-3.1-8b-instant, 14.4K RPD) or Gemini API (fallback: pro→flash→flash-lite) to EXPLAIN (not predict) each ticker with stock-specific prompts
+  → Rate limit retries: ~18s backoff per 429 response from Groq
   → Stores in MongoDB prediction_explanations collection
-  → Non-fatal if fails
+  → Non-fatal if fails or hits time budget
 
-Step 10: EVALUATE STORED PREDICTIONS (last 60 days)
-  → python -m ml_backend.scripts.evaluate_models --stored --days 60
+Step 10: EVALUATE STORED PREDICTIONS (last 180 days)
+  → python -m ml_backend.scripts.evaluate_models --stored --days 180
   → Compares past predictions to actual price outcomes
   → Outputs metrics: directional accuracy, rank correlation, Brier score
   → Saved to eval_report.txt artifact
@@ -1421,8 +1443,13 @@ Step 11: RUN DRIFT MONITOR
   → Saved to drift_report.txt artifact
   → Non-fatal
 
+Step 11.5: DATA RETENTION CLEANUP
+  → python -m ml_backend.scripts.data_retention
+  → Removes data older than 12 months from most collections
+  → Non-fatal
+
 Step 12: UPLOAD ARTIFACTS (always runs)
-  → Uploads all .log files, eval_report.txt, drift_report.txt
+  → Uploads all .log files, eval_report.txt, drift_report.txt, retention_report.txt
   → Available for download from GitHub Actions UI
 ```
 

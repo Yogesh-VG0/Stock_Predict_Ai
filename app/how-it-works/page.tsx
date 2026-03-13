@@ -6,7 +6,7 @@ import MarketingShell from "@/components/marketing/marketing-shell"
 export const metadata: Metadata = {
   title: "How It Works | StockPredict AI",
   description:
-    "Learn how StockPredict AI fetches data, engineers features, trains LightGBM models, generates predictions, and explains them with SHAP and Gemini AI.",
+    "Learn how StockPredict AI fetches data, engineers features, trains LightGBM + LSTM models, generates predictions, and explains them with SHAP and Groq AI.",
 }
 
 export default function HowItWorksPage() {
@@ -20,7 +20,7 @@ export default function HowItWorksPage() {
             </div>
             <h1 className="text-3xl sm:text-4xl font-bold tracking-tight">How StockPredict AI Works</h1>
             <p className="mt-3 text-sm sm:text-base text-zinc-400 max-w-3xl leading-relaxed">
-              End-to-end pipeline from raw market data to ML forecasts and plain-English explanations for the S&amp;P 100.
+              End-to-end pipeline from raw market data to ML forecasts and plain-English explanations for 75 S&amp;P 100 stocks.
             </p>
 
             <div className="mt-6 flex flex-col sm:flex-row gap-3">
@@ -101,10 +101,10 @@ export default function HowItWorksPage() {
               <div className="flex flex-col gap-0" role="img" aria-label="Architecture flow: Data Sources → Feature Engineering → LightGBM → SHAP → Gemini AI → API → Frontend">
                 {[
                   { icon: "📊", label: "Data Sources", desc: "Finnhub, FRED, FMP, SEC, Reddit, RSS, FinViz", color: "from-blue-500/20 to-blue-600/5", border: "border-blue-500/30", dot: "bg-blue-400", glow: "bg-blue-500/20" },
-                  { icon: "⚙️", label: "Feature Engineering", desc: "40+ signals: technicals, sentiment, macro, insider", color: "from-cyan-500/20 to-cyan-600/5", border: "border-cyan-500/30", dot: "bg-cyan-400", glow: "bg-cyan-500/20" },
-                  { icon: "🧠", label: "LightGBM Model", desc: "Walk-forward gradient-boosted trees, 3 horizons", color: "from-purple-500/20 to-purple-600/5", border: "border-purple-500/30", dot: "bg-purple-400", glow: "bg-purple-500/20" },
+                  { icon: "⚙️", label: "Feature Engineering", desc: "113 features: technicals, sentiment, macro, insider, fundamentals, LSTM embeddings", color: "from-cyan-500/20 to-cyan-600/5", border: "border-cyan-500/30", dot: "bg-cyan-400", glow: "bg-cyan-500/20" },
+                  { icon: "🧠", label: "LightGBM + LSTM", desc: "Walk-forward gradient-boosted trees with LSTM temporal embeddings, 3 horizons", color: "from-purple-500/20 to-purple-600/5", border: "border-purple-500/30", dot: "bg-purple-400", glow: "bg-purple-500/20" },
                   { icon: "🔍", label: "SHAP Analysis", desc: "Feature importance decomposition per prediction", color: "from-amber-500/20 to-amber-600/5", border: "border-amber-500/30", dot: "bg-amber-400", glow: "bg-amber-500/20" },
-                  { icon: "✨", label: "Gemini AI", desc: "Plain-English narratives from SHAP + market context", color: "from-emerald-500/20 to-emerald-600/5", border: "border-emerald-500/30", dot: "bg-emerald-400", glow: "bg-emerald-500/20" },
+                  { icon: "✨", label: "Groq AI", desc: "Plain-English narratives from SHAP + market context via Llama 3.1", color: "from-emerald-500/20 to-emerald-600/5", border: "border-emerald-500/30", dot: "bg-emerald-400", glow: "bg-emerald-500/20" },
                   { icon: "🔌", label: "Node.js API", desc: "Express server with Redis caching & rate limiting", color: "from-orange-500/20 to-orange-600/5", border: "border-orange-500/30", dot: "bg-orange-400", glow: "bg-orange-500/20" },
                   { icon: "🖥️", label: "Next.js Frontend", desc: "Interactive dashboard with TradingView widgets", color: "from-rose-500/20 to-rose-600/5", border: "border-rose-500/30", dot: "bg-rose-400", glow: "bg-rose-500/20" },
                 ].map((step, i, arr) => (
@@ -170,7 +170,7 @@ export default function HowItWorksPage() {
           <section id="feature-engineering" className="space-y-3 scroll-mt-24">
             <h2 className="text-xl sm:text-2xl font-semibold">2. Feature engineering</h2>
             <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
-              For each ticker, the ML backend builds a feature vector with 40+ signals, including:
+              For each ticker, the ML backend builds a feature vector with 113 signals, including:
             </p>
             <ul className="list-disc list-inside text-sm sm:text-base text-zinc-300 space-y-2">
               <li>
@@ -200,7 +200,7 @@ export default function HowItWorksPage() {
           <section id="model-training" className="space-y-3 scroll-mt-24">
             <h2 className="text-xl sm:text-2xl font-semibold">3. Model training (LightGBM)</h2>
             <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
-              The core predictor is a LightGBM gradient-boosted tree model. It learns to forecast log-returns for three horizons:
+              The core predictor is a LightGBM gradient-boosted tree model, augmented with an LSTM temporal feature extractor (v10.0). It learns to forecast log-returns (alpha vs SPY) for three horizons:
             </p>
             <ul className="list-disc list-inside text-sm sm:text-base text-zinc-300 space-y-2">
               <li>
@@ -214,8 +214,8 @@ export default function HowItWorksPage() {
               </li>
             </ul>
             <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
-              Models are trained in a walk-forward fashion: each training window uses historical data only up to that point and is
-              evaluated on future periods, which reduces lookahead bias and gives a more realistic picture of performance.
+              Models are trained in a walk-forward fashion (4 folds, 50% start, 10% steps): each training window uses historical data only up to that point and is
+              evaluated on future periods, which reduces lookahead bias and gives a more realistic picture of performance. A cross-sectional ranking step selects the top quintile of tickers, suppressing the bottom quintile.
             </p>
           </section>
         </AnimatedBlock>
@@ -231,7 +231,8 @@ export default function HowItWorksPage() {
               <li>Update features and retrain pooled LightGBM models where needed.</li>
               <li>Generate predictions for all S&amp;P 100 stocks across three horizons.</li>
               <li>Run SHAP analysis to understand which features drove each prediction.</li>
-              <li>Store predictions, explanations, and monitoring metrics in MongoDB.</li>
+              <li>Generate AI explanations via Groq (Llama 3.1) for each stock.</li>
+              <li>Evaluate stored predictions, run drift monitoring, and clean up old data.</li>
             </ol>
             <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
               The Next.js frontend reads from the Node.js API, which serves predictions and explanations to the UI.
@@ -241,11 +242,11 @@ export default function HowItWorksPage() {
 
         <AnimatedBlock delay={0.18}>
           <section id="explainability" className="space-y-3 scroll-mt-24">
-            <h2 className="text-xl sm:text-2xl font-semibold">5. SHAP explainability &amp; Gemini AI</h2>
+            <h2 className="text-xl sm:text-2xl font-semibold">5. SHAP explainability &amp; Groq AI</h2>
             <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
               For each prediction, SHAP decomposes the model output into feature contributions (what pushed the forecast up or
-              down). These numbers, along with sentiment and technical context, are passed to Google Gemini to generate a
-              plain-English narrative.
+              down). These numbers, along with sentiment and technical context, are passed to Groq AI (Llama 3.1-8b-instant) to generate a
+              plain-English narrative. Google Gemini serves as a fallback if Groq is unavailable.
             </p>
             <p className="text-sm sm:text-base text-zinc-300 leading-relaxed">
               This is what powers the AI explanation sections in the UI: instead of raw probabilities, users see a concise
