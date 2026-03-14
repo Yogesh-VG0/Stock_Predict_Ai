@@ -5,10 +5,15 @@
  * When a user visits the site after a sleep period the backend needs
  * 15-60 s to cold-start.  This module:
  *
- *  1. Pings `/health` with exponential back-off until the backend responds.
+ *  1. Pings a known-working API endpoint with exponential back-off until
+ *     the backend responds with HTTP 200.
  *  2. Exposes a promise (`backendReady`) that other modules can await
  *     before firing real API calls.
  *  3. Provides a React context so the UI can show a "waking up" banner.
+ *
+ *  NOTE: We probe `/api/market/status` instead of `/health` because the
+ *  `/health` rewrite returns 404 on Vercel (root-level rewrites don't
+ *  reliably proxy to external backends).  `/api/market/:path*` works.
  */
 
 // ── Singleton state (shared across the whole client bundle) ────────────
@@ -18,16 +23,18 @@ let _resolveReady: (() => void) | null = null
 let _readyPromise: Promise<void> | null = null
 let _listeners: Array<(s: typeof _status) => void> = []
 
-const MAX_RETRIES = 15          // up to ~60 s total
-const INITIAL_DELAY_MS = 2000   // first retry after 2 s
+const MAX_RETRIES = 12          // ~60-90 s total depending on Vercel proxy timing
+const INITIAL_DELAY_MS = 3000   // first retry after 3 s
 const MAX_DELAY_MS = 6000       // cap back-off at 6 s
-const HEALTH_TIMEOUT_MS = 6000  // per-request timeout
+const HEALTH_TIMEOUT_MS = 15000 // 15 s — long enough for Vercel to proxy to waking Koyeb
 
-function getHealthUrl(): string {
+function getProbeUrl(): string {
   if (typeof window === 'undefined') return ''
+  // Localhost: use direct /health (fast, no proxy)
+  // Production: use /api/market/status (goes through known-working Vercel rewrite)
   return window.location.hostname === 'localhost'
     ? 'http://localhost:5000/health'
-    : '/health'
+    : '/api/market/status'
 }
 
 function notify() {
@@ -60,43 +67,23 @@ export function backendReady(): Promise<void> {
 }
 
 async function pingHealth(): Promise<boolean> {
-  // Try /health first (has dedicated rewrite)
-  const primary = getHealthUrl()
-  if (primary) {
-    try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
-      const res = await fetch(primary, {
-        cache: 'no-store',
-        signal: controller.signal,
-      })
-      clearTimeout(timer)
-      // 200 = healthy, 404 = rewrite missing but infra works → treat as ready
-      // 5xx = backend/proxy error (sleeping) → retry
-      if (res.status < 500) return true
-    } catch {
-      // Network error — backend truly unreachable, fall through to fallback
-    }
-  }
-
-  // Fallback: try an existing API rewrite that definitely works
-  const fallbackUrl = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-    ? '/api/market/status'
-    : 'http://localhost:5000/api/market/status'
+  const url = getProbeUrl()
+  if (!url) return false
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
-    const res = await fetch(fallbackUrl, {
+    const res = await fetch(url, {
       cache: 'no-store',
       signal: controller.signal,
     })
     clearTimeout(timer)
-    if (res.status < 500) return true
+    // ONLY 200 means the backend is truly alive and responding.
+    // 404 = Vercel can't find route (rewrite broken), 502/504 = backend sleeping.
+    return res.ok
   } catch {
-    // Network error — backend truly unreachable
+    // Network error / abort = backend unreachable
+    return false
   }
-
-  return false
 }
 
 async function startWakeUp() {

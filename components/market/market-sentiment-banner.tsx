@@ -1,10 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { motion } from "framer-motion"
-import { TrendingUp, TrendingDown, Minus } from "lucide-react"
+import { TrendingUp, TrendingDown, Minus, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { API_BASE_URL } from "@/lib/api"
+import { backendReady } from "@/lib/backend-health"
 
 // Map API valueText to sentiment type
 function mapValueTextToSentiment(valueText: string): "bullish" | "bearish" | "neutral" {
@@ -24,24 +25,46 @@ export default function MarketSentimentBanner({ className }: MarketSentimentBann
   const [fgi, setFgi] = useState<{ value: number; valueText: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const mountedRef = useRef(true)
 
   useEffect(() => {
-    setLoading(true)
-    fetch(`${API_BASE_URL}/api/market/sentiment`)
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.fgi && data.fgi.now) {
-          setFgi({ value: data.fgi.now.value, valueText: data.fgi.now.valueText })
-          setSentiment(mapValueTextToSentiment(data.fgi.now.valueText))
-        } else {
+    mountedRef.current = true
+    const fetchSentiment = async (retries = 3, delay = 4000) => {
+      // Wait for backend to be alive before fetching
+      await backendReady()
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const res = await fetch(`${API_BASE_URL}/api/market/sentiment`)
+          if (!mountedRef.current) return
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const data = await res.json()
+          if (data && data.fgi && data.fgi.now && data.fgi.now.value !== null) {
+            setFgi({ value: data.fgi.now.value, valueText: data.fgi.now.valueText })
+            setSentiment(mapValueTextToSentiment(data.fgi.now.valueText))
+            setError(null)
+            setLoading(false)
+            return
+          }
+          // Backend returned Unavailable data — retry after delay
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, delay))
+            continue
+          }
           setError("No data available")
+          setLoading(false)
+        } catch {
+          if (!mountedRef.current) return
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, delay))
+            continue
+          }
+          setError("Failed to fetch sentiment")
+          setLoading(false)
         }
-        setLoading(false)
-      })
-      .catch(() => {
-        setError("Failed to fetch sentiment")
-        setLoading(false)
-      })
+      }
+    }
+    fetchSentiment()
+    return () => { mountedRef.current = false }
   }, [])
 
   const getSentimentColor = (type: "bullish" | "bearish" | "neutral") => {
@@ -75,18 +98,32 @@ export default function MarketSentimentBanner({ className }: MarketSentimentBann
     >
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className={cn("flex items-center gap-2 px-3 py-1.5 rounded-md border", getSentimentColor(sentiment))}>
-            {getSentimentIcon(sentiment)}
-            <span className="font-medium capitalize">{sentiment} Market</span>
-          </div>
-          <div className="text-sm text-zinc-400">
-            <span className="font-medium text-white">Fear & Greed Index:</span>{" "}
-            {loading && <span>Loading...</span>}
-            {error && <span className="text-red-500">{error}</span>}
-            {!loading && !error && fgi && (
-              <span>{fgi.value} ({fgi.valueText})</span>
-            )}
-          </div>
+          {loading ? (
+            <>
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-zinc-700 bg-zinc-800/50 animate-pulse">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
+                <span className="font-medium text-zinc-400">Loading Market Data…</span>
+              </div>
+              <div className="text-sm text-zinc-500">
+                <span className="font-medium text-zinc-400">Fear & Greed Index:</span>{" "}
+                <span className="inline-flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Fetching…</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={cn("flex items-center gap-2 px-3 py-1.5 rounded-md border", getSentimentColor(sentiment))}>
+                {getSentimentIcon(sentiment)}
+                <span className="font-medium capitalize">{sentiment} Market</span>
+              </div>
+              <div className="text-sm text-zinc-400">
+                <span className="font-medium text-white">Fear & Greed Index:</span>{" "}
+                {error && <span className="text-red-500">{error}</span>}
+                {!error && fgi && (
+                  <span>{fgi.value} ({fgi.valueText})</span>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </motion.div>
