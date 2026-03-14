@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description:
     "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI. Real-time market data, sentiment analysis, and technical indicators.",
   openGraph: {
-    title: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
+    title: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     description:
       "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI.",
     url: "https://stockpredict.dev",
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "StockPredict AI — AI-Powered Stock Predictions",
+        alt: "StockPredict AI | AI-Powered Stock Predictions",
       },
     ],
     locale: "en_US",
@@ -24,7 +24,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
+    title: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     description:
       "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI.",
     images: ["/og-image.png"],

@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef } from "react"
+import { useRef, useState, useEffect } from "react"
 import Link from "next/link"
 import { motion, useInView } from "framer-motion"
 import {
@@ -54,6 +54,29 @@ function AnimatedSection({ children, className = "", delay = 0 }: { children: Re
       {children}
     </motion.div>
   )
+}
+
+function CountUp({ end, suffix = "" }: { end: number; suffix?: string }) {
+  const [count, setCount] = useState(0)
+  const nodeRef = useRef<HTMLSpanElement>(null)
+  const isInView = useInView(nodeRef, { once: true })
+
+  useEffect(() => {
+    if (!isInView) return
+    let frame: number
+    const duration = 1800
+    const start = performance.now()
+    const step = (now: number) => {
+      const progress = Math.min((now - start) / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      setCount(Math.floor(eased * end))
+      if (progress < 1) frame = requestAnimationFrame(step)
+    }
+    frame = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(frame)
+  }, [isInView, end])
+
+  return <span ref={nodeRef}>{count}{suffix}</span>
 }
 
 const FEATURES = [
@@ -255,7 +278,7 @@ export default function LandingPage() {
               />
               <p className="text-[10px] xs:text-xs sm:text-sm font-semibold text-red-200 leading-tight px-1">
                 <span className="inline-block animate-pulse">⚠️</span>{" "}
-                <span className="font-bold text-red-100">Educational project — not financial advice.</span>{" "}
+                <span className="font-bold text-red-100">Educational project, not financial advice.</span>{" "}
                 <span className="hidden xs:inline">Predictions are probabilistic and may be wrong.</span>
                 <span className="xs:hidden">Predictions may be wrong.</span>
               </p>
@@ -313,7 +336,7 @@ export default function LandingPage() {
               className="text-lg sm:text-xl text-zinc-400 max-w-2xl mx-auto mb-10 leading-relaxed"
             >
               LightGBM predictions with SHAP explainability, multi-source sentiment analysis,
-              and Gemini AI explanations — updated daily via automated CI/CD pipeline.
+              and Gemini AI explanations, updated daily via automated CI/CD pipeline.
             </motion.p>
 
             <motion.div
@@ -331,15 +354,17 @@ export default function LandingPage() {
               </Link>
               <Link
                 href="/stocks/AAPL"
-                className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium text-base px-8 py-3.5 rounded-xl transition-all border border-zinc-700"
+                className="group relative flex items-center gap-2.5 bg-zinc-900 hover:bg-zinc-800/80 text-white font-medium text-base px-8 py-3.5 rounded-xl transition-all border border-zinc-700/80 hover:border-emerald-500/40 overflow-hidden hover:shadow-lg hover:shadow-emerald-500/10"
                 aria-label="View AAPL stock analysis"
               >
-                <TrendingUp className="h-4 w-4 text-emerald-500" aria-hidden="true" />
-                View AAPL Analysis
+                <span className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-500/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-out" />
+                <TrendingUp className="h-4 w-4 text-emerald-500 group-hover:scale-110 transition-transform" aria-hidden="true" />
+                <span className="relative">View AAPL Analysis</span>
+                <ArrowRight className="h-3.5 w-3.5 text-zinc-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition-all" aria-hidden="true" />
               </Link>
             </motion.div>
 
-            {/* Floating stock logos — linked to stock pages */}
+            {/* Floating stock logos */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -376,27 +401,32 @@ export default function LandingPage() {
         </section>
 
         {/* Stats Banner */}
-        <AnimatedSection>
-          <div className="max-w-5xl mx-auto px-4 py-8">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                { value: "100", label: "S&P Stocks Tracked", icon: Globe },
-                { value: "40+", label: "ML Features", icon: Cpu },
-                { value: "10+", label: "Data Sources", icon: Database },
-                { value: "Daily", label: "Automated Pipeline", icon: GitBranch },
-              ].map((stat) => (
-                <div
-                  key={stat.label}
-                  className="text-center p-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30"
-                >
-                  <stat.icon className="h-5 w-5 text-emerald-500 mx-auto mb-2" />
-                  <div className="text-2xl sm:text-3xl font-bold text-white">{stat.value}</div>
-                  <div className="text-xs sm:text-sm text-zinc-500 mt-1">{stat.label}</div>
+        <section className="max-w-5xl mx-auto px-4 py-10">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { value: 100, label: "S&P Stocks Tracked", icon: Globe, suffix: "", color: "text-emerald-400", border: "border-emerald-500/20", bg: "from-emerald-500/5" },
+              { value: 50, label: "ML Features", icon: Cpu, suffix: "+", color: "text-purple-400", border: "border-purple-500/20", bg: "from-purple-500/5" },
+              { value: 10, label: "Data Sources", icon: Database, suffix: "+", color: "text-blue-400", border: "border-blue-500/20", bg: "from-blue-500/5" },
+              { value: -1, label: "Automated Pipeline", icon: GitBranch, suffix: "", color: "text-amber-400", border: "border-amber-500/20", bg: "from-amber-500/5" },
+            ].map((stat, i) => (
+              <motion.div
+                key={stat.label}
+                initial={{ opacity: 0, y: 24, scale: 0.95 }}
+                whileInView={{ opacity: 1, y: 0, scale: 1 }}
+                viewport={{ once: true }}
+                transition={{ delay: i * 0.1, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                whileHover={{ y: -3 }}
+                className={`group text-center p-6 rounded-xl border ${stat.border} bg-gradient-to-b ${stat.bg} to-transparent hover:shadow-lg transition-shadow duration-300`}
+              >
+                <stat.icon className={`h-6 w-6 ${stat.color} mx-auto mb-3 group-hover:scale-110 transition-transform duration-300`} />
+                <div className={`text-3xl sm:text-4xl font-bold ${stat.color} mb-1`}>
+                  {stat.value >= 0 ? <CountUp end={stat.value} suffix={stat.suffix} /> : "Daily"}
                 </div>
-              ))}
-            </div>
+                <div className="text-xs sm:text-sm text-zinc-500">{stat.label}</div>
+              </motion.div>
+            ))}
           </div>
-        </AnimatedSection>
+        </section>
 
         {/* Features Grid */}
         <section className="py-20 px-4">
@@ -406,7 +436,7 @@ export default function LandingPage() {
                 Full-Stack ML Platform
               </h2>
               <p className="text-zinc-400 max-w-xl mx-auto">
-                From data ingestion to AI-powered explanations — every component built from scratch.
+                From data ingestion to AI-powered explanations, every component built from scratch.
               </p>
             </AnimatedSection>
 
@@ -432,7 +462,7 @@ export default function LandingPage() {
                 Daily Automated Pipeline
               </h2>
               <p className="text-zinc-400 max-w-xl mx-auto">
-                GitHub Actions runs the full ML pipeline every trading day — no manual intervention.
+                GitHub Actions runs the full ML pipeline every trading day with zero manual intervention.
               </p>
             </AnimatedSection>
 
@@ -465,7 +495,7 @@ export default function LandingPage() {
             <AnimatedSection className="text-center mb-14">
               <h2 className="text-3xl sm:text-4xl font-bold mb-4">Tech Stack</h2>
               <p className="text-zinc-400 max-w-xl mx-auto">
-                Modern tools across the full stack — frontend, backend, ML, and infrastructure.
+                Modern tools across the full stack: frontend, backend, ML, and infrastructure.
               </p>
             </AnimatedSection>
 
@@ -493,68 +523,67 @@ export default function LandingPage() {
         {/* CTA */}
         <section className="py-20 px-4 border-t border-zinc-800/50">
           <AnimatedSection className="max-w-3xl mx-auto text-center">
-            <div className="rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/80 to-black p-10 sm:p-14">
-              <Star className="h-10 w-10 text-emerald-500 mx-auto mb-6" />
-              <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-                See It In Action
-              </h2>
-              <p className="text-zinc-400 mb-8 max-w-lg mx-auto">
-                Explore real ML predictions, AI explanations, and live market data for 100 S&P stocks.
-              </p>
-              <Link
-                href="/dashboard"
-                className="group inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-base px-8 py-3.5 rounded-xl transition-all hover:shadow-xl hover:shadow-emerald-500/20"
-                aria-label="Open Dashboard"
-              >
-                Open Dashboard
-                <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" aria-hidden="true" />
-              </Link>
+            <div className="relative rounded-2xl border border-zinc-800 bg-gradient-to-b from-zinc-900/80 to-black p-10 sm:p-14 overflow-hidden">
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[250px] bg-emerald-500/[0.07] rounded-full blur-[100px] pointer-events-none" />
+              <div className="absolute bottom-0 right-0 w-[300px] h-[200px] bg-purple-500/5 rounded-full blur-[80px] pointer-events-none" />
+              <div className="relative z-10">
+                <motion.div
+                  animate={{ rotate: [0, 8, -8, 0] }}
+                  transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+                  className="inline-block"
+                >
+                  <Star className="h-10 w-10 text-emerald-500 mx-auto mb-6" />
+                </motion.div>
+                <h2 className="text-3xl sm:text-4xl font-bold mb-4">
+                  See It In Action
+                </h2>
+                <p className="text-zinc-400 mb-8 max-w-lg mx-auto leading-relaxed">
+                  Explore real ML predictions, AI explanations, and live market data for 100 S&P stocks.
+                </p>
+                <Link
+                  href="/dashboard"
+                  className="group inline-flex items-center gap-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-base px-10 py-4 rounded-xl transition-all hover:shadow-2xl hover:shadow-emerald-500/25 hover:scale-[1.02] active:scale-[0.98]"
+                  aria-label="Open Dashboard"
+                >
+                  Open Dashboard
+                  <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" aria-hidden="true" />
+                </Link>
+              </div>
             </div>
           </AnimatedSection>
         </section>
 
         {/* Footer */}
-        <footer className="border-t border-zinc-800/50 py-8 px-4" role="contentinfo">
+        <footer className="border-t border-zinc-800/50 py-12 px-4" role="contentinfo">
           <div className="max-w-5xl mx-auto">
-            <div className="text-xs text-zinc-500 leading-relaxed mb-5">
+            <div className="text-xs text-zinc-600 leading-relaxed mb-8 text-center max-w-2xl mx-auto">
               StockPredict AI is an educational research project and does not provide investment advice. Predictions are estimates
               based on historical data and may be inaccurate. Do your own research and consult a licensed advisor before investing.
             </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-sm text-zinc-500">
-              <div className="flex items-center gap-2 justify-center sm:justify-start">
-                <LineChart className="h-4 w-4 text-emerald-500" />
-                <span>StockPredict AI</span>
+            <div className="border-t border-zinc-800/30 pt-8">
+              <div className="flex flex-col items-center gap-6">
+                <div className="flex items-center gap-2">
+                  <LineChart className="h-4 w-4 text-emerald-500" />
+                  <span className="font-semibold text-sm text-zinc-200">StockPredict AI</span>
+                </div>
+
+                <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-zinc-500" aria-label="Footer navigation">
+                  <Link href="/dashboard" className="hover:text-white transition-colors">Dashboard</Link>
+                  <Link href="/news" className="hover:text-white transition-colors">News</Link>
+                  <Link href="/how-it-works" className="hover:text-white transition-colors">How it works</Link>
+                  <Link href="/methodology" className="hover:text-white transition-colors">Methodology</Link>
+                  <Link href="/disclaimer" className="hover:text-white transition-colors">Disclaimer</Link>
+                  <Link href="https://github.com/Yogesh-VG0/Stock_Predict_Ai" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">GitHub</Link>
+                </nav>
+
+                <div className="text-sm text-zinc-600">
+                  Built by{" "}
+                  <Link href="https://yogeshv.me" target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-emerald-400 transition-colors">
+                    Yogesh Vadivel
+                  </Link>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-x-6 gap-y-2">
-                <Link href="/dashboard" className="hover:text-white transition-colors">
-                  Dashboard
-                </Link>
-                <Link href="/predictions" className="hover:text-white transition-colors">
-                  Predictions
-                </Link>
-                <Link href="/news" className="hover:text-white transition-colors">
-                  News
-                </Link>
-                <Link href="/how-it-works" className="hover:text-white transition-colors">
-                  How it works
-                </Link>
-                <Link href="/methodology" className="hover:text-white transition-colors">
-                  Methodology
-                </Link>
-                <Link href="/disclaimer" className="hover:text-white transition-colors">
-                  Disclaimer
-                </Link>
-                <Link
-                  href="https://github.com/Yogesh-VG0/Stock_Predict_Ai"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-white transition-colors"
-                >
-                  GitHub
-                </Link>
-              </div>
-              <span className="text-center sm:text-right">Built by Yogesh Vadivel</span>
             </div>
           </div>
         </footer>
