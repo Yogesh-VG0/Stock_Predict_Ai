@@ -16,6 +16,10 @@ const notificationService = require('./services/notificationService');
 
 const app = express();
 
+// Trust the first proxy (Koyeb, Vercel, etc.) so express-rate-limit
+// reads the real client IP from X-Forwarded-For instead of throwing.
+app.set('trust proxy', 1);
+
 // Start notification scheduler after a short delay (to ensure DB is connected)
 setTimeout(() => {
   // Check for market session notifications every 5 minutes

@@ -1,5 +1,3 @@
-import { backendReady } from '@/lib/backend-health'
-
 // Use relative URLs - they'll be handled by Next.js rewrites (dev) or Vercel rewrites (prod)
 const isProduction = typeof window !== 'undefined' && window.location.hostname !== 'localhost';
 export const API_BASE_URL = isProduction ? '' : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000');
@@ -127,7 +125,6 @@ export interface MarketStatus {
 
 export async function getPredictions(ticker?: string): Promise<Predictions | null> {
   try {
-    await backendReady()
     // First try to get real predictions from Node.js backend which calls ML backend
     if (ticker) {
       try {
@@ -182,7 +179,6 @@ export async function getPredictions(ticker?: string): Promise<Predictions | nul
 
 export async function getSentiment(ticker: string): Promise<Sentiment | null> {
   try {
-    await backendReady()
     const response = await fetch(`${API_BASE_URL}/api/v1/sentiment/${ticker}`, { cache: 'no-store' });
     if (!response.ok) {
       throw new Error('Failed to fetch sentiment');
@@ -213,7 +209,6 @@ export async function checkHealth(): Promise<boolean> {
 
 export async function getMarketStatus(): Promise<MarketStatus | null> {
   try {
-    await backendReady()
     const response = await fetch(`${API_BASE_URL}/api/market/status`);
     if (!response.ok) {
       throw new Error('Failed to fetch market status');
@@ -228,7 +223,6 @@ export async function getMarketStatus(): Promise<MarketStatus | null> {
 
 export async function getStockPrice(symbol: string): Promise<{ price: number; change: number; changePercent: number } | null> {
   try {
-    await backendReady()
     // Try to get real-time price from our watchlist updates endpoint which uses the WS cache
     const response = await fetch(`${API_BASE_URL}/api/watchlist/updates/realtime?symbols=${symbol.toUpperCase()}`, { cache: 'no-store' });
     if (response.ok) {
@@ -367,7 +361,6 @@ export async function getAIAnalysis(symbol: string): Promise<{
 
 export async function getComprehensiveAIExplanation(ticker: string, date?: string): Promise<AIExplanation | null> {
   try {
-    await backendReady()
     const targetDate = date || new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
 
     // PRIORITY 1: Check if we have stored explanation in MongoDB (fastest)
