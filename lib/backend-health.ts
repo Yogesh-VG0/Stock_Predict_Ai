@@ -18,10 +18,10 @@ let _resolveReady: (() => void) | null = null
 let _readyPromise: Promise<void> | null = null
 let _listeners: Array<(s: typeof _status) => void> = []
 
-const MAX_RETRIES = 20          // up to ~90 s total
-const INITIAL_DELAY_MS = 1500   // first retry after 1.5 s
-const MAX_DELAY_MS = 8000       // cap back-off at 8 s
-const HEALTH_TIMEOUT_MS = 5000  // per-request timeout
+const MAX_RETRIES = 15          // up to ~60 s total
+const INITIAL_DELAY_MS = 2000   // first retry after 2 s
+const MAX_DELAY_MS = 6000       // cap back-off at 6 s
+const HEALTH_TIMEOUT_MS = 6000  // per-request timeout
 
 function getHealthUrl(): string {
   if (typeof window === 'undefined') return ''
@@ -60,18 +60,43 @@ export function backendReady(): Promise<void> {
 }
 
 async function pingHealth(): Promise<boolean> {
+  // Try /health first (has dedicated rewrite)
+  const primary = getHealthUrl()
+  if (primary) {
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
+      const res = await fetch(primary, {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      clearTimeout(timer)
+      // 200 = healthy, 404 = rewrite missing but infra works → treat as ready
+      // 5xx = backend/proxy error (sleeping) → retry
+      if (res.status < 500) return true
+    } catch {
+      // Network error — backend truly unreachable, fall through to fallback
+    }
+  }
+
+  // Fallback: try an existing API rewrite that definitely works
+  const fallbackUrl = typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+    ? '/api/market/status'
+    : 'http://localhost:5000/api/market/status'
   try {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS)
-    const res = await fetch(getHealthUrl(), {
+    const res = await fetch(fallbackUrl, {
       cache: 'no-store',
       signal: controller.signal,
     })
     clearTimeout(timer)
-    return res.ok
+    if (res.status < 500) return true
   } catch {
-    return false
+    // Network error — backend truly unreachable
   }
+
+  return false
 }
 
 async function startWakeUp() {

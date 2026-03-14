@@ -523,7 +523,25 @@ export default function StockDetail({ }: StockDetailProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="flex-1">
-                {!predictionData ? (
+                {isLoading ? (
+                  <div className="grid grid-cols-1 gap-4">
+                    {[1, 2, 3].map(i => (
+                      <div key={i} className="rounded-lg p-4 border border-zinc-800 bg-zinc-900/50 animate-pulse">
+                        <div className="flex justify-between items-center mb-3">
+                          <div className="h-4 w-20 bg-zinc-700 rounded" />
+                          <div className="h-3 w-12 bg-zinc-700 rounded" />
+                        </div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-6 w-24 bg-zinc-700 rounded" />
+                          <div className="h-5 w-16 bg-zinc-700 rounded-md" />
+                        </div>
+                        <div className="h-2 w-full bg-zinc-800 rounded-full mt-2">
+                          <div className="h-2 bg-zinc-700 rounded-full" style={{ width: '40%' }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : !predictionData ? (
                   <div className="flex flex-col items-center justify-center py-8 text-center">
                     <AlertCircle className="h-10 w-10 text-zinc-600 mb-3" />
                     <p className="text-sm text-zinc-400 font-medium">No predictions available yet</p>
