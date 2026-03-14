@@ -50,6 +50,10 @@ const nextConfig = {
         source: '/api/market/:path*',
         destination: `${backendUrl}/api/market/:path*`,
       },
+      {
+        source: '/health',
+        destination: `${backendUrl}/health`,
+      },
     ];
   },
 

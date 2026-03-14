@@ -183,7 +183,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
   const nextDay = explanation?.prediction_summary?.next_day || explanation?.prediction_summary?.['1_day']
   const sevenDay = explanation?.prediction_summary?.['7_day']
   const thirtyDay = explanation?.prediction_summary?.['30_day']
-  const confidence = nextDay?.confidence ?? 0
+  const confidence = Math.max(nextDay?.confidence ?? 0, sevenDay?.confidence ?? 0, thirtyDay?.confidence ?? 0)
   const blended = explanation?.data_summary?.blended_sentiment ?? 0
   const dataSources = explanation?.metadata?.data_sources ?? []
 
@@ -414,10 +414,14 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
   const bullishDrivers = parsed.keyDrivers.filter(d => d.type === 'bullish')
   const bearishDrivers = parsed.keyDrivers.filter(d => d.type === 'bearish')
 
-  // Determine overall direction from predictions
-  const avgPredChange = [nextDay, sevenDay, thirtyDay]
-    .filter(Boolean)
-    .reduce((sum, p) => sum + (p?.price_change || 0), 0) / 3
+  // Determine overall direction from predictions — use percentage change, not dollar change
+  const predEntries = [nextDay, sevenDay, thirtyDay].filter(Boolean)
+  const avgPredChange = predEntries.length > 0 && currentPrice > 0
+    ? predEntries.reduce((sum, p) => {
+        const pctChange = ((p?.price_change || 0) / currentPrice) * 100
+        return sum + pctChange
+      }, 0) / predEntries.length
+    : 0
 
   // ── Main Widget ──
   return (

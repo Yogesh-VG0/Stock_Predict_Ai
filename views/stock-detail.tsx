@@ -732,10 +732,10 @@ export default function StockDetail({ }: StockDetailProps) {
                       </div>
 
                       <p className="text-xs text-zinc-300">
-                        Sentiment is {
-                          sentimentScore > 60 ? 'bullish' :
-                            sentimentScore > 40 ? 'neutral' : 'bearish'
-                        } with {positiveSentiment} positive, {negativeSentiment} negative articles.
+                        {stockNews.length === 0
+                          ? 'No recent news articles available for sentiment analysis.'
+                          : `Sentiment is ${sentimentScore > 60 ? 'bullish' : sentimentScore > 40 ? 'neutral' : 'bearish'} with ${positiveSentiment} positive, ${negativeSentiment} negative out of ${stockNews.length} articles.`
+                        }
                       </p>
                     </>
                   )
