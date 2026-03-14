@@ -12,7 +12,7 @@ const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: {
-    default: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
+    default: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     template: "%s | StockPredict AI",
   },
   description:
@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     locale: "en_US",
     url: "https://stockpredict.dev",
     siteName: "StockPredict AI",
-    title: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
+    title: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     description:
       "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts, SHAP explainability, and Gemini AI narratives for smarter investing.",
     images: [
@@ -49,13 +49,13 @@ export const metadata: Metadata = {
         url: "/og-image.png",
         width: 1200,
         height: 630,
-        alt: "StockPredict AI — AI-Powered Stock Predictions",
+        alt: "StockPredict AI | AI-Powered Stock Predictions",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "StockPredict AI — AI-Powered Stock Predictions & Analysis",
+    title: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     description:
       "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts with SHAP explainability and Gemini AI narratives.",
     images: ["/og-image.png"],
