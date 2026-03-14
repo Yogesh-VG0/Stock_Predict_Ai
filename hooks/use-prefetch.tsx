@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef } from 'react'
+import { backendReady } from '@/lib/backend-health'
 
 // ── In-memory data cache shared across the app ──
 interface CacheEntry<T> {
@@ -49,6 +50,8 @@ export async function fetchWithCache<T>(
   if (cached) return cached
 
   try {
+    // Wait for backend to be alive (handles Koyeb cold-start)
+    await backendReady()
     const response = await fetch(url, { cache: 'no-store' })
     if (!response.ok) return null
 
@@ -105,9 +108,13 @@ export function usePrefetch(enabled: boolean = true) {
       console.log(`⚡ Pre-fetched all data for ${next5.join(', ')}`)
     }
 
-    // Execute phases with staggered timing to avoid overwhelming the backend
-    phase1()
-    setTimeout(phase2, 1500)
-    setTimeout(phase3, 4000)
+    // Wait for backend to be alive before prefetching (handles Koyeb cold-start)
+    const runPrefetch = async () => {
+      await backendReady()
+      await phase1()
+      setTimeout(phase2, 1500)
+      setTimeout(phase3, 4000)
+    }
+    runPrefetch()
   }, [enabled])
 }

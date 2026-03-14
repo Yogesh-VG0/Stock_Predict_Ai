@@ -1,6 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { backendReady } from '@/lib/backend-health'
 
 // Use relative URLs in production, localhost in development
 const getApiBaseUrl = () => {
@@ -320,9 +321,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     // Auto-subscribe to all tracked stocks immediately
     setSubscribedStocks(new Set(ALL_TRACKED_STOCKS))
     
-    // Immediately start trying to connect and fetch real data
+    // Wait for backend to be alive (handles Koyeb cold-start), then fetch
     const connectAndFetch = async () => {
       try {
+        // Wait for backend health check before making API calls
+        await backendReady()
         // Try to fetch real prices first
         const hasRealData = await fetchInitialPrices()
         
@@ -349,7 +352,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
               }
               return prev
             })
-          }, 5000) // Wait 5 seconds before fallback
+          }, 10000) // Wait 10 seconds before fallback (backend may still be warming up)
         }
       } catch (error) {
         console.warn('Error during initial connection:', error)
@@ -361,7 +364,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
             }
             return prev
           })
-        }, 3000)
+        }, 10000)
       }
     }
     

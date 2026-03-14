@@ -6,6 +6,7 @@ import { WebSocketProvider } from "@/hooks/use-websocket-context"
 import { Analytics } from "@vercel/analytics/next"
 import { SpeedInsights } from "@vercel/speed-insights/next"
 import Layout from "@/components/layout/layout"
+import BackendWakingBanner from "@/components/layout/BackendWakingBanner"
 
 const inter = Inter({ subsets: ["latin"] })
 
@@ -92,6 +93,7 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className} suppressHydrationWarning>
         <WebSocketProvider>
+          <BackendWakingBanner />
           <Layout>{children}</Layout>
         </WebSocketProvider>
         <Analytics />

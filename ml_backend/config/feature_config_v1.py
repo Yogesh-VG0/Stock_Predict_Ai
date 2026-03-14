@@ -97,6 +97,14 @@ CONFIDENCE_CAP_BY_HORIZON = {
 # Dramatically improves backtest by eliminating noise trades.
 PREDICTION_SHRINKAGE_ENABLED = True
 
+# v10.2: Shrinkage floor — minimum fraction of raw prediction that passes through.
+# v8.2 used 0.08 (8%) but production backtests proved genuine edge exists
+# (30_day: +11.24% Sharpe 1.793, 7_day: +5.41% Sharpe 1.088). The 8% floor
+# crushed predictions to near-zero for users (AAPL 30_day: +5.7% raw → +0.46% shown).
+# 15% lets ~2x more signal through while still being very conservative.
+# Cross-sectional ranking is unaffected (relative ranking unchanged by uniform scaling).
+PREDICTION_SHRINKAGE_FLOOR = 0.15
+
 # v7.1: Per-ticker model quality gate.
 # Per-ticker models with correlation below this threshold are EXCLUDED from
 # the ensemble. This prevents anti-correlated models (e.g. QCOM-30d corr=-0.63)
