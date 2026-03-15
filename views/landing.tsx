@@ -130,25 +130,45 @@ const FEATURES = [
   },
 ]
 
-const TECH_STACK = [
-  { name: "Next.js 15", icon: SiNextdotjs },
-  { name: "React", icon: SiReact },
-  { name: "TypeScript", icon: SiTypescript },
-  { name: "Tailwind CSS", icon: SiTailwindcss },
-  { name: "Framer Motion", icon: SiFramer },
-  { name: "TradingView", icon: SiTradingview },
-  { name: "Python", icon: SiPython },
-  { name: "FastAPI", icon: SiFastapi },
-  { name: "LightGBM", icon: TbBrain },
-  { name: "SHAP", icon: TbBrain },
-  { name: "Google Gemini", icon: SiGoogle },
-  { name: "FinBERT", icon: TbBrain },
-  { name: "Node.js", icon: SiNodedotjs },
-  { name: "Express", icon: SiExpress },
-  { name: "MongoDB", icon: SiMongodb },
-  { name: "Redis", icon: SiRedis },
-  { name: "GitHub Actions", icon: SiGithubactions },
-  { name: "Vercel", icon: SiVercel },
+const TECH_STACK_GROUPS = [
+  {
+    label: "Frontend",
+    items: [
+      { name: "Next.js 15", icon: SiNextdotjs },
+      { name: "React", icon: SiReact },
+      { name: "TypeScript", icon: SiTypescript },
+      { name: "Tailwind CSS", icon: SiTailwindcss },
+      { name: "Framer Motion", icon: SiFramer },
+      { name: "TradingView", icon: SiTradingview },
+    ],
+  },
+  {
+    label: "Backend",
+    items: [
+      { name: "Node.js", icon: SiNodedotjs },
+      { name: "Express", icon: SiExpress },
+      { name: "FastAPI", icon: SiFastapi },
+      { name: "MongoDB", icon: SiMongodb },
+      { name: "Redis", icon: SiRedis },
+    ],
+  },
+  {
+    label: "ML & AI",
+    items: [
+      { name: "Python", icon: SiPython },
+      { name: "LightGBM", icon: TbBrain },
+      { name: "SHAP", icon: TbBrain },
+      { name: "Google Gemini", icon: SiGoogle },
+      { name: "FinBERT", icon: TbBrain },
+    ],
+  },
+  {
+    label: "Infrastructure",
+    items: [
+      { name: "GitHub Actions", icon: SiGithubactions },
+      { name: "Vercel", icon: SiVercel },
+    ],
+  },
 ]
 
 const PIPELINE_STEPS = [
@@ -301,6 +321,17 @@ export default function LandingPage() {
 
         {/* Hero Section */}
         <section id="main-content" className="relative pt-40 pb-20 sm:pt-48 sm:pb-28 px-4 overflow-hidden">
+          {/* Dot grid pattern background */}
+          <div className="absolute inset-0 pointer-events-none" style={{ opacity: 0.03 }}>
+            <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <pattern id="dot-grid" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
+                  <circle cx="1" cy="1" r="1" fill="white" />
+                </pattern>
+              </defs>
+              <rect width="100%" height="100%" fill="url(#dot-grid)" />
+            </svg>
+          </div>
           {/* Background glow */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[600px] bg-emerald-500/5 rounded-full blur-[120px] pointer-events-none" />
           <div className="absolute top-20 right-0 w-[400px] h-[400px] bg-purple-500/5 rounded-full blur-[100px] pointer-events-none" />
@@ -354,48 +385,72 @@ export default function LandingPage() {
               </Link>
               <Link
                 href="/stocks/AAPL"
-                className="group relative flex items-center gap-2.5 bg-zinc-900 hover:bg-zinc-800/80 text-white font-medium text-base px-8 py-3.5 rounded-xl transition-all border border-zinc-700/80 hover:border-emerald-500/40 overflow-hidden hover:shadow-lg hover:shadow-emerald-500/10"
+                className="group relative flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800/80 text-white font-semibold text-base px-8 py-3.5 rounded-xl transition-all border border-zinc-700/80 hover:border-emerald-500/40 hover:shadow-lg hover:shadow-emerald-500/10"
                 aria-label="View AAPL stock analysis"
               >
-                <span className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-500/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700 ease-out" />
                 <TrendingUp className="h-4 w-4 text-emerald-500 group-hover:scale-110 transition-transform" aria-hidden="true" />
-                <span className="relative">View AAPL Analysis</span>
-                <ArrowRight className="h-3.5 w-3.5 text-zinc-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition-all" aria-hidden="true" />
+                View AAPL Analysis
+                <ArrowRight className="h-4 w-4 text-zinc-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition-all" aria-hidden="true" />
               </Link>
             </motion.div>
 
-            {/* Floating stock logos */}
+            {/* Stock logos — marquee on mobile, static on desktop */}
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 1, delay: 0.6 }}
-              className="flex flex-wrap items-center justify-center gap-x-4 gap-y-8 sm:gap-x-3 sm:gap-y-3 mt-14 px-4"
+              className="mt-14 overflow-hidden"
             >
-              {STOCK_LOGOS.map((symbol, i) => (
-                <motion.div
-                  key={symbol}
-                  initial={{ opacity: 0, scale: 0.5 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.4, delay: 0.7 + i * 0.08 }}
-                  className="relative group"
-                >
-                  <Link href={`/stocks/${symbol}`} aria-label={`View AI analysis for ${symbol}`}>
-                    <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden group-hover:border-emerald-500/50 group-hover:shadow-lg group-hover:shadow-emerald-500/10 transition-all">
-                      <img
-                        src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-                        alt={`${symbol} stock logo`}
-                        width={32}
-                        height={32}
-                        loading="eager"
-                        className="w-7 h-7 sm:w-8 sm:h-8 object-contain"
-                      />
-                    </div>
-                    <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] text-zinc-500 font-medium group-hover:text-emerald-400 transition-colors">
-                      {symbol}
-                    </span>
-                  </Link>
-                </motion.div>
-              ))}
+              {/* Mobile: horizontal marquee */}
+              <div className="sm:hidden relative">
+                <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-black to-transparent z-10 pointer-events-none" />
+                <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-black to-transparent z-10 pointer-events-none" />
+                <div className="flex gap-5 animate-marquee w-max">
+                  {[...STOCK_LOGOS, ...STOCK_LOGOS].map((symbol, i) => (
+                    <Link key={`${symbol}-${i}`} href={`/stocks/${symbol}`} aria-label={`View AI analysis for ${symbol}`} className="flex flex-col items-center gap-1.5 group">
+                      <div className="w-11 h-11 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden group-hover:border-emerald-500/50 transition-all">
+                        <img
+                          src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                          alt={`${symbol} stock logo`}
+                          width={28}
+                          height={28}
+                          loading="eager"
+                          className="w-7 h-7 object-contain"
+                        />
+                      </div>
+                      <span className="text-[10px] text-zinc-500 font-medium">{symbol}</span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+              {/* Desktop: static row */}
+              <div className="hidden sm:flex flex-wrap items-center justify-center gap-x-3 gap-y-3 px-4">
+                {STOCK_LOGOS.map((symbol, i) => (
+                  <motion.div
+                    key={symbol}
+                    initial={{ opacity: 0, scale: 0.5 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.4, delay: 0.7 + i * 0.08 }}
+                    className="relative group"
+                  >
+                    <Link href={`/stocks/${symbol}`} aria-label={`View AI analysis for ${symbol}`}>
+                      <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden group-hover:border-emerald-500/50 group-hover:shadow-lg group-hover:shadow-emerald-500/10 transition-all">
+                        <img
+                          src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
+                          alt={`${symbol} stock logo`}
+                          width={32}
+                          height={32}
+                          loading="eager"
+                          className="w-8 h-8 object-contain"
+                        />
+                      </div>
+                      <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] text-zinc-500 font-medium group-hover:text-emerald-400 transition-colors">
+                        {symbol}
+                      </span>
+                    </Link>
+                  </motion.div>
+                ))}
+              </div>
             </motion.div>
           </div>
         </section>
@@ -416,9 +471,13 @@ export default function LandingPage() {
                 viewport={{ once: true }}
                 transition={{ delay: i * 0.1, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
                 whileHover={{ y: -3 }}
-                className={`group text-center p-6 rounded-xl border ${stat.border} bg-gradient-to-b ${stat.bg} to-transparent hover:shadow-lg transition-shadow duration-300`}
+                className={`group relative text-center p-6 rounded-xl border ${stat.border} bg-gradient-to-b ${stat.bg} to-transparent hover:shadow-lg transition-shadow duration-300 overflow-hidden`}
               >
-                <stat.icon className={`h-6 w-6 ${stat.color} mx-auto mb-3 group-hover:scale-110 transition-transform duration-300`} />
+                {/* Radial pulse shimmer */}
+                <div className="absolute inset-0 flex items-start justify-center pointer-events-none">
+                  <div className={`w-24 h-24 mt-2 rounded-full bg-gradient-radial ${stat.bg} to-transparent animate-radial-pulse`} />
+                </div>
+                <stat.icon className={`relative h-6 w-6 ${stat.color} mx-auto mb-3 group-hover:scale-110 transition-transform duration-300`} />
                 <div className={`text-3xl sm:text-4xl font-bold ${stat.color} mb-1`}>
                   {stat.value >= 0 ? <CountUp end={stat.value} suffix={stat.suffix} /> : "Daily"}
                 </div>
@@ -443,10 +502,14 @@ export default function LandingPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {FEATURES.map((feature, i) => (
                 <AnimatedSection key={feature.title} delay={i * 0.08}>
-                  <div className={`h-full rounded-xl border ${feature.border} bg-gradient-to-br ${feature.bg} p-6 hover:scale-[1.02] transition-transform duration-300`}>
-                    <feature.icon className={`h-8 w-8 ${feature.color} mb-4`} />
-                    <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
-                    <p className="text-sm text-zinc-400 leading-relaxed">{feature.description}</p>
+                  <div className="relative h-full group/card">
+                    {/* Ambient rotating border glow */}
+                    <div className={`absolute -inset-[1px] rounded-xl bg-gradient-to-r ${feature.bg} opacity-[0.15] group-hover/card:opacity-40 blur-[1px] transition-opacity duration-500`} />
+                    <div className={`relative h-full rounded-xl border ${feature.border} bg-gradient-to-br ${feature.bg} bg-zinc-950/80 p-6 hover:scale-[1.02] transition-all duration-300`}>
+                      <feature.icon className={`h-8 w-8 ${feature.color} mb-4`} />
+                      <h3 className="text-lg font-semibold mb-2">{feature.title}</h3>
+                      <p className="text-sm text-zinc-400 leading-relaxed">{feature.description}</p>
+                    </div>
                   </div>
                 </AnimatedSection>
               ))}
@@ -466,25 +529,33 @@ export default function LandingPage() {
               </p>
             </AnimatedSection>
 
-            <div className="space-y-4">
-              {PIPELINE_STEPS.map((step, i) => (
-                <AnimatedSection key={step.step} delay={i * 0.1}>
-                  <div className="flex items-start gap-5 p-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 hover:bg-zinc-900/60 transition-colors">
-                    <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
-                      <step.icon className="h-5 w-5 text-emerald-400" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-3 mb-1">
-                        <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">
-                          STEP {step.step}
-                        </span>
-                        <h3 className="font-semibold">{step.title}</h3>
+            <div className="relative">
+              {/* Vertical timeline connector line */}
+              <div className="absolute left-[27px] top-6 bottom-6 w-px bg-gradient-to-b from-emerald-500/30 via-emerald-500/20 to-emerald-500/5 hidden sm:block" />
+              <div className="space-y-4">
+                {PIPELINE_STEPS.map((step, i) => (
+                  <AnimatedSection key={step.step} delay={i * 0.1}>
+                    <div className="flex items-start gap-5 p-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 hover:bg-zinc-900/60 transition-colors relative">
+                      {/* Glowing dot on timeline */}
+                      <div className="flex-shrink-0 relative">
+                        <div className="absolute -inset-1 rounded-lg bg-emerald-500/20 blur-sm" />
+                        <div className="relative w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                          <step.icon className="h-5 w-5 text-emerald-400" />
+                        </div>
                       </div>
-                      <p className="text-sm text-zinc-400">{step.desc}</p>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-3 mb-1">
+                          <span className="text-xs font-bold text-emerald-500 bg-emerald-500/10 px-2 py-0.5 rounded-full">
+                            STEP {step.step}
+                          </span>
+                          <h3 className="font-semibold">{step.title}</h3>
+                        </div>
+                        <p className="text-sm text-zinc-400">{step.desc}</p>
+                      </div>
                     </div>
-                  </div>
-                </AnimatedSection>
-              ))}
+                  </AnimatedSection>
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -500,19 +571,28 @@ export default function LandingPage() {
             </AnimatedSection>
 
             <AnimatedSection>
-              <div className="flex flex-wrap justify-center gap-2.5">
-                {TECH_STACK.map((tech) => {
-                  const Icon = tech.icon
-                  return (
-                    <div
-                      key={tech.name}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg border border-zinc-800 bg-zinc-900/50 text-sm text-zinc-300 hover:border-emerald-500/30 hover:text-white hover:shadow hover:shadow-emerald-500/10 transition-all"
-                    >
-                      <Icon className="h-4 w-4 text-zinc-400" />
-                      {tech.name}
+              <div className="space-y-6">
+                {TECH_STACK_GROUPS.map((group) => (
+                  <div key={group.label}>
+                    <div className="text-[11px] font-semibold uppercase tracking-widest text-zinc-600 mb-2.5 text-center">
+                      {group.label}
                     </div>
-                  )
-                })}
+                    <div className="flex flex-wrap justify-center gap-2.5">
+                      {group.items.map((tech) => {
+                        const Icon = tech.icon
+                        return (
+                          <div
+                            key={tech.name}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-zinc-800 bg-zinc-900/50 text-sm text-zinc-300 hover:border-emerald-500/30 hover:text-white hover:shadow hover:shadow-emerald-500/10 transition-all"
+                          >
+                            <Icon className="h-4 w-4 text-zinc-400" />
+                            {tech.name}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </AnimatedSection>
           </div>
@@ -537,9 +617,25 @@ export default function LandingPage() {
                 <h2 className="text-3xl sm:text-4xl font-bold mb-4">
                   See It In Action
                 </h2>
-                <p className="text-zinc-400 mb-8 max-w-lg mx-auto leading-relaxed">
+                <p className="text-zinc-400 mb-6 max-w-lg mx-auto leading-relaxed">
                   Explore real ML predictions, AI explanations, and live market data for 100 S&P stocks.
                 </p>
+                {/* Metric ticker pills */}
+                <div className="flex flex-wrap items-center justify-center gap-2.5 mb-8">
+                  {[
+                    { text: "AAPL +2.3% today", color: "text-emerald-400" },
+                    { text: "100 stocks updated", color: "text-blue-400" },
+                    { text: "Model ran 4h ago", color: "text-purple-400" },
+                  ].map((pill) => (
+                    <div
+                      key={pill.text}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/60 text-xs"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-blink" />
+                      <span className={pill.color}>{pill.text}</span>
+                    </div>
+                  ))}
+                </div>
                 <Link
                   href="/dashboard"
                   className="group inline-flex items-center gap-2.5 bg-emerald-500 hover:bg-emerald-400 text-black font-semibold text-base px-10 py-4 rounded-xl transition-all hover:shadow-2xl hover:shadow-emerald-500/25 hover:scale-[1.02] active:scale-[0.98]"

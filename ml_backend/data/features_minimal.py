@@ -169,46 +169,54 @@ class MinimalFeatureEngineer:
                 # Ensure OHLCV are Series (pandas 3.0 / yfinance MultiIndex compatibility)
                 close = _to_series(df["Close"])
                 vol = _to_series(df["Volume"])
+
+                # ── Collect all new columns in a dict to avoid DataFrame fragmentation ──
+                # Instead of df["col"] = ... for each feature (which causes
+                # PerformanceWarning: DataFrame is highly fragmented), we compute
+                # all features into _new_cols and pd.concat once at the end.
+                _new_cols: Dict[str, pd.Series] = {}
     
                 # 1. Returns (CRITICAL - use shift to avoid leakage)
-                df["log_return_1d"] = np.log(close / close.shift(1))
-                df["log_return_5d"] = np.log(close / close.shift(5))
-                df["log_return_21d"] = np.log(close / close.shift(21))
+                _new_cols["log_return_1d"] = np.log(close / close.shift(1))
+                _new_cols["log_return_5d"] = np.log(close / close.shift(5))
+                _new_cols["log_return_21d"] = np.log(close / close.shift(21))
     
                 # 2. Volatility (past only)
-                df["volatility_20d"] = df["log_return_1d"].rolling(20, min_periods=5).std()
-                df["intraday_range"] = (_to_series(df["High"]) - _to_series(df["Low"])) / close.where(close != 0, np.nan)
-                df["overnight_gap"] = (_to_series(df["Open"]) / close.shift(1) - 1).replace([np.inf, -np.inf], 0)
+                _new_cols["volatility_20d"] = _new_cols["log_return_1d"].rolling(20, min_periods=5).std()
+                _new_cols["intraday_range"] = (_to_series(df["High"]) - _to_series(df["Low"])) / close.where(close != 0, np.nan)
+                _new_cols["overnight_gap"] = (_to_series(df["Open"]) / close.shift(1) - 1).replace([np.inf, -np.inf], 0)
     
                 # 3. Volume features
-                df["volume_ma20"] = vol.rolling(20, min_periods=5).mean()
-                vol_ma = df["volume_ma20"]
-                df["volume_ratio"] = (vol / vol_ma.where(vol_ma != 0, np.nan)).replace([np.inf, -np.inf], np.nan)
-                df["dollar_volume"] = close * vol
+                _vol_ma20 = vol.rolling(20, min_periods=5).mean()
+                _new_cols["volume_ma20"] = _vol_ma20
+                _new_cols["volume_ratio"] = (vol / _vol_ma20.where(_vol_ma20 != 0, np.nan)).replace([np.inf, -np.inf], np.nan)
+                _new_cols["dollar_volume"] = close * vol
                 # Volume z-score over 60-day window (replaces slow rolling percentile rank)
                 vol_m60 = vol.rolling(60, min_periods=20).mean()
                 vol_s60 = vol.rolling(60, min_periods=20).std()
-                df["volume_z60"] = ((vol - vol_m60) / vol_s60.replace(0, np.nan)).fillna(0).clip(-5, 5)
+                _new_cols["volume_z60"] = ((vol - vol_m60) / vol_s60.replace(0, np.nan)).fillna(0).clip(-5, 5)
     
                 # 4. Trend indicators (shifted - use past close only)
-                df["sma_20"] = close.rolling(20, min_periods=20).mean()
-                df["sma_50"] = close.rolling(50, min_periods=20).mean()
-                sma20 = _to_series(df["sma_20"])
-                sma50 = _to_series(df["sma_50"])
-                df["price_vs_sma20"] = (close / sma20 - 1).replace([np.inf, -np.inf], 0)
-                df["price_vs_sma50"] = (close / sma50 - 1).replace([np.inf, -np.inf], 0)
-                df["trend_20d"] = (close > sma20).astype(int)
-                df["momentum_5d"] = close.pct_change(5).replace([np.inf, -np.inf], 0)
+                sma20 = close.rolling(20, min_periods=20).mean()
+                sma50 = close.rolling(50, min_periods=20).mean()
+                _new_cols["sma_20"] = sma20
+                _new_cols["sma_50"] = sma50
+                _new_cols["price_vs_sma20"] = (close / sma20 - 1).replace([np.inf, -np.inf], 0)
+                _new_cols["price_vs_sma50"] = (close / sma50 - 1).replace([np.inf, -np.inf], 0)
+                _new_cols["trend_20d"] = (close > sma20).astype(int)
+                _momentum_5d = close.pct_change(5).replace([np.inf, -np.inf], 0)
+                _new_cols["momentum_5d"] = _momentum_5d
     
                 # 4b. Additional high-value features (leakage-free)
                 # Momentum acceleration: change in momentum (second derivative)
-                df["momentum_accel"] = _to_series(df["momentum_5d"]).diff().fillna(0)
+                _new_cols["momentum_accel"] = _momentum_5d.diff().fillna(0)
                 # Volume momentum: 5-day change in volume (demand shifts)
-                df["volume_momentum_5d"] = vol.pct_change(5).replace([np.inf, -np.inf], 0).fillna(0)
+                _new_cols["volume_momentum_5d"] = vol.pct_change(5).replace([np.inf, -np.inf], 0).fillna(0)
                 # Volume/volatility ratio: high volume + low vol = conviction (informed flow)
-                vol_20d = _to_series(df["volatility_20d"])
-                df["volume_vol_ratio"] = (
-                    _to_series(df["volume_ratio"]) / (vol_20d + 1e-6)
+                vol_20d = _new_cols["volatility_20d"]
+                _vol_ratio = _new_cols["volume_ratio"]
+                _new_cols["volume_vol_ratio"] = (
+                    _vol_ratio / (vol_20d + 1e-6)
                 ).replace([np.inf, -np.inf], 0).fillna(0)
                 # Bollinger Band position: where price sits within ±2σ band (-1 to +1)
                 # Use price-space std so numerator/denominator are both in dollars
@@ -216,11 +224,11 @@ class MinimalFeatureEngineer:
                 std_20_price = close.rolling(20, min_periods=20).std()
                 # Guard std==0 (illiquid/flat periods) → NaN → fillna(0)
                 bb_raw = (close - sma20) / (2 * std_20_price.replace(0, np.nan))
-                df["bb_position"] = bb_raw.replace([np.inf, -np.inf], 0).clip(-3, 3).fillna(0)
+                _new_cols["bb_position"] = bb_raw.replace([np.inf, -np.inf], 0).clip(-3, 3).fillna(0)
                 # Price/volume divergence: price up + volume down (or vice-versa) = weak move
-                ret_sign = np.sign(_to_series(df["log_return_1d"]))
+                ret_sign = np.sign(_new_cols["log_return_1d"])
                 vol_sign = np.sign(vol.pct_change(5).fillna(0))
-                df["price_vol_divergence"] = (ret_sign * vol_sign * -1).fillna(0)  # -1 when divergent
+                _new_cols["price_vol_divergence"] = (ret_sign * vol_sign * -1).fillna(0)  # -1 when divergent
     
                 # 4c. MACD (12/26/9) — trend-following momentum indicator
                 # Normalized by close to make comparable across tickers.
@@ -229,9 +237,10 @@ class MinimalFeatureEngineer:
                 _macd_line = _ema12 - _ema26
                 _macd_signal = _macd_line.ewm(span=9, min_periods=6, adjust=False).mean()
                 _macd_hist = _macd_line - _macd_signal
-                df["macd_norm"] = (_macd_line / close.replace(0, np.nan)).fillna(0).clip(-0.1, 0.1)
-                df["macd_signal_norm"] = (_macd_signal / close.replace(0, np.nan)).fillna(0).clip(-0.1, 0.1)
-                df["macd_hist_norm"] = (_macd_hist / close.replace(0, np.nan)).fillna(0).clip(-0.05, 0.05)
+                _close_safe = close.replace(0, np.nan)
+                _new_cols["macd_norm"] = (_macd_line / _close_safe).fillna(0).clip(-0.1, 0.1)
+                _new_cols["macd_signal_norm"] = (_macd_signal / _close_safe).fillna(0).clip(-0.1, 0.1)
+                _new_cols["macd_hist_norm"] = (_macd_hist / _close_safe).fillna(0).clip(-0.05, 0.05)
 
                 # 4d. ATR normalized — Average True Range / Close (volatility regime)
                 _high_s = _to_series(df["High"])
@@ -243,25 +252,26 @@ class MinimalFeatureEngineer:
                     (_low_s - _prev_close).abs(),
                 ], axis=1).max(axis=1)
                 _atr14 = _tr.rolling(14, min_periods=5).mean()
-                df["atr_norm"] = (_atr14 / close.replace(0, np.nan)).fillna(0).clip(0, 0.2)
+                _new_cols["atr_norm"] = (_atr14 / _close_safe).fillna(0).clip(0, 0.2)
 
                 # 4e. Distance from 52-week high/low — mean-reversion / momentum signal
                 _high_252 = close.rolling(252, min_periods=60).max()
                 _low_252 = close.rolling(252, min_periods=60).min()
-                df["dist_52w_high"] = ((close - _high_252) / _high_252.replace(0, np.nan)).fillna(0).clip(-1, 0)
-                df["dist_52w_low"] = ((close - _low_252) / _low_252.replace(0, np.nan)).fillna(0).clip(0, 5)
+                _new_cols["dist_52w_high"] = ((close - _high_252) / _high_252.replace(0, np.nan)).fillna(0).clip(-1, 0)
+                _new_cols["dist_52w_low"] = ((close - _low_252) / _low_252.replace(0, np.nan)).fillna(0).clip(0, 5)
 
                 # 4f. Bollinger Bandwidth — width of BB(20, 2) / SMA(20)
                 # Low bandwidth = volatility squeeze (precedes breakouts)
                 _bb_width = (4 * std_20_price) / sma20.replace(0, np.nan)
-                df["bb_width"] = _bb_width.fillna(0).clip(0, 0.5)
+                _new_cols["bb_width"] = _bb_width.fillna(0).clip(0, 0.5)
 
                 # 5. RSI (14-period, standard)
                 delta = close.diff()
                 gain = delta.where(delta > 0, 0).rolling(14, min_periods=5).mean()
                 loss = (-delta.where(delta < 0, 0)).rolling(14, min_periods=5).mean()
                 rs = gain / loss.where(loss != 0, np.nan)
-                df["rsi"] = (100 - (100 / (1 + rs))).fillna(50)
+                _rsi = (100 - (100 / (1 + rs))).fillna(50)
+                _new_cols["rsi"] = _rsi
     
                 # 5a. RSI divergence: compare 14-day slope of price vs RSI
                 # Bullish divergence (price down, RSI up) = +1
@@ -287,7 +297,7 @@ class MinimalFeatureEngineer:
                     return np.dot(x_dev, y - y_bar) / denom
     
                 price_slope = close.rolling(14, min_periods=5).apply(_linear_slope, raw=True)
-                rsi_slope = _to_series(df["rsi"]).rolling(14, min_periods=5).apply(_linear_slope, raw=True)
+                rsi_slope = _rsi.rolling(14, min_periods=5).apply(_linear_slope, raw=True)
                 # Divergence: sign(rsi_slope) != sign(price_slope)
                 p_sign = np.sign(price_slope).fillna(0)
                 r_sign = np.sign(rsi_slope).fillna(0)
@@ -299,7 +309,7 @@ class MinimalFeatureEngineer:
                     ),
                 )
                 # shift(1) for PIT safety: use yesterday's divergence signal
-                df["rsi_divergence"] = pd.Series(divergence, index=df.index).shift(1).fillna(0).astype(float)
+                _new_cols["rsi_divergence"] = pd.Series(divergence, index=df.index).shift(1).fillna(0).astype(float)
 
                 # ── 5b. Short-term microstructure features (next_day signal) ──
                 # These features capture intraday and very-short-term patterns
@@ -313,11 +323,11 @@ class MinimalFeatureEngineer:
 
                 # Close Location Value: where price closed within the day's range
                 # +1 = closed at high (bullish), -1 = closed at low (bearish)
-                df["clv"] = ((close - _low) - (_high - close)) / _range
-                df["clv"] = _to_series(df["clv"]).fillna(0).clip(-1, 1)
+                _clv = ((close - _low) - (_high - close)) / _range
+                _new_cols["clv"] = _clv.fillna(0).clip(-1, 1)
 
                 # Candle body ratio: |close - open| / range — large body = conviction
-                df["candle_body_ratio"] = (
+                _new_cols["candle_body_ratio"] = (
                     (close - _open).abs() / _range
                 ).fillna(0).clip(0, 1)
 
@@ -325,33 +335,35 @@ class MinimalFeatureEngineer:
                 # Upper wick: (high - max(open, close)) / range
                 _co_max = np.maximum(_open, close)
                 _co_min = np.minimum(_open, close)
-                df["upper_wick_ratio"] = ((_high - _co_max) / _range).fillna(0).clip(0, 1)
-                df["lower_wick_ratio"] = ((_co_min - _low) / _range).fillna(0).clip(0, 1)
+                _new_cols["upper_wick_ratio"] = ((_high - _co_max) / _range).fillna(0).clip(0, 1)
+                _new_cols["lower_wick_ratio"] = ((_co_min - _low) / _range).fillna(0).clip(0, 1)
 
                 # Short-term mean reversion: z-score of 1d return over 5d and 10d windows
-                _ret_1d = _to_series(df["log_return_1d"])
+                _ret_1d = _new_cols["log_return_1d"]
                 _ret_m5 = _ret_1d.rolling(5, min_periods=3).mean()
                 _ret_s5 = _ret_1d.rolling(5, min_periods=3).std().replace(0, np.nan)
-                df["ret_zscore_5d"] = ((_ret_1d - _ret_m5) / _ret_s5).fillna(0).clip(-4, 4)
+                _new_cols["ret_zscore_5d"] = ((_ret_1d - _ret_m5) / _ret_s5).fillna(0).clip(-4, 4)
                 _ret_m10 = _ret_1d.rolling(10, min_periods=5).mean()
                 _ret_s10 = _ret_1d.rolling(10, min_periods=5).std().replace(0, np.nan)
-                df["ret_zscore_10d"] = ((_ret_1d - _ret_m10) / _ret_s10).fillna(0).clip(-4, 4)
+                _new_cols["ret_zscore_10d"] = ((_ret_1d - _ret_m10) / _ret_s10).fillna(0).clip(-4, 4)
 
                 # Overnight gap analysis: gap direction + magnitude as predictor
-                _gap = _to_series(df["overnight_gap"])
-                df["gap_filled"] = (
+                _gap = _new_cols["overnight_gap"]
+                _gap_filled = (
                     ((_gap > 0) & (close < _open)) | ((_gap < 0) & (close > _open))
                 ).astype(float)
+                _new_cols["gap_filled"] = _gap_filled
                 # Rolling average gap fill rate (mean-reversion tendency)
-                df["gap_fill_rate_10d"] = _to_series(df["gap_filled"]).rolling(10, min_periods=3).mean().fillna(0.5)
+                _new_cols["gap_fill_rate_10d"] = _gap_filled.rolling(10, min_periods=3).mean().fillna(0.5)
 
                 # Volume spike detection: is today's volume an outlier vs recent?
                 _vol_m10 = vol.rolling(10, min_periods=5).mean()
                 _vol_s10 = vol.rolling(10, min_periods=5).std().replace(0, np.nan)
-                df["volume_spike_z"] = ((vol - _vol_m10) / _vol_s10).fillna(0).clip(-3, 5)
+                _vol_spike_z = ((vol - _vol_m10) / _vol_s10).fillna(0).clip(-3, 5)
+                _new_cols["volume_spike_z"] = _vol_spike_z
                 # High volume + positive return = accumulation; high vol + negative return = distribution
-                df["volume_return_interaction"] = (
-                    _to_series(df["volume_spike_z"]) * np.sign(_ret_1d)
+                _new_cols["volume_return_interaction"] = (
+                    _vol_spike_z * np.sign(_ret_1d)
                 ).fillna(0).clip(-5, 5)
 
                 # On-Balance Volume slope (10-day): captures accumulation/distribution trend
@@ -360,29 +372,33 @@ class MinimalFeatureEngineer:
                     lambda x: np.polyfit(np.arange(len(x)), x, 1)[0] if len(x) >= 2 else 0, raw=True
                 )
                 # Normalize by mean volume to make comparable across tickers
-                df["obv_slope_10d"] = (_obv_slope / _vol_m10.replace(0, np.nan)).fillna(0).clip(-3, 3)
+                _new_cols["obv_slope_10d"] = (_obv_slope / _vol_m10.replace(0, np.nan)).fillna(0).clip(-3, 3)
 
                 # Day-of-week effect (known calendar seasonality in equity returns)
                 _dow = pd.to_datetime(_to_series(df["date"])).dt.dayofweek  # 0=Mon, 4=Fri
-                df["is_monday"] = (_dow == 0).astype(float)
-                df["is_friday"] = (_dow == 4).astype(float)
+                _new_cols["is_monday"] = (_dow == 0).astype(float)
+                _new_cols["is_friday"] = (_dow == 4).astype(float)
 
                 # Consecutive up/down days counter (momentum persistence)
                 _sign = np.sign(_ret_1d.fillna(0))
                 _groups = (_sign != _sign.shift(1)).cumsum()
-                df["consecutive_days"] = _sign.groupby(_groups).cumsum().fillna(0).clip(-7, 7)
+                _new_cols["consecutive_days"] = _sign.groupby(_groups).cumsum().fillna(0).clip(-7, 7)
 
                 # High-low range expansion/contraction (volatility regime for next day)
                 _range_ma5 = _range.rolling(5, min_periods=3).mean()
                 _range_ma20 = _range.rolling(20, min_periods=10).mean()
-                df["range_expansion"] = (
+                _new_cols["range_expansion"] = (
                     _range_ma5 / _range_ma20.replace(0, np.nan)
                 ).fillna(1.0).clip(0.3, 3.0)
 
                 # 5c. Sector and ticker IDs for pooled model (deterministic; stable across runs)
                 sector = SECTOR_MAP.get((ticker or "").upper(), DEFAULT_SECTOR)
-                df["sector_id"] = SECTOR_ID.get(sector, 1)
-                df["ticker_id"] = get_ticker_id(ticker)
+                _new_cols["sector_id"] = pd.Series(SECTOR_ID.get(sector, 1), index=df.index)
+                _new_cols["ticker_id"] = pd.Series(get_ticker_id(ticker), index=df.index)
+
+                # ── Batch-assign all computed columns in one pd.concat ──
+                # This avoids per-column insertion that causes block fragmentation.
+                df = pd.concat([df, pd.DataFrame(_new_cols, index=df.index)], axis=1)
     
                 # 6. Relative strength vs SPY (if available)
                 df = self._add_relative_strength(df, ticker, mc)
@@ -397,8 +413,10 @@ class MinimalFeatureEngineer:
                 df = self._add_cross_asset_features(df, ticker, mc)
     
                 # 8. Regime flags (quantile uses prior window only - no self-referential threshold)
+                _new_cols2: Dict[str, pd.Series] = {}
+    
                 q = df["volatility_20d"].shift(1).rolling(60, min_periods=20).quantile(0.7)
-                df["vol_regime"] = (df["volatility_20d"] > q).astype(int).fillna(0)
+                _new_cols2["vol_regime"] = (df["volatility_20d"] > q).astype(int).fillna(0)
 
                 # ── 8b. Market regime detection (hedge-fund feature #1) ──
                 # Combines trend + volatility into a 3-state regime:
@@ -409,14 +427,16 @@ class MinimalFeatureEngineer:
                 _vol_20_lag = _to_series(df["volatility_20d"]).shift(1).fillna(0)
                 _vol_q30 = _vol_20_lag.rolling(60, min_periods=20).quantile(0.30)
                 _vol_q70 = _vol_20_lag.rolling(60, min_periods=20).quantile(0.70)
-                df["regime_bull_low_vol"] = (
+                _regime_bull = (
                     ((_cum_spy_20 > 0) & (_vol_20_lag <= _vol_q30)).astype(float)
                 ).fillna(0)
-                df["regime_bear_high_vol"] = (
+                _regime_bear = (
                     ((_cum_spy_20 < 0) & (_vol_20_lag >= _vol_q70)).astype(float)
                 ).fillna(0)
+                _new_cols2["regime_bull_low_vol"] = _regime_bull
+                _new_cols2["regime_bear_high_vol"] = _regime_bear
                 # Continuous regime score: -1 (risk-off) to +1 (risk-on)
-                df["regime_score"] = (df["regime_bull_low_vol"] - df["regime_bear_high_vol"]).fillna(0)
+                _new_cols2["regime_score"] = (_regime_bull - _regime_bear).fillna(0)
 
                 # ── 8c. Volatility clustering features (hedge-fund feature #2) ──
                 # GARCH-lite: captures volatility persistence without fitting a full model.
@@ -424,7 +444,7 @@ class MinimalFeatureEngineer:
                 _abs_ret = df["log_return_1d"].abs()
                 _abs_ret_lag1 = _abs_ret.shift(1).fillna(0)
                 # Rolling auto-correlation of |returns| over 20 days (measures persistence)
-                df["vol_cluster_autocorr"] = (
+                _new_cols2["vol_cluster_autocorr"] = (
                     _abs_ret.rolling(20, min_periods=10)
                     .corr(_abs_ret_lag1)
                     .shift(1)  # PIT safety
@@ -433,7 +453,7 @@ class MinimalFeatureEngineer:
                 )
                 # Realized vol ratio (5d / 20d): >1 = vol expanding, <1 = vol contracting
                 _vol_5d = df["log_return_1d"].rolling(5, min_periods=3).std()
-                df["vol_ratio_5_20"] = (
+                _new_cols2["vol_ratio_5_20"] = (
                     (_vol_5d / _to_series(df["volatility_20d"]).replace(0, np.nan))
                     .shift(1)
                     .fillna(1.0)
@@ -441,7 +461,7 @@ class MinimalFeatureEngineer:
                 )
                 # Volatility term structure slope: 5d vs 60d (inverted = fear regime)
                 _vol_60d = df["log_return_1d"].rolling(60, min_periods=20).std()
-                df["vol_term_slope"] = (
+                _new_cols2["vol_term_slope"] = (
                     (_vol_5d / _vol_60d.replace(0, np.nan) - 1)
                     .shift(1)
                     .fillna(0)
@@ -453,17 +473,17 @@ class MinimalFeatureEngineer:
                 # These features capture "is the stock leading or lagging its sector?"
                 # which is a strong alpha signal for cross-sectional models.
                 # Dual momentum: absolute + relative → combined signal
-                _mom_5d = _to_series(df.get("momentum_5d", pd.Series(0, index=df.index))).shift(1).fillna(0)
-                _sect_5d = _to_series(df.get("sector_etf_return_5d", pd.Series(0, index=df.index)))
+                _mom_5d = _to_series(df.get("momentum_5d", pd.Series(0.0, index=df.index))).shift(1).fillna(0)
+                _sect_5d = _to_series(df.get("sector_etf_return_5d", pd.Series(0.0, index=df.index)))
                 # Excess momentum: stock momentum minus sector momentum (already shifted for sector)
-                df["excess_momentum_5d"] = (_mom_5d - _sect_5d).fillna(0)
+                _new_cols2["excess_momentum_5d"] = (_mom_5d - _sect_5d).fillna(0)
                 # Dual momentum flag: both absolute AND relative positive = strongest signal
-                df["dual_momentum_flag"] = (
+                _new_cols2["dual_momentum_flag"] = (
                     ((_mom_5d > 0) & ((_mom_5d - _sect_5d) > 0)).astype(float)
                 ).fillna(0)
                 # Momentum reversal detector: did last 5d momentum flip sign vs prior 5d?
-                _mom_5d_prev = _to_series(df.get("momentum_5d", pd.Series(0, index=df.index))).shift(6).fillna(0)
-                df["momentum_reversal"] = (
+                _mom_5d_prev = _to_series(df.get("momentum_5d", pd.Series(0.0, index=df.index))).shift(6).fillna(0)
+                _new_cols2["momentum_reversal"] = (
                     (np.sign(_mom_5d) != np.sign(_mom_5d_prev)).astype(float)
                 ).fillna(0)
 
@@ -542,19 +562,18 @@ class MinimalFeatureEngineer:
                 _insider_net_s = _to_series(df.get("insider_net_value_30d", pd.Series(0.0, index=df.index))).fillna(0)
 
                 # Momentum × Volume: strong momentum with high volume is more reliable
-                df["momentum_volume_confirm"] = (_mom_5d_s * _vol_ratio_s).fillna(0).clip(-5, 5)
+                _new_cols2["momentum_volume_confirm"] = (_mom_5d_s * _vol_ratio_s).fillna(0).clip(-5, 5)
                 # Sentiment × Momentum: sentiment agrees with price direction → stronger signal
-                df["sentiment_momentum_align"] = (_sent_7d_s * _mom_5d_s).fillna(0).clip(-1, 1)
+                _new_cols2["sentiment_momentum_align"] = (_sent_7d_s * _mom_5d_s).fillna(0).clip(-1, 1)
                 # Volatility × RSI: oversold + low vol = mean reversion opportunity
-                df["vol_rsi_interaction"] = (_vol_20d_s * (_rsi_s - 50) / 50).fillna(0).clip(-1, 1)
+                _new_cols2["vol_rsi_interaction"] = (_vol_20d_s * (_rsi_s - 50) / 50).fillna(0).clip(-1, 1)
                 # VIX × Sentiment: fear + negative sentiment = capitulation signal
-                df["vix_sentiment_cross"] = (_vix_s * _sent_7d_s).fillna(0).clip(-5, 5)
+                _new_cols2["vix_sentiment_cross"] = (_vix_s * _sent_7d_s).fillna(0).clip(-5, 5)
                 # Insider × Momentum: insider buying + positive momentum = strong conviction
-                df["insider_momentum_cross"] = (_insider_net_s * np.sign(_mom_5d_s)).fillna(0).clip(-5, 5)
+                _new_cols2["insider_momentum_cross"] = (_insider_net_s * np.sign(_mom_5d_s)).fillna(0).clip(-5, 5)
 
-                # Defragment DataFrame after all column-by-column additions
-                # to eliminate PerformanceWarnings from internal block fragmentation
-                df = df.copy()
+                # ── Batch-assign second wave of derived columns ──
+                df = pd.concat([df, pd.DataFrame(_new_cols2, index=df.index)], axis=1)
 
                 # Define feature columns. KEEP returns (log_return_1d/5d/21d at t) - safe for predicting r_{t+1}
                 # SPY_close used for market-neutral target only, not as feature
