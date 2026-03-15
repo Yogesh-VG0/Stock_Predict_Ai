@@ -57,7 +57,7 @@ MODEL_DIR = os.getenv("MODEL_DIR", "models")
 #   Ranking uses predicted alpha to select top quintile (proven quant approach).
 #   LSTM captures sequential patterns LightGBM misses; 32-dim embeddings
 #   appended to feature set. LightGBM config unchanged from v8.2.
-MODEL_VERSION = "v10.2.0"
+MODEL_VERSION = "v10.3.0"
 
 
 def _lgb_params_for_horizon(window_name: str) -> dict:
