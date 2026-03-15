@@ -150,3 +150,40 @@
 .finlogix-container iframe {
   overscroll-behavior: contain;
 }
+
+/* ── Landing page animations ── */
+@keyframes border-rotate {
+  from { --border-angle: 0deg; }
+  to { --border-angle: 360deg; }
+}
+
+@keyframes radial-pulse {
+  0%, 100% { opacity: 0.04; transform: scale(1); }
+  50% { opacity: 0.10; transform: scale(1.15); }
+}
+
+@keyframes marquee-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes blink-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.animate-border-rotate {
+  animation: border-rotate 6s linear infinite;
+}
+
+.animate-radial-pulse {
+  animation: radial-pulse 4s ease-in-out infinite;
+}
+
+.animate-marquee {
+  animation: marquee-scroll 25s linear infinite;
+}
+
+.animate-blink {
+  animation: blink-dot 1.5s ease-in-out infinite;
+}
