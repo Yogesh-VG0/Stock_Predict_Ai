@@ -86,7 +86,7 @@ SIGN_CLF_MIN_ACCURACY = 0.52
 # 7_day had the best backtest (Sharpe 0.657, +9.89%) — deserves higher cap.
 # next_day stays low since even the best per-ticker models have ~0 correlation.
 CONFIDENCE_CAP_BY_HORIZON = {
-    "next_day": 0.25,  # next_day holdout corr ≈ 0 — keep cap low
+    "next_day": 0.35,  # v10.3: raised from 0.25 — let model express some confidence when genuine edge exists
     "7_day":    0.65,  # v8.1: raised from 0.55 — per-ticker models with genuine edge deserve higher confidence
     "30_day":   0.80,  # v8.1: raised from 0.75 — 30_day has strongest per-ticker signal (some stocks 70%+ hit rate)
 }
@@ -118,7 +118,7 @@ PER_TICKER_MIN_HIT_RATE = 0.48    # v8.1: lowered from 0.49 — accept slightly 
 # v5.0: lowered caps significantly — the previous values were too restrictive,
 # especially for next_day where predictions are small magnitude.
 TRADE_THRESHOLD_CAP = {
-    "next_day": {"min": 0.00005, "max": 0.002},   # 0.005% – 0.2%
+    "next_day": {"min": 0.00005, "max": 0.004},   # v10.3: 0.005% – 0.4% (wider range for adaptive threshold)
     "7_day":    {"min": 0.0001,  "max": 0.006},   # 0.01% – 0.6%
     "30_day":   {"min": 0.0003,  "max": 0.020},   # 0.03% – 2.0%
 }
@@ -165,14 +165,14 @@ LIGHTGBM_PARAMS = {
 # Prediction shrinkage will scale down output if the model has no real edge.
 LIGHTGBM_PARAMS_NEXT_DAY = {
     **LIGHTGBM_PARAMS,
-    "n_estimators": 350,       # v8.2: conservative for noisy 1-day alpha
+    "n_estimators": 400,       # v10.3: 350→400 — more rounds to find weak daily signal
     "max_depth": 4,            # v8.2: keep v8.1 — slightly deeper than v8.0's 3
     "learning_rate": 0.01,     # v8.2: slow learning for noisy target
-    "num_leaves": 15,          # v8.2: keep v8.1 value
-    "min_child_samples": 50,   # v8.2: conservative
-    "min_split_gain": 0.008,   # v8.2: stricter than v8.1(0.005) — next_day needs heavy filtering
-    "reg_alpha": 0.25,         # v8.2: strong L1
-    "reg_lambda": 2.0,         # v8.2: strong L2
+    "num_leaves": 20,          # v10.3: 15→20 — slightly more model capacity for 92K samples
+    "min_child_samples": 45,   # v10.3: 50→45 — small relaxation to allow finer splits
+    "min_split_gain": 0.005,   # v10.3: 0.008→0.005 — match base params; 0.008 produced zero-split models in v7.0
+    "reg_alpha": 0.20,         # v10.3: 0.25→0.20 — moderate L1 (still stronger than base 0.15)
+    "reg_lambda": 1.8,         # v10.3: 2.0→1.8 — moderate L2 (still stronger than base 1.5)
     "subsample": 0.65,         # v8.2: moderate randomness
     "colsample_bytree": 0.60,  # v8.2: moderate feature dropout
 }
@@ -183,7 +183,7 @@ LIGHTGBM_PARAMS_NEXT_DAY = {
 # v7.0: Reduced top_k. v6.0 kept 45-46 features (from 113), but many were noise.
 # Fewer features = simpler model = less overfitting = better holdout performance.
 FEATURE_PRUNING_TOP_K_BY_HORIZON = {
-    "next_day": 25,   # v8.2: keep v8.1 (was 20 in v8.0)
+    "next_day": 30,   # v10.3: 25→30 — more features to capture weak daily alpha signal
     "7_day": 35,      # v8.2: between v8.0(25) and v8.1(40) — avoid too many noisy features
     "30_day": 40,     # v8.2: between v8.0(30) and v8.1(50) — v8.1's 50 caused overfitting
 }
@@ -215,8 +215,8 @@ RANKING_CONFIG = {
     "top_pct": 0.20,       # Go long top 20% of tickers (15 out of 75)
     "min_tickers": 5,      # Need at least 5 tickers with predictions to rank
     "confidence_boost": 0.10,  # Boost confidence for top-ranked tickers
-    "disabled_horizons": ["next_day"],  # v10.1: disable ranking for horizons with zero signal
-                                        # next_day corr=0.000 → ranking on noise amplifies losses
+    "disabled_horizons": [],  # v10.3: re-enabled next_day — relaxed model params should produce learnable signal;
+                                # with 75 tickers even weak correlation helps rank top quintile
 }
 
 # ── v10.0: LSTM Temporal Feature Extractor ──

@@ -6,7 +6,6 @@ import { motion, useInView } from "framer-motion"
 import {
   LineChart,
   Brain,
-  TrendingUp,
   BarChart3,
   Newspaper,
   Shield,
@@ -385,10 +384,9 @@ export default function LandingPage() {
               </Link>
               <Link
                 href="/stocks/AAPL"
-                className="group relative flex items-center gap-2 bg-zinc-900 hover:bg-zinc-800/80 text-white font-semibold text-base px-8 py-3.5 rounded-xl transition-all border border-zinc-700/80 hover:border-emerald-500/40 hover:shadow-lg hover:shadow-emerald-500/10"
+                className="group relative flex items-center gap-2 bg-emerald-500/5 hover:bg-emerald-500/10 text-white font-semibold text-base px-8 py-3.5 rounded-xl transition-all border border-emerald-500/30 hover:border-emerald-500/60 shadow-sm shadow-emerald-500/10 hover:shadow-lg hover:shadow-emerald-500/25"
                 aria-label="View AAPL stock analysis"
               >
-                <TrendingUp className="h-4 w-4 text-emerald-500 group-hover:scale-110 transition-transform" aria-hidden="true" />
                 View AAPL Analysis
                 <ArrowRight className="h-4 w-4 text-zinc-500 group-hover:text-emerald-400 group-hover:translate-x-0.5 transition-all" aria-hidden="true" />
               </Link>
@@ -405,7 +403,7 @@ export default function LandingPage() {
               <div className="sm:hidden relative">
                 <div className="absolute left-0 top-0 bottom-0 w-8 bg-gradient-to-r from-black to-transparent z-10 pointer-events-none" />
                 <div className="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-black to-transparent z-10 pointer-events-none" />
-                <div className="flex gap-5 animate-marquee w-max">
+                <div className="flex gap-5 animate-marquee hover:[animation-play-state:paused] w-max">
                   {[...STOCK_LOGOS, ...STOCK_LOGOS].map((symbol, i) => (
                     <Link key={`${symbol}-${i}`} href={`/stocks/${symbol}`} aria-label={`View AI analysis for ${symbol}`} className="flex flex-col items-center gap-1.5 group">
                       <div className="w-11 h-11 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center overflow-hidden group-hover:border-emerald-500/50 transition-all">
