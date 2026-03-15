@@ -527,14 +527,12 @@ export default function LandingPage() {
               </p>
             </AnimatedSection>
 
-            <div className="relative">
-              {/* Vertical timeline connector line */}
-              <div className="absolute left-[27px] top-6 bottom-6 w-px bg-gradient-to-b from-emerald-500/30 via-emerald-500/20 to-emerald-500/5 hidden sm:block" />
-              <div className="space-y-4">
-                {PIPELINE_STEPS.map((step, i) => (
-                  <AnimatedSection key={step.step} delay={i * 0.1}>
-                    <div className="flex items-start gap-5 p-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 hover:bg-zinc-900/60 transition-colors relative">
-                      {/* Glowing dot on timeline */}
+            <div className="space-y-0">
+              {PIPELINE_STEPS.map((step, i) => (
+                <AnimatedSection key={step.step} delay={i * 0.1}>
+                  <>
+                    <div className="flex items-start gap-5 p-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 hover:bg-zinc-900/60 transition-colors">
+                      {/* Glowing dot */}
                       <div className="flex-shrink-0 relative">
                         <div className="absolute -inset-1 rounded-lg bg-emerald-500/20 blur-sm" />
                         <div className="relative w-10 h-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
@@ -551,9 +549,15 @@ export default function LandingPage() {
                         <p className="text-sm text-zinc-400">{step.desc}</p>
                       </div>
                     </div>
-                  </AnimatedSection>
-                ))}
-              </div>
+                    {/* Connector arrow between cards, not after last */}
+                    {i < PIPELINE_STEPS.length - 1 && (
+                      <div className="flex justify-start pl-[27px] py-1">
+                        <div className="w-px h-4 bg-gradient-to-b from-emerald-500/40 to-emerald-500/10" />
+                      </div>
+                    )}
+                  </>
+                </AnimatedSection>
+              ))}
             </div>
           </div>
         </section>
