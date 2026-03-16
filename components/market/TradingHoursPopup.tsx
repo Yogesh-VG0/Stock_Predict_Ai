@@ -108,6 +108,7 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
   const [isMobile, setIsMobile] = useState(false)
   const [now, setNow] = useState(new Date())
   const timelineRef = useRef<HTMLDivElement>(null)
+  const dragStateRef = useRef<{ isDragging: boolean; rect: DOMRect | null }>({ isDragging: false, rect: null })
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
@@ -127,54 +128,96 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
   const currentTimePct = getCurrentTimePct()
   const todayET = getDayOfWeekET()
 
-  // Convert clientX to minutes using the timeline bar's bounding rect
-  const clientXToMinutes = useCallback((clientX: number): number => {
-    if (!timelineRef.current) return 0
-    const rect = timelineRef.current.getBoundingClientRect()
-    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width))
-    return Math.round(pct * 1440)
+  // Constants for layout calculations
+  const BAR_LEFT_OFFSET = 64
+  const BAR_RIGHT_PAD = 16
+
+  // Handle mouse down on timeline to start dragging
+  const handleTimelineMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    
+    // Prevent multiple simultaneous drags
+    if (dragStateRef.current.isDragging) return
+    
+    try {
+      const rect = timelineRef.current?.getBoundingClientRect()
+      if (!rect) return
+      
+      const startX = e.clientX
+      const startPct = Math.max(0, Math.min(1, (startX - rect.left) / rect.width))
+      const startMinutes = Math.round(startPct * 1440)
+      
+      setDragMinutes(startMinutes)
+      setIsDragging(true)
+      dragStateRef.current = { isDragging: true, rect }
+      
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        const currentRect = dragStateRef.current.rect
+        if (!currentRect) return
+        
+        const currentPct = Math.max(0, Math.min(1, (moveEvent.clientX - currentRect.left) / currentRect.width))
+        const currentMinutes = Math.round(currentPct * 1440)
+        setDragMinutes(currentMinutes)
+      }
+      
+      const handleMouseUp = () => {
+        setIsDragging(false)
+        setDragMinutes(null)
+        dragStateRef.current = { isDragging: false, rect: null }
+        document.removeEventListener("mousemove", handleMouseMove)
+        document.removeEventListener("mouseup", handleMouseUp)
+      }
+      
+      document.addEventListener("mousemove", handleMouseMove)
+      document.addEventListener("mouseup", handleMouseUp)
+    } catch (error) {
+      console.error('Error starting mouse drag:', error)
+    }
   }, [])
 
-  // Native mouse/touch drag on the entire popup area (once dragging starts)
-  useEffect(() => {
-    if (!isDragging) return
-
-    const onMouseMove = (e: MouseEvent) => {
-      setDragMinutes(clientXToMinutes(e.clientX))
-    }
-    const onMouseUp = () => {
-      setIsDragging(false)
-      setDragMinutes(null)
-    }
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length > 0) {
-        setDragMinutes(clientXToMinutes(e.touches[0].clientX))
-      }
-    }
-    const onTouchEnd = () => {
-      setIsDragging(false)
-      setDragMinutes(null)
-    }
-
-    document.addEventListener("mousemove", onMouseMove)
-    document.addEventListener("mouseup", onMouseUp)
-    document.addEventListener("touchmove", onTouchMove, { passive: true })
-    document.addEventListener("touchend", onTouchEnd)
-    return () => {
-      document.removeEventListener("mousemove", onMouseMove)
-      document.removeEventListener("mouseup", onMouseUp)
-      document.removeEventListener("touchmove", onTouchMove)
-      document.removeEventListener("touchend", onTouchEnd)
-    }
-  }, [isDragging, clientXToMinutes])
-
-  const startDrag = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+  // Handle touch events for mobile
+  const handleTimelineTouchStart = useCallback((e: React.TouchEvent) => {
     e.preventDefault()
-    e.stopPropagation()
-    setIsDragging(true)
-    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX
-    setDragMinutes(clientXToMinutes(clientX))
-  }, [clientXToMinutes])
+    
+    // Prevent multiple simultaneous drags
+    if (dragStateRef.current.isDragging) return
+    
+    try {
+      const rect = timelineRef.current?.getBoundingClientRect()
+      if (!rect) return
+      
+      const touch = e.touches[0]
+      const startPct = Math.max(0, Math.min(1, (touch.clientX - rect.left) / rect.width))
+      const startMinutes = Math.round(startPct * 1440)
+      
+      setDragMinutes(startMinutes)
+      setIsDragging(true)
+      dragStateRef.current = { isDragging: true, rect }
+      
+      const handleTouchMove = (moveEvent: TouchEvent) => {
+        const currentRect = dragStateRef.current.rect
+        if (!currentRect) return
+        
+        const touch = moveEvent.touches[0]
+        const currentPct = Math.max(0, Math.min(1, (touch.clientX - currentRect.left) / currentRect.width))
+        const currentMinutes = Math.round(currentPct * 1440)
+        setDragMinutes(currentMinutes)
+      }
+      
+      const handleTouchEnd = () => {
+        setIsDragging(false)
+        setDragMinutes(null)
+        dragStateRef.current = { isDragging: false, rect: null }
+        document.removeEventListener("touchmove", handleTouchMove)
+        document.removeEventListener("touchend", handleTouchEnd)
+      }
+      
+      document.addEventListener("touchmove", handleTouchMove, { passive: false })
+      document.addEventListener("touchend", handleTouchEnd)
+    } catch (error) {
+      console.error('Error starting touch drag:', error)
+    }
+  }, [])
 
   // Escape key
   useEffect(() => {
@@ -183,6 +226,51 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
   }, [open, onClose])
+
+  // Cleanup event listeners on unmount
+  useEffect(() => {
+    return () => {
+      // Clean up any remaining event listeners
+      const events = ['mousemove', 'mouseup', 'touchmove', 'touchend']
+      events.forEach(eventType => {
+        // Remove all listeners for this event type
+        const listeners = (document as any).__tradingHoursListeners || []
+        listeners.forEach((listener: EventListener) => {
+          document.removeEventListener(eventType, listener)
+        })
+      })
+      ;(document as any).__tradingHoursListeners = []
+      dragStateRef.current = { isDragging: false, rect: null }
+    }
+  }, [])
+
+  // Handle keyboard navigation for the time selector
+  const handleKeyDown = useCallback((e: React.KeyboardEvent, currentIsToday: boolean) => {
+    if (!currentIsToday) return
+    
+    const currentMinutes = dragMinutes !== null ? dragMinutes : Math.round((currentTimePct / 100) * 1440)
+    let newMinutes = currentMinutes
+    
+    switch (e.key) {
+      case 'ArrowLeft':
+        newMinutes = Math.max(0, currentMinutes - 15) // 15 minute steps
+        break
+      case 'ArrowRight':
+        newMinutes = Math.min(1440, currentMinutes + 15)
+        break
+      case 'Home':
+        newMinutes = 0
+        break
+      case 'End':
+        newMinutes = 1440
+        break
+      default:
+        return
+    }
+    
+    e.preventDefault()
+    setDragMinutes(newMinutes)
+  }, [dragMinutes, currentTimePct])
 
   // The % position of the marker line — either dragged or current time
   const markerPct = dragMinutes !== null ? (dragMinutes / 1440) * 100 : currentTimePct
@@ -196,9 +284,9 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
 
   // The left offset for the vertical line accounts for the day label width + gap + padding
   // Day label area = w-10 (40px) + gap-3 (12px) + px-3 (12px left) = 64px
-  const barLeftOffset = 64
+  const barLeftOffset = BAR_LEFT_OFFSET
   // Right padding = px-3 (12px) = 12px
-  const barRightPad = 16
+  const barRightPad = BAR_RIGHT_PAD
 
   const popupContent = (
     <div className="w-full max-w-lg mx-auto select-none">
@@ -216,18 +304,7 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
 
       {/* Weekly schedule */}
       <div className="px-3 pb-2 space-y-1 relative">
-        {/* Vertical time indicator line — spans all rows */}
-        <div
-          className="absolute pointer-events-none z-10"
-          style={{
-            left: `calc(${barLeftOffset}px + (100% - ${barLeftOffset + barRightPad}px) * ${markerPct / 100})`,
-            top: 0,
-            bottom: 60,
-          }}
-        >
-          <div className="w-px h-full bg-zinc-500/50 mx-auto" />
-        </div>
-
+        
         {DAYS.map((day, idx) => {
           const isToday = idx === todayET
           const trading = isTradingDay(idx)
@@ -249,22 +326,42 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
                   className={`flex-1 rounded-full relative overflow-hidden bg-zinc-800 ${
                     isToday ? "h-3 cursor-grab active:cursor-grabbing" : "h-2"
                   }`}
-                  onMouseDown={isToday ? startDrag : undefined}
-                  onTouchStart={isToday ? startDrag : undefined}
+                  onMouseDown={isToday ? handleTimelineMouseDown : undefined}
+                  onTouchStart={isToday ? handleTimelineTouchStart : undefined}
                 >
                   {trading ? (
-                    segments.map((seg, i) => (
-                      <div
-                        key={`${day}-${i}`}
-                        className="absolute top-0 h-full"
-                        style={{
-                          left: `${seg.startPct}%`,
-                          width: `${seg.widthPct}%`,
-                          backgroundColor: seg.color,
-                          opacity: 0.85,
-                        }}
-                      />
-                    ))
+                    <>
+                      {segments.map((seg, i) => (
+                        <div
+                          key={`${day}-${i}`}
+                          className="absolute top-0 h-full"
+                          style={{
+                            left: `${seg.startPct}%`,
+                            width: `${seg.widthPct}%`,
+                            backgroundColor: seg.color,
+                            opacity: 0.85,
+                          }}
+                        />
+                      ))}
+                      {/* Draggable indicator on today's bar */}
+                      {isToday && (
+                        <div
+                          className="absolute top-0 bottom-0 w-1 bg-white cursor-grab active:cursor-grabbing"
+                          style={{
+                            left: `${markerPct}%`,
+                            transform: 'translateX(-50%)',
+                            boxShadow: '0 0 4px rgba(0,0,0,0.5)'
+                          }}
+                          role="slider"
+                          aria-label="Time selector"
+                          aria-valuemin={0}
+                          aria-valuemax={1440}
+                          aria-valuenow={dragMinutes !== null ? dragMinutes : Math.round((currentTimePct / 100) * 1440)}
+                          tabIndex={0}
+                          onKeyDown={(e) => handleKeyDown(e, isToday)}
+                        />
+                      )}
+                    </>
                   ) : (
                     <div className="absolute inset-0 bg-zinc-700/30 rounded-full" />
                   )}
@@ -312,23 +409,7 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
           )
         })}
 
-        {/* Draggable building icon below all bars */}
-        <div className="relative" style={{ height: 32, marginLeft: barLeftOffset, marginRight: barRightPad }}>
-          <div
-            className="absolute pointer-events-none z-20"
-            style={{
-              left: `${markerPct}%`,
-              transform: "translateX(-50%)",
-              top: 0,
-            }}
-          >
-            <div className="flex flex-col items-center">
-              <div className="w-px h-3 bg-zinc-500/50" />
-              <Building2 className="h-5 w-5 text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.5)]" />
-            </div>
-          </div>
-        </div>
-      </div>
+              </div>
 
       {/* Legend */}
       <div className="px-5 pb-5">
