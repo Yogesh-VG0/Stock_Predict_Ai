@@ -181,11 +181,11 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
           </div>
         </div>
 
-        <div className="hidden md:block flex-1 max-w-md mx-4">
+        <div className="hidden md:flex flex-1 max-w-xl ml-4 mr-2">
           <SearchWidget />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center">
           <NotificationWidget />
         </div>
       </div>

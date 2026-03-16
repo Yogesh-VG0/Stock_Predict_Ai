@@ -97,20 +97,20 @@ export default function SankeyView({ symbol = "AAPL" }: { symbol?: string }) {
                 className="bg-zinc-900 rounded-lg p-3 sm:p-4 border border-zinc-800"
             >
                 <form onSubmit={handleSearch} className="flex gap-2 mb-3 sm:mb-4">
-                    <div className="relative flex-1">
-                        <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
+                    <div className="relative flex-1 group">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-500 group-focus-within:text-emerald-400 transition-colors" />
                         <input
                             type="text"
-                            placeholder="Enter stock symbol (e.g. AAPL, MSFT)"
+                            placeholder="Search by symbol or company name..."
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
-                            className="w-full bg-zinc-800 border border-zinc-700 rounded-md py-2 pl-9 pr-4 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                            className="w-full bg-zinc-800/80 border border-zinc-700/60 rounded-lg py-2.5 pl-10 pr-4 text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/40 focus:border-emerald-500/50 transition-all"
                         />
                     </div>
                     <button
                         type="submit"
                         disabled={!searchQuery}
-                        className="bg-emerald-500 hover:bg-emerald-600 text-black font-medium rounded-md px-3 sm:px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold rounded-lg px-4 sm:px-5 py-2.5 text-sm disabled:opacity-40 disabled:cursor-not-allowed transition-all shadow-sm shadow-emerald-500/20 hover:shadow-emerald-500/30"
                     >
                         Search
                     </button>

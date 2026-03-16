@@ -35,6 +35,7 @@ import {
   SiTradingview,
   SiTypescript,
   SiVercel,
+  SiKoyeb,
 } from "react-icons/si"
 import { TbBrain } from "react-icons/tb"
 
@@ -166,6 +167,7 @@ const TECH_STACK_GROUPS = [
     items: [
       { name: "GitHub Actions", icon: SiGithubactions },
       { name: "Vercel", icon: SiVercel },
+      { name: "Koyeb", icon: SiKoyeb },
     ],
   },
 ]
