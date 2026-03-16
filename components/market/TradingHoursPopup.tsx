@@ -216,18 +216,7 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
 
       {/* Weekly schedule */}
       <div className="px-3 pb-2 space-y-1 relative">
-        {/* Vertical time indicator line — spans all rows */}
-        <div
-          className="absolute pointer-events-none z-10"
-          style={{
-            left: `calc(${barLeftOffset}px + (100% - ${barLeftOffset + barRightPad}px) * ${markerPct / 100})`,
-            top: 0,
-            bottom: 60,
-          }}
-        >
-          <div className="w-px h-full bg-zinc-500/50 mx-auto" />
-        </div>
-
+        
         {DAYS.map((day, idx) => {
           const isToday = idx === todayET
           const trading = isTradingDay(idx)
@@ -270,13 +259,7 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
                   )}
                 </div>
 
-                {/* Right side: show time only on today's row (to the right of bar) */}
-                {isToday && (
-                  <span className="text-xs font-mono text-white min-w-[42px] text-right flex-shrink-0">
-                    {displayTimeStr}
-                  </span>
-                )}
-              </div>
+                              </div>
 
               {/* Triangle marker + time underneath today's bar */}
               {isToday && (
@@ -318,23 +301,7 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
           )
         })}
 
-        {/* Draggable building icon below all bars */}
-        <div className="relative" style={{ height: 32, marginLeft: barLeftOffset, marginRight: barRightPad }}>
-          <div
-            className="absolute pointer-events-none z-20"
-            style={{
-              left: `${markerPct}%`,
-              transform: "translateX(-50%)",
-              top: 0,
-            }}
-          >
-            <div className="flex flex-col items-center">
-              <div className="w-px h-3 bg-zinc-500/50" />
-              <Building2 className="h-5 w-5 text-cyan-400 drop-shadow-[0_0_6px_rgba(34,211,238,0.5)]" />
-            </div>
-          </div>
-        </div>
-      </div>
+              </div>
 
       {/* Legend */}
       <div className="px-5 pb-5">
