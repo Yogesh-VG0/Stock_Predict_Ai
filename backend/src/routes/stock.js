@@ -11,7 +11,8 @@ const {
   getPredictions,
   getTechnicalIndicators,
   searchStocks,
-  getSankeyData
+  getSankeyData,
+  getLandingStats
 } = require('../controllers/stockController');
 
 // Validate :symbol param — reject malformed tickers early
@@ -51,6 +52,9 @@ router.get('/batch/available', getAvailableStocksWithExplanations);
 
 // Search stocks by query — MUST be before /:symbol catch-all
 router.get('/search/:query', searchStocks);
+
+// Landing page stats — MUST be before /:symbol catch-all
+router.get('/landing/stats', getLandingStats);
 
 // Get Sankey financial flow data — MUST be before /:symbol catch-all
 router.get('/:symbol/sankey', getSankeyData);

@@ -227,6 +227,20 @@ export default function LandingPage() {
     },
   }
 
+  // Fetch real landing page stats from backend
+  const [landingStats, setLandingStats] = useState<{
+    topMover: { symbol: string; change: string };
+    stockCount: number;
+    lastRun: string;
+  } | null>(null)
+
+  useEffect(() => {
+    fetch('/api/stock/landing/stats')
+      .then(res => res.json())
+      .then(data => setLandingStats(data))
+      .catch(() => setLandingStats(null))
+  }, [])
+
   return (
     <>
       <script
@@ -622,14 +636,14 @@ export default function LandingPage() {
                   See It In Action
                 </h2>
                 <p className="text-zinc-400 mb-6 max-w-lg mx-auto leading-relaxed">
-                  Explore real ML predictions, AI explanations, and live market data for 100 S&P stocks.
+                  Explore real ML predictions, AI explanations, and live market data for {landingStats?.stockCount || 75} S&P stocks.
                 </p>
                 {/* Metric ticker pills */}
                 <div className="flex flex-wrap items-center justify-center gap-2.5 mb-8">
                   {[
-                    { text: "AAPL +2.3% today", color: "text-emerald-400" },
-                    { text: "100 stocks updated", color: "text-blue-400" },
-                    { text: "Model ran 4h ago", color: "text-purple-400" },
+                    { text: landingStats ? `${landingStats.topMover.symbol} ${landingStats.topMover.change} predicted` : "Loading…", color: landingStats?.topMover.change.startsWith('-') ? "text-red-400" : "text-emerald-400" },
+                    { text: landingStats ? `${landingStats.stockCount} stocks tracked` : "Loading…", color: "text-blue-400" },
+                    { text: landingStats ? `Model ran ${landingStats.lastRun}` : "Loading…", color: "text-purple-400" },
                   ].map((pill) => (
                     <div
                       key={pill.text}

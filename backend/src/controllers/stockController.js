@@ -1061,6 +1061,76 @@ const getSankeyData = async (req, res) => {
   }
 };
 
+// Get landing page stats (real data for "See It In Action" pills)
+const getLandingStats = async (req, res) => {
+  try {
+    // Get batch status for stock count and available tickers
+    const batchStatus = await mongoConnection.getBatchStatus();
+    const availableTickers = batchStatus.available_tickers || [];
+    const stockCount = availableTickers.length || 0;
+
+    // Pick a featured stock and get its prediction data
+    let topMover = { symbol: 'AAPL', change: '+0.0%' };
+    let lastRunText = 'recently';
+
+    if (availableTickers.length > 0) {
+      // Pick a random ticker for variety on each visit
+      const randomTicker = availableTickers[Math.floor(Math.random() * availableTickers.length)];
+
+      try {
+        const predictions = await mongoConnection.getLatestPredictions(randomTicker);
+        if (predictions) {
+          // Get the next_day prediction's price change
+          const nextDay = predictions.next_day || predictions['1_day'];
+          if (nextDay && nextDay.price_change !== undefined) {
+            const change = nextDay.price_change;
+            const sign = change >= 0 ? '+' : '';
+            topMover = {
+              symbol: randomTicker,
+              change: `${sign}${change.toFixed(2)}%`
+            };
+          }
+
+          // Compute "Model ran Xh ago" from the prediction timestamp
+          const anyWindow = predictions.next_day || predictions['1_day'] || predictions['7_day'] || predictions['30_day'];
+          if (anyWindow && anyWindow.timestamp) {
+            const predTime = new Date(anyWindow.timestamp);
+            const now = new Date();
+            const diffMs = now - predTime;
+            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+            const diffMins = Math.floor(diffMs / (1000 * 60));
+
+            if (diffHours < 1) {
+              lastRunText = `${diffMins}m ago`;
+            } else if (diffHours < 24) {
+              lastRunText = `${diffHours}h ago`;
+            } else {
+              const diffDays = Math.floor(diffHours / 24);
+              lastRunText = `${diffDays}d ago`;
+            }
+          }
+        }
+      } catch (predError) {
+        console.log(`⚠️ Could not fetch prediction for landing stats (${randomTicker}):`, predError.message);
+      }
+    }
+
+    res.json({
+      topMover,
+      stockCount,
+      lastRun: lastRunText
+    });
+  } catch (error) {
+    console.error('Error fetching landing stats:', error.message);
+    // Return sensible fallback
+    res.json({
+      topMover: { symbol: 'AAPL', change: '+0.0%' },
+      stockCount: 75,
+      lastRun: 'recently'
+    });
+  }
+};
+
 module.exports = {
   getStockDetails,
   getAIAnalysis,
@@ -1072,5 +1142,6 @@ module.exports = {
   getPredictions,
   getTechnicalIndicators,
   searchStocks,
-  getSankeyData
+  getSankeyData,
+  getLandingStats
 }; 

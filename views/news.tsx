@@ -71,33 +71,30 @@ export default function NewsPage() {
     if (searchTerm) params.set("search", searchTerm)
     params.set("limit", PAGE_SIZE.toString())
     params.set("page", (opts.pageOverride || page).toString())
-    
-    // Fetch RSS news if ticker filter is active
-    if (activeTickers.length === 1) {
-      try {
-        const rssRes = await fetch(`/api/news/rss?symbol=${activeTickers[0]}`);
-        const rssData = await rssRes.json();
-        // Apply sentiment filter to RSS news
-        let filteredRss = rssData.data || [];
+    // Fire RSS and unified fetches in parallel for speed
+    const unifiedPromise = fetch(`/api/news/unified?${params.toString()}`).then(r => r.json());
+    const rssPromise = activeTickers.length === 1
+      ? fetch(`/api/news/rss?symbol=${activeTickers[0]}`).then(r => r.json()).catch(() => ({ data: [] }))
+      : Promise.resolve(null);
+
+    try {
+      const [unifiedResult, rssResult] = await Promise.all([unifiedPromise, rssPromise]);
+
+      // Handle RSS news
+      if (rssResult && rssResult.data) {
+        let filteredRss = rssResult.data;
         if (activeSentiment) {
-          filteredRss = filteredRss.filter((item: any) => 
+          filteredRss = filteredRss.filter((item: any) =>
             item.sentiment?.toLowerCase() === activeSentiment.toLowerCase()
           );
         }
         setRssNews(filteredRss);
-      } catch (error) {
-        console.error('Error fetching RSS news:', error);
+      } else {
         setRssNews([]);
       }
-    } else {
-      setRssNews([]);
-    }
 
-    try {
-      const res = await fetch(`/api/news/unified?${params.toString()}`)
-      const data = await res.json()
-      
-      // Only update news if we have results
+      // Handle unified news
+      const data = unifiedResult;
       if (data.data && data.data.length > 0) {
         if (opts.append) {
           setNews((prev) => [...prev, ...data.data])
@@ -105,12 +102,9 @@ export default function NewsPage() {
           setNews(data.data)
         }
         setMeta(data.meta)
-        // Check if there are more articles to load
         const hasMoreArticles = data.meta.total > (opts.pageOverride || page) * PAGE_SIZE;
         setHasMore(hasMoreArticles);
-        console.log('Has more articles:', hasMoreArticles, 'Total:', data.meta.total, 'Current page:', opts.pageOverride || page);
       } else {
-        // If no results, clear the news
         setNews([])
         setMeta(null)
         setHasMore(false)
@@ -118,6 +112,7 @@ export default function NewsPage() {
     } catch (error) {
       console.error('Error fetching news:', error);
       setNews([]);
+      setRssNews([]);
       setMeta(null);
       setHasMore(false);
     } finally {

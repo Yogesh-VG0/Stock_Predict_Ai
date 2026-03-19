@@ -2,6 +2,16 @@ const { getAggregateNews, getNewsApiSectorNews } = require('./newsService'); // 
 const { getFinnhubGeneralNews, getFinnhubCompanyNews, normalizeFinnhub: baseNormalizeFinnhub } = require('./finnhubNewsService');
 const vader = require('vader-sentiment');
 const { getTickerTickNews } = require('./tickertickNewsService');
+const crypto = require('crypto');
+
+// ── In-memory cache (3 min TTL) ──
+const NEWS_CACHE = new Map();
+const CACHE_TTL_MS = 3 * 60 * 1000; // 3 minutes
+
+function getCacheKey(params) {
+  const sorted = JSON.stringify(params, Object.keys(params).sort());
+  return crypto.createHash('md5').update(sorted).digest('hex');
+}
 
 // Static map of tickers to company name variations
 const TICKER_COMPANY_MAP = {
@@ -131,6 +141,14 @@ async function getUnifiedNews(params) {
     symbols, industries, tags, sentiment, search, from, to, page = 1, limit = 20, source = 'all'
   } = params;
 
+  // ── Cache check ──
+  const cacheKey = getCacheKey(params);
+  const cached = NEWS_CACHE.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
+    console.log(`📰 News cache HIT (key=${cacheKey.slice(0,8)}…)`);
+    return cached.data;
+  }
+
   // Fetch in parallel
   const promises = [];
   let newsApiSectorPromise = null;
@@ -249,7 +267,7 @@ async function getUnifiedNews(params) {
   const endIndex = startIndex + limit;
   const paged = allArticles.slice(startIndex, endIndex);
 
-  return {
+  const result = {
     data: paged,
     meta: {
       total: allArticles.length,
@@ -264,6 +282,17 @@ async function getUnifiedNews(params) {
       },
     },
   };
+
+  // ── Store in cache ──
+  NEWS_CACHE.set(cacheKey, { data: result, timestamp: Date.now() });
+  // Evict old entries to prevent unbounded growth
+  if (NEWS_CACHE.size > 100) {
+    const oldest = NEWS_CACHE.keys().next().value;
+    NEWS_CACHE.delete(oldest);
+  }
+  console.log(`📰 News cache MISS — stored (key=${cacheKey.slice(0,8)}…, cache size=${NEWS_CACHE.size})`);
+
+  return result;
 }
 
 module.exports = { getUnifiedNews }; 
