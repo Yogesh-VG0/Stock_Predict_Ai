@@ -17,6 +17,9 @@ import {
   Activity,
   Globe,
   Cpu,
+  TrendingUp,
+  TrendingDown,
+  Clock,
 } from "lucide-react"
 import DisclaimerModal from "@/components/disclaimer/disclaimer-modal"
 import {
@@ -639,20 +642,82 @@ export default function LandingPage() {
                   Explore real ML predictions, AI explanations, and live market data for {landingStats?.stockCount || 75} S&P stocks.
                 </p>
                 {/* Metric ticker pills */}
-                <div className="flex flex-wrap items-center justify-center gap-2.5 mb-8">
-                  {[
-                    { text: landingStats ? `${landingStats.topMover.symbol} ${landingStats.topMover.change} predicted` : "Loading…", color: landingStats?.topMover.change.startsWith('-') ? "text-red-400" : "text-emerald-400" },
-                    { text: landingStats ? `${landingStats.stockCount} stocks tracked` : "Loading…", color: "text-blue-400" },
-                    { text: landingStats ? `Model ran ${landingStats.lastRun}` : "Loading…", color: "text-purple-400" },
-                  ].map((pill) => (
-                    <div
-                      key={pill.text}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-zinc-800 bg-zinc-900/60 text-xs"
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-blink" />
-                      <span className={pill.color}>{pill.text}</span>
-                    </div>
-                  ))}
+                <div className="flex flex-wrap items-center justify-center gap-3 mb-8">
+                  {/* Top Mover Pill */}
+                  <motion.div
+                    key="mover"
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay: 0.1 }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-full border border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm text-sm shadow-lg shadow-black/20"
+                  >
+                    {landingStats ? (
+                      <>
+                        <img
+                          src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${landingStats.topMover.symbol}.png`}
+                          alt={landingStats.topMover.symbol}
+                          className="w-5 h-5 rounded-full bg-zinc-800 object-contain"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                        />
+                        {landingStats.topMover.change.startsWith('-') ? (
+                          <TrendingDown className="h-3.5 w-3.5 text-red-400" />
+                        ) : (
+                          <TrendingUp className="h-3.5 w-3.5 text-emerald-400" />
+                        )}
+                        <span className={landingStats.topMover.change.startsWith('-') ? "text-red-400 font-medium" : "text-emerald-400 font-medium"}>
+                          {landingStats.topMover.symbol} {landingStats.topMover.change} predicted
+                        </span>
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-5 h-5 rounded-full bg-zinc-700 animate-pulse" />
+                        <div className="h-3.5 w-28 rounded-full bg-zinc-700 animate-pulse" />
+                      </div>
+                    )}
+                  </motion.div>
+
+                  {/* Stocks Tracked Pill */}
+                  <motion.div
+                    key="count"
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay: 0.25 }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-full border border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm text-sm shadow-lg shadow-black/20"
+                  >
+                    {landingStats ? (
+                      <>
+                        <BarChart3 className="h-3.5 w-3.5 text-blue-400" />
+                        <span className="text-blue-400 font-medium">{landingStats.stockCount} stocks tracked</span>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-3.5 h-3.5 rounded bg-zinc-700 animate-pulse" />
+                        <div className="h-3.5 w-24 rounded-full bg-zinc-700 animate-pulse" />
+                      </div>
+                    )}
+                  </motion.div>
+
+                  {/* Model Last Run Pill */}
+                  <motion.div
+                    key="model"
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay: 0.4 }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-full border border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm text-sm shadow-lg shadow-black/20"
+                  >
+                    {landingStats ? (
+                      <>
+                        <Clock className="h-3.5 w-3.5 text-purple-400" />
+                        <span className="text-purple-400 font-medium">Model ran {landingStats.lastRun}</span>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="w-3.5 h-3.5 rounded bg-zinc-700 animate-pulse" />
+                        <div className="h-3.5 w-24 rounded-full bg-zinc-700 animate-pulse" />
+                      </div>
+                    )}
+                  </motion.div>
                 </div>
                 <Link
                   href="/dashboard"
