@@ -346,6 +346,10 @@ export default function NewsPage() {
 
       {isLoading && page === 1 ? (
         <div className="space-y-4">
+          <div className="flex items-center justify-center gap-3 py-6">
+            <Loader2 className="h-5 w-5 text-emerald-500 animate-spin" />
+            <span className="text-sm text-zinc-400">Loading news from multiple sources — this may take a moment...</span>
+          </div>
           {[...Array(5)].map((_, i) => (
             <div key={i} className="h-32 bg-zinc-900 animate-pulse rounded-lg"></div>
           ))}

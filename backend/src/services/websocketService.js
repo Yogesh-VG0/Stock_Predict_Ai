@@ -642,10 +642,13 @@ class WebSocketService {
     const now = Date.now();
     const cached = this.priceCache.get(symbol);
 
-    // Need previousClose to calculate change - use cached value or current price
-    const previousClose = cached?.data?.previousClose || price;
-    const change = price - previousClose;
-    const changePercent = previousClose > 0 ? (change / previousClose) * 100 : 0;
+    // Only use previousClose if it was set by the Finnhub quote API (has a real value).
+    // If no quote API call has happened yet, previousClose will be undefined/0 — 
+    // in that case, DON'T set it to the current trade price (that would make % change ~0).
+    const previousClose = cached?.data?.previousClose;
+    const hasPreviousClose = previousClose && previousClose > 0;
+    const change = hasPreviousClose ? price - previousClose : (cached?.data?.change || 0);
+    const changePercent = hasPreviousClose ? (change / previousClose) * 100 : (cached?.data?.changePercent || 0);
 
     // Update or create cache entry with live data
     this.priceCache.set(symbol, {
@@ -657,11 +660,22 @@ class WebSocketService {
         high: Math.max(price, cached?.data?.high || price),
         low: cached?.data?.low ? Math.min(price, cached.data.low) : price,
         open: cached?.data?.open || price,
-        previousClose: previousClose,
+        previousClose: previousClose || 0,
         timestamp: now
       },
       expiry: now + this.CACHE_TTL * 2 // WebSocket data gets longer TTL
     });
+
+    // If we don't have previousClose yet, trigger a quote API fetch in the background
+    if (!hasPreviousClose && !this._pendingQuoteFetches?.has(symbol)) {
+      if (!this._pendingQuoteFetches) this._pendingQuoteFetches = new Set();
+      this._pendingQuoteFetches.add(symbol);
+      this.getCurrentPrice(symbol).then(() => {
+        this._pendingQuoteFetches?.delete(symbol);
+      }).catch(() => {
+        this._pendingQuoteFetches?.delete(symbol);
+      });
+    }
   }
 
   // Get volume data for a symbol

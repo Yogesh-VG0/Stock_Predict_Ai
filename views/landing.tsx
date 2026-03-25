@@ -655,7 +655,7 @@ export default function LandingPage() {
                     className="flex items-center gap-2 px-4 py-2 rounded-full border border-zinc-700/60 bg-zinc-900/80 backdrop-blur-sm text-sm shadow-lg shadow-black/20"
                   >
                     {landingStats ? (
-                      <>
+                      <Link href={`/stocks/${landingStats.topMover.symbol}`} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
                         <img
                           src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${landingStats.topMover.symbol}.png`}
                           alt={landingStats.topMover.symbol}
@@ -671,7 +671,7 @@ export default function LandingPage() {
                           {landingStats.topMover.symbol} {landingStats.topMover.change} predicted
                         </span>
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      </>
+                      </Link>
                     ) : (
                       <div className="flex items-center gap-2">
                         <div className="w-5 h-5 rounded-full bg-zinc-700 animate-pulse" />
