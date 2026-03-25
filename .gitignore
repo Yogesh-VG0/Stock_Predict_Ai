@@ -67,6 +67,9 @@ models/
 !ml_backend/models/
 !ml_backend/models/*.py
 !ml_backend/models/__init__.py
+# And DO track backend Mongoose schema files
+!backend/src/models/
+!backend/src/models/*.js
 
 # ML pipeline logs & temp data
 pipeline_log*.txt
