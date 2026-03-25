@@ -342,10 +342,9 @@ const subscribeToUpdates = async (req, res) => {
     
     // Subscribe to each symbol
     uniqueSymbols.forEach(symbol => {
-      wsService.subscribe(symbol, (tradeData) => {
-        // This callback will be called when real-time data arrives
-        // In a real app, you'd emit this to connected clients via Socket.IO
-        console.log(`Real-time update for ${symbol}:`, tradeData);
+      wsService.subscribe(symbol, () => {
+        // Callback for real-time data — price cache is updated automatically
+        // by WebSocketService.updatePriceFromTrade(); no logging needed here.
       });
     });
     

@@ -56,6 +56,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const lastFetchRef = useRef<number>(0)
+  const subscribedStocksRef = useRef<Set<string>>(new Set())
   
   const CACHE_DURATION = 60 * 1000 // 1 minute cache
   const POLL_INTERVAL = 5000 // Poll every 5 seconds (reduced to avoid rate limits)
@@ -208,6 +209,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     }
   }, [])
 
+  // Keep ref in sync with state so polling interval always reads latest value
+  useEffect(() => {
+    subscribedStocksRef.current = subscribedStocks
+  }, [subscribedStocks])
+
   // Start polling for subscribed stocks
   const startPolling = useCallback(() => {
     if (pollIntervalRef.current) {
@@ -215,11 +221,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     }
     
     pollIntervalRef.current = setInterval(() => {
-      if (subscribedStocks.size > 0) {
-        fetchRealTimePrices(Array.from(subscribedStocks))
+      if (subscribedStocksRef.current.size > 0) {
+        fetchRealTimePrices(Array.from(subscribedStocksRef.current))
       }
     }, POLL_INTERVAL)
-  }, [fetchRealTimePrices]) // Remove subscribedStocks dependency to prevent recreation
+  }, [fetchRealTimePrices])
 
   // Public API methods
   const subscribeToStock = useCallback((symbol: string) => {
