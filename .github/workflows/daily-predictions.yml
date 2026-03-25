@@ -299,3 +299,37 @@ jobs:
             drift_report.txt
             retention_report.txt
           if-no-files-found: ignore
+
+      - name: Notify on failure (create GitHub issue)
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const title = `🚨 Daily ML Pipeline Failed — ${new Date().toISOString().slice(0,10)}`;
+            const body = [
+              `## Pipeline Failure`,
+              ``,
+              `**Run:** [#${context.runId}](${runUrl})`,
+              `**Trigger:** ${context.eventName}`,
+              `**Commit:** \`${context.sha.slice(0,7)}\``,
+              `**Time:** ${new Date().toISOString()}`,
+              ``,
+              `Check the [run logs](${runUrl}) and uploaded artifacts for details.`,
+              ``,
+              `> This issue was auto-created by the pipeline failure notifier.`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['pipeline-failure', 'automated'],
+            });
+
+      - name: Pipeline success summary
+        if: success()
+        run: |
+          echo "✅ Daily ML Pipeline completed successfully"
+          echo "  Run ID: ${{ github.run_id }}"
+          echo "  Commit: ${{ github.sha }}"

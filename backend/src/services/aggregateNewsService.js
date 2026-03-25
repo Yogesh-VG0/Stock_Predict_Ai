@@ -62,12 +62,6 @@ function normalizeEodhd(article, requestedSymbols) {
   // Sentiment analysis using vader-sentiment
   const textToAnalyze = [article.title, article.content].filter(Boolean).join('. ');
   const sentimentResult = analyzeSentiment(textToAnalyze);
-  // Log the text, score, and label for debugging
-  console.log('EODHD Sentiment Analysis:', {
-    text: textToAnalyze,
-    score: sentimentResult.score,
-    sentiment: sentimentResult.sentiment
-  });
   // If article.sentiment exists and is valid, use it; otherwise use analyzed
   let sentiment = 'neutral';
   let score = 0;
@@ -146,54 +140,40 @@ async function getUnifiedNews(params) {
   const cached = NEWS_CACHE.get(cacheKey);
   if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
     console.log(`📰 News cache HIT (key=${cacheKey.slice(0,8)}…)`);
+
     return cached.data;
   }
 
-  // Fetch in parallel
+  // Fetch ALL sources in parallel (Marketaux, Finnhub, TickerTick, NewsAPI)
   const promises = [];
-  let newsApiSectorPromise = null;
   if (symbols) {
-    // Fetch all sources for ticker filter
     const today = new Date();
     const fromDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000); // last 7 days
     promises.push(getAggregateNews({ symbols, page, limit })); // Marketaux
     promises.push(getFinnhubCompanyNews(symbols.split(',')[0], fromDate.toISOString().slice(0, 10), today.toISOString().slice(0, 10)));
     promises.push(getTickerTickNews({ symbols, page, limit }));
+    promises.push(Promise.resolve([])); // No sector news when filtering by symbol
   } else {
-    // Fetch all sources as before
     promises.push(getAggregateNews({ symbols, industries, sentiment, search, page, limit }));
     if (source === 'all' || source === 'finnhub') {
-      if (symbols) {
-        const today = new Date();
-        const fromDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000); // last 7 days
-        promises.push(getFinnhubCompanyNews(symbols.split(',')[0], fromDate.toISOString().slice(0, 10), today.toISOString().slice(0, 10)));
-      } else {
-        promises.push(getFinnhubGeneralNews());
-      }
+      promises.push(getFinnhubGeneralNews());
     } else {
       promises.push(Promise.resolve([]));
     }
-    // TickerTick
     promises.push(getTickerTickNews({ symbols, industries, sentiment, search, page, limit }));
-    // NewsAPI sector news (only if industries filter is set)
+    // NewsAPI sector news (only if industries filter is set) — fetched in parallel
     if (industries) {
       const firstIndustry = industries.split(',')[0];
-      console.log('Calling NewsAPI for sector:', firstIndustry);
-      newsApiSectorPromise = getNewsApiSectorNews(firstIndustry);
+      promises.push(getNewsApiSectorNews(firstIndustry).catch(e => {
+        console.error('NewsAPI fetch error:', e.message);
+        return [];
+      }));
+    } else {
+      promises.push(Promise.resolve([]));
     }
   }
 
-  const [marketauxRes, finnhubRes, tickertickRes] = await Promise.all(promises);
-  let newsApiSectorArticles = [];
-  if (newsApiSectorPromise) {
-    try {
-      newsApiSectorArticles = await newsApiSectorPromise;
-      console.log('NewsAPI articles fetched:', newsApiSectorArticles.length);
-    } catch (e) {
-      newsApiSectorArticles = [];
-      console.error('NewsAPI fetch error:', e);
-    }
-  }
+  const [marketauxRes, finnhubRes, tickertickRes, newsApiSectorArticles] = await Promise.all(promises);
 
   // --- FILTER AND LIMIT EACH SOURCE INDEPENDENTLY ---
   // Marketaux
@@ -208,14 +188,11 @@ async function getUnifiedNews(params) {
   let tickertickArticles = Array.isArray(tickertickRes) ? tickertickRes : [];
   // NewsAPI
   let newsApiArticles = Array.isArray(newsApiSectorArticles) ? newsApiSectorArticles : [];
-  console.log('NewsAPI raw articles:', newsApiArticles);
 
   function filterArticles(articles) {
     let filtered = articles;
-    console.log('Filtering articles with sentiment:', sentiment);
-    console.log('Before sentiment filter:', articles.map(a => ({ title: a.title, sentiment: a.sentiment })));
+    if (process.env.NODE_ENV === 'development') console.log('Filtering articles with sentiment:', sentiment);
     if (sentiment) filtered = filtered.filter(a => a.sentiment && a.sentiment.toLowerCase() === sentiment.toLowerCase());
-    console.log('After sentiment filter:', filtered.map(a => ({ title: a.title, sentiment: a.sentiment })));
     if (from) filtered = filtered.filter(a => new Date(a.published_at) >= new Date(from));
     if (to) filtered = filtered.filter(a => new Date(a.published_at) <= new Date(to));
     if (tags) filtered = filtered.filter(a => a.industry?.toLowerCase().includes(tags.toLowerCase()));
@@ -247,7 +224,6 @@ async function getUnifiedNews(params) {
   finnhubArticles = filterArticles(finnhubArticles);
   tickertickArticles = filterArticles(tickertickArticles);
   newsApiArticles = filterArticles(newsApiArticles);
-  console.log('NewsAPI filtered articles:', newsApiArticles);
 
   // --- DEDUPE BY EXACT URL (case-insensitive, trimmed) ---
   const seenUrls = new Set();

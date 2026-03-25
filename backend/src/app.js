@@ -11,6 +11,7 @@ const stockRoutes = require('./routes/stock');
 const watchlistRoutes = require('./routes/watchlist');
 const notificationRoutes = require('./routes/notifications');
 const notificationService = require('./services/notificationService');
+const { sessionHandler } = require('./middleware/auth');
 
 // Note: dotenv is loaded in server.js before this module is required
 
@@ -67,11 +68,20 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
-// CORS: restrict to known origins (falls back to open in dev)
+// CORS: restrict to known origins; never fall back to open in production
+const DEFAULT_ORIGINS = ['https://stockpredict.dev', 'https://www.stockpredict.dev'];
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
-  : undefined; // undefined = allow all (dev mode)
-app.use(cors(allowedOrigins ? { origin: allowedOrigins, credentials: true } : {}));
+  : (process.env.NODE_ENV === 'production' ? DEFAULT_ORIGINS : ['http://localhost:3000', 'http://localhost:5000', ...DEFAULT_ORIGINS]);
+app.use(cors({ origin: allowedOrigins, credentials: true }));
+
+// Warn on missing security env vars at startup
+if (!process.env.JWT_SECRET_KEY) {
+  console.warn('⚠️  JWT_SECRET_KEY not set — using insecure default. Set this in production!');
+}
+if (!process.env.CORS_ORIGINS && process.env.NODE_ENV === 'production') {
+  console.warn('⚠️  CORS_ORIGINS not set — using default allowlist (stockpredict.dev)');
+}
 
 app.use(express.json({ limit: '1mb' })); // Limit JSON body size
 
@@ -86,6 +96,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// Auth endpoint — issue/refresh anonymous session tokens
+app.post('/api/auth/session', sessionHandler);
 
 app.use('/api/news', newsRoutes);
 app.use('/api/market', marketRoutes);
@@ -203,13 +216,29 @@ app.get('/api/v1/sentiment', async (req, res) => {
   }
 });
 
-// Health check endpoint
+// Health check endpoint — reports real dependency status
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'healthy', 
+  const mongoStatus = mongoConnection.isConnected ? 'connected' : 'disconnected';
+  const memUsage = process.memoryUsage();
+  const uptimeSec = process.uptime();
+
+  const health = {
+    status: mongoStatus === 'connected' ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
-    service: 'stockpredict-backend'
-  });
+    service: 'stockpredict-backend',
+    uptime: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`,
+    dependencies: {
+      mongodb: mongoStatus,
+    },
+    memory: {
+      rss_mb: Math.round(memUsage.rss / 1024 / 1024),
+      heap_used_mb: Math.round(memUsage.heapUsed / 1024 / 1024),
+      heap_total_mb: Math.round(memUsage.heapTotal / 1024 / 1024),
+    },
+  };
+
+  const httpStatus = mongoStatus === 'connected' ? 200 : 503;
+  res.status(httpStatus).json(health);
 });
 
-module.exports = app; 
+module.exports = app;

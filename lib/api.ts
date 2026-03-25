@@ -1,4 +1,5 @@
 import { backendReady } from '@/lib/backend-health'
+import { authHeaders } from '@/lib/session'
 
 // Use relative URLs - they'll be handled by Next.js rewrites (dev) or Vercel rewrites (prod)
 const isProduction = typeof window !== 'undefined' && window.location.hostname !== 'localhost';
@@ -703,9 +704,12 @@ export interface WatchlistData {
   totalChangePercent: number;
 }
 
-export async function getWatchlist(userId: string = 'default'): Promise<WatchlistData | null> {
+export async function getWatchlist(): Promise<WatchlistData | null> {
   try {
-    const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/${userId}`);
+    const auth = await authHeaders();
+    const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/me`, {
+      headers: { ...auth },
+    });
     if (!response.ok) {
       throw new Error('Failed to fetch watchlist');
     }
@@ -717,12 +721,14 @@ export async function getWatchlist(userId: string = 'default'): Promise<Watchlis
   }
 }
 
-export async function addToWatchlist(userId: string, symbol: string): Promise<{ success: boolean; message?: string; error?: string }> {
+export async function addToWatchlist(symbol: string): Promise<{ success: boolean; message?: string; error?: string }> {
   try {
-    const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/${userId}/add`, {
+    const auth = await authHeaders();
+    const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/me/add`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...auth,
       },
       body: JSON.stringify({ symbol: symbol.toUpperCase() })
     });
@@ -735,10 +741,12 @@ export async function addToWatchlist(userId: string, symbol: string): Promise<{ 
   }
 }
 
-export async function removeFromWatchlist(userId: string, symbol: string): Promise<{ success: boolean; message?: string; error?: string }> {
+export async function removeFromWatchlist(symbol: string): Promise<{ success: boolean; message?: string; error?: string }> {
   try {
-    const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/${userId}/${symbol}`, {
-      method: 'DELETE'
+    const auth = await authHeaders();
+    const response = await fetch(`${NODE_BACKEND_URL}/api/watchlist/me/${symbol}`, {
+      method: 'DELETE',
+      headers: { ...auth },
     });
 
     const data = await response.json();

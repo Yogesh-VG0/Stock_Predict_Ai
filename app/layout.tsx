@@ -46,7 +46,7 @@ export const metadata: Metadata = {
       "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts, SHAP explainability, and Gemini AI narratives for smarter investing.",
     images: [
       {
-        url: "/og-image.png",
+        url: "/opengraph-image",
         width: 1200,
         height: 630,
         alt: "StockPredict AI | AI-Powered Stock Predictions",
@@ -58,7 +58,7 @@ export const metadata: Metadata = {
     title: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     description:
       "Free AI stock predictions for S&P 100 companies. Daily LightGBM forecasts with SHAP explainability and Gemini AI narratives.",
-    images: ["/og-image.png"],
+    images: ["/opengraph-image"],
     creator: "@YogeshVadivel",
   },
   robots: {

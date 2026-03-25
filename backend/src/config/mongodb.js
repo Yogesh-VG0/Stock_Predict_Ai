@@ -28,8 +28,6 @@ class MongoDBConnection {
       console.log(`📡 Connecting to MongoDB: ${maskedUri}`);
 
       this.connection = await mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
         serverSelectionTimeoutMS: 10000, // 10 second timeout
         connectTimeoutMS: 10000,
       });
@@ -138,11 +136,18 @@ class MongoDBConnection {
       // Get all tickers with explanations
       const stocksWithExplanations = await collection.distinct('ticker', { window: 'comprehensive' });
 
-      // Define all target tickers (same as ML backend)
+      // Define all target tickers (must match ML backend TICKERS list — 75 S&P 100 stocks)
       const allTickers = [
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'NFLX',
-        'JPM', 'V', 'JNJ', 'WMT', 'PG', 'UNH', 'HD', 'MA', 'BAC', 'XOM',
-        'LLY', 'ABBV', 'AVGO', 'COST', 'CRM', 'ORCL', 'BRK-B'
+        'AAPL', 'ABBV', 'ADBE', 'AMAT', 'AMD', 'AMGN', 'AMT', 'AMZN',
+        'AVGO', 'AXP', 'BA', 'BAC', 'BKNG', 'BRK-B', 'C', 'CAT',
+        'CHTR', 'CMCSA', 'COST', 'CRM', 'CSCO', 'CVS', 'CVX', 'DE',
+        'DIS', 'FDX', 'GE', 'GILD', 'GOOGL', 'GS', 'HD', 'HON',
+        'IBM', 'INTC', 'INTU', 'ISRG', 'JNJ', 'JPM', 'KO', 'LIN',
+        'LLY', 'LMT', 'LOW', 'MA', 'MCD', 'MDLZ', 'META', 'MRK',
+        'MS', 'MSFT', 'NEE', 'NFLX', 'NKE', 'NVDA', 'ORCL', 'PEP',
+        'PFE', 'PG', 'PLTR', 'PYPL', 'QCOM', 'RTX', 'SBUX', 'T',
+        'TGT', 'TMUS', 'TSLA', 'TXN', 'UNH', 'UPS', 'V', 'VZ',
+        'WFC', 'WMT', 'XOM'
       ];
 
       const coverage = stocksWithExplanations.length;

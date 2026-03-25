@@ -379,11 +379,11 @@ class WebSocketService {
 
       try {
         this.ws.send(JSON.stringify(subscribeMessage));
-        console.log(`✅ Subscribed to ${symbol}`);
       } catch (error) {
-        console.error(`Error subscribing to ${symbol}:`, error);
+        console.error(`Error subscribing to ${symbol}:`, error.message);
       }
     });
+    console.log(`✅ Subscribed to ${uniqueSymbols.join(', ')}`);
   }
 
   unsubscribeFromSymbols(symbols) {
@@ -399,11 +399,11 @@ class WebSocketService {
 
       try {
         this.ws.send(JSON.stringify(unsubscribeMessage));
-        console.log(`❌ Unsubscribed from ${symbol}`);
       } catch (error) {
-        console.error(`Error unsubscribing from ${symbol}:`, error);
+        console.error(`Error unsubscribing from ${symbol}:`, error.message);
       }
     });
+    console.log(`❌ Unsubscribed from ${symbols.join(', ')}`);
   }
 
   subscribe(symbol, callback) {
@@ -420,9 +420,6 @@ class WebSocketService {
     const callbacks = this.subscribers.get(symbol);
     if (!callbacks.includes(callback)) {
       callbacks.push(callback);
-      console.log(`📊 Added subscriber for ${symbol}`);
-    } else {
-      console.log(`📊 Subscriber already exists for ${symbol}`);
     }
   }
 
@@ -440,7 +437,6 @@ class WebSocketService {
             this.unsubscribeFromSymbols([symbol]);
           }
         }
-        console.log(`📊 Removed subscriber for ${symbol}`);
       }
     }
   }

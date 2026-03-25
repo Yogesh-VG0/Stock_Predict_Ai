@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { requireAuth } = require('../middleware/auth');
 const { 
   getWatchlist,
   addToWatchlist,
@@ -8,15 +9,6 @@ const {
   getWebSocketStatus,
   subscribeToUpdates
 } = require('../controllers/watchlistController');
-
-// Validate :userId param — alphanumeric + hyphens only (UUID / Firebase UID)
-const VALID_USERID_RE = /^[a-zA-Z0-9_\-]{1,128}$/;
-router.param('userId', (req, res, next, val) => {
-  if (!VALID_USERID_RE.test(val)) {
-    return res.status(400).json({ error: 'Invalid userId' });
-  }
-  next();
-});
 
 // Validate :symbol param on watchlist routes
 const VALID_SYMBOL_RE = /^[A-Z0-9.\-]{1,10}$/;
@@ -28,15 +20,7 @@ router.param('symbol', (req, res, next, val) => {
   next();
 });
 
-// Get user's watchlist
-router.get('/:userId', getWatchlist);
-
-// Add stock to watchlist
-router.post('/:userId/add', addToWatchlist);
-
-// Remove stock from watchlist
-router.delete('/:userId/:symbol', removeFromWatchlist);
-
+// ── Public routes (no auth needed) ──
 // Get real-time updates for symbols
 router.get('/updates/realtime', getRealtimeUpdates);
 
@@ -46,4 +30,20 @@ router.get('/status/websocket', getWebSocketStatus);
 // Subscribe to real-time updates
 router.post('/subscribe', subscribeToUpdates);
 
-module.exports = router; 
+// ── Protected routes (require valid session token) ──
+// Get authenticated user's watchlist
+router.get('/me', requireAuth, getWatchlist);
+
+// Add stock to authenticated user's watchlist
+router.post('/me/add', requireAuth, addToWatchlist);
+
+// Remove stock from authenticated user's watchlist
+router.delete('/me/:symbol', requireAuth, removeFromWatchlist);
+
+// ── Legacy routes for backward compatibility (redirect to /me) ──
+// These allow old clients to keep working while they migrate to the new auth flow.
+router.get('/:legacyId', requireAuth, getWatchlist);
+router.post('/:legacyId/add', requireAuth, addToWatchlist);
+router.delete('/:legacyId/:symbol', requireAuth, removeFromWatchlist);
+
+module.exports = router;

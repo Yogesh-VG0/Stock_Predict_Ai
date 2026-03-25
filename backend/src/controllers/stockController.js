@@ -1082,12 +1082,13 @@ const getLandingStats = async (req, res) => {
         if (predictions) {
           // Get the next_day prediction's price change
           const nextDay = predictions.next_day || predictions['1_day'];
-          if (nextDay && nextDay.price_change !== undefined) {
-            const change = nextDay.price_change;
-            const sign = change >= 0 ? '+' : '';
+          if (nextDay && nextDay.price_change !== undefined && nextDay.current_price) {
+            // price_change is in dollars — convert to percentage
+            const pctChange = (nextDay.price_change / nextDay.current_price) * 100;
+            const sign = pctChange >= 0 ? '+' : '';
             topMover = {
               symbol: randomTicker,
-              change: `${sign}${change.toFixed(2)}%`
+              change: `${sign}${pctChange.toFixed(2)}%`
             };
           }
 

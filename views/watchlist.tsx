@@ -9,12 +9,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import Sparkline from "@/components/ui/sparkline"
 import { cn } from "@/lib/utils"
 import { 
-  getWatchlist, 
-  addToWatchlist, 
-  removeFromWatchlist, 
   type WatchlistItem,
   type WatchlistData
 } from "@/lib/api"
+import { authHeaders } from "@/lib/session"
 import { useWebSocket, useStockPrices } from "@/hooks/use-websocket-context"
 
 interface Alert {
@@ -59,7 +57,10 @@ export default function WatchlistPage() {
       setIsLoading(true)
       setError(null)
       
-      const response = await fetch('/api/watchlist/default')
+      const auth = await authHeaders()
+      const response = await fetch('/api/watchlist/me', {
+        headers: { ...auth },
+      })
       const data: WatchlistData = await response.json()
       
       if (data.success) {
@@ -125,10 +126,12 @@ export default function WatchlistPage() {
   // Add stock to watchlist
   const addToWatchlist = async (symbol: string) => {
     try {
-      const response = await fetch('/api/watchlist/default/add', {
+      const auth = await authHeaders()
+      const response = await fetch('/api/watchlist/me/add', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...auth,
         },
         body: JSON.stringify({ symbol: symbol.toUpperCase() })
       })
@@ -152,8 +155,10 @@ export default function WatchlistPage() {
   // Remove stock from watchlist
   const removeFromWatchlist = async (symbol: string) => {
     try {
-      const response = await fetch(`/api/watchlist/default/${symbol}`, {
-        method: 'DELETE'
+      const auth = await authHeaders()
+      const response = await fetch(`/api/watchlist/me/${symbol}`, {
+        method: 'DELETE',
+        headers: { ...auth },
       })
       
       const data = await response.json()

@@ -1,5 +1,6 @@
 const WebSocketService = require('../services/websocketService');
 const mongoConnection = require('../config/mongodb');
+const Watchlist = require('../models/Watchlist');
 
 // Initialize WebSocket service
 const wsService = new WebSocketService();
@@ -63,22 +64,20 @@ const COMPANY_DATA = {
   'KO': { name: 'The Coca-Cola Company', sector: 'Consumer Staples' }
 };
 
-// In-memory watchlist storage (in production, use MongoDB)
-const userWatchlists = new Map();
+// Default symbols for new users
+const DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX'];
 
 // Get user's watchlist
 const getWatchlist = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.userId; // set by requireAuth middleware
     
-    // Get user's watchlist from memory (or MongoDB in production)
-    let userWatchlist = userWatchlists.get(userId) || [];
-    
-    // If no watchlist exists, create a default one
-    if (userWatchlist.length === 0) {
-      userWatchlist = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX'];
-      userWatchlists.set(userId, userWatchlist);
+    // Get or create watchlist in MongoDB
+    let doc = await Watchlist.findOne({ userId });
+    if (!doc) {
+      doc = await Watchlist.create({ userId, symbols: DEFAULT_SYMBOLS });
     }
+    const userWatchlist = doc.symbols;
     
     // Get current prices for all watchlist symbols
     const prices = await wsService.getCurrentPrices(userWatchlist);
@@ -124,7 +123,7 @@ const getWatchlist = async (req, res) => {
 // Add stock to watchlist
 const addToWatchlist = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.userId; // set by requireAuth middleware
     const { symbol } = req.body;
     
     if (!symbol) {
@@ -144,8 +143,12 @@ const addToWatchlist = async (req, res) => {
       });
     }
     
-    // Get user's current watchlist
-    let userWatchlist = userWatchlists.get(userId) || [];
+    // Get or create watchlist in MongoDB
+    let doc = await Watchlist.findOne({ userId });
+    if (!doc) {
+      doc = await Watchlist.create({ userId, symbols: DEFAULT_SYMBOLS });
+    }
+    const userWatchlist = doc.symbols;
     
     // Check if symbol is already in watchlist
     if (userWatchlist.includes(upperSymbol)) {
@@ -195,9 +198,9 @@ const addToWatchlist = async (req, res) => {
       });
     }
     
-    // Add to user's watchlist
-    userWatchlist.push(upperSymbol);
-    userWatchlists.set(userId, userWatchlist);
+    // Add to user's watchlist in MongoDB
+    doc.symbols.push(upperSymbol);
+    await doc.save();
     
     // Use COMPANY_DATA if available, otherwise use symbol as name
     const companyData = COMPANY_DATA[upperSymbol] || { name: upperSymbol, sector: 'Unknown' };
@@ -237,7 +240,8 @@ const addToWatchlist = async (req, res) => {
 // Remove stock from watchlist
 const removeFromWatchlist = async (req, res) => {
   try {
-    const { userId, symbol } = req.params;
+    const userId = req.userId; // set by requireAuth middleware
+    const { symbol } = req.params;
     
     if (!symbol) {
       return res.status(400).json({ 
@@ -248,15 +252,11 @@ const removeFromWatchlist = async (req, res) => {
     
     const upperSymbol = symbol.toUpperCase();
     
-    // Get user's current watchlist
-    let userWatchlist = userWatchlists.get(userId) || [];
-    
-    // Remove symbol from watchlist
-    const index = userWatchlist.indexOf(upperSymbol);
-    if (index > -1) {
-      userWatchlist.splice(index, 1);
-      userWatchlists.set(userId, userWatchlist);
-    }
+    // Remove symbol from watchlist in MongoDB
+    await Watchlist.updateOne(
+      { userId },
+      { $pull: { symbols: upperSymbol } }
+    );
     
     res.json({
       success: true,

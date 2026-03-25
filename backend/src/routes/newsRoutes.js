@@ -8,7 +8,6 @@ const router = Router();
 router.get('/aggregate', getNews);
 
 router.get('/unified', async (req, res) => {
-  console.log('Received request to /api/news/unified', req.query);
   try {
     const {
       symbols, industries, tags, sentiment, search, from, to, page, limit, source

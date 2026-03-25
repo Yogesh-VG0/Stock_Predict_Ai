@@ -71,7 +71,6 @@ export default function StockDetail({ }: StockDetailProps) {
   ])
   const { toast } = useToast();
   const [isFollowed, setIsFollowed] = useState(false);
-  const userId = 'default';
 
   // Use centralized WebSocket service
   const { isConnected: isWebSocketConnected } = useWebSocket()
@@ -127,7 +126,7 @@ export default function StockDetail({ }: StockDetailProps) {
     async function checkWatchlist() {
       try {
         const { getWatchlist } = await import("@/lib/api");
-        const data = await getWatchlist(userId);
+        const data = await getWatchlist();
         if (data && data.watchlist) {
           setIsFollowed(data.watchlist.some((item: any) => item.symbol === selectedStock));
         }
@@ -326,7 +325,7 @@ export default function StockDetail({ }: StockDetailProps) {
     try {
       if (!isFollowed) {
         const { addToWatchlist } = await import("@/lib/api");
-        const res = await addToWatchlist(userId, selectedStock);
+        const res = await addToWatchlist(selectedStock);
         if (res.success) {
           setIsFollowed(true);
           toast({ title: `Added to Watchlist`, description: `${selectedStock} is now in your watchlist.` });
@@ -335,7 +334,7 @@ export default function StockDetail({ }: StockDetailProps) {
         }
       } else {
         const { removeFromWatchlist } = await import("@/lib/api");
-        const res = await removeFromWatchlist(userId, selectedStock);
+        const res = await removeFromWatchlist(selectedStock);
         if (res.success) {
           setIsFollowed(false);
           toast({ title: `Removed from Watchlist`, description: `${selectedStock} was removed from your watchlist.` });

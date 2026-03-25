@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { motion } from "framer-motion"
 import { Newspaper, Search, CheckCircle, XCircle, Clock, ExternalLink, Globe2, X, Loader2 } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
@@ -127,6 +127,18 @@ export default function NewsPage() {
     setPage(1)
     // eslint-disable-next-line
   }, [])
+
+  // Auto-refresh news every 5 minutes when tab is visible
+  useEffect(() => {
+    const POLL_MS = 5 * 60 * 1000
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible" && !isLoading && !isLoadingMore) {
+        fetchNews({ append: false, pageOverride: 1 })
+      }
+    }, POLL_MS)
+    return () => clearInterval(id)
+    // eslint-disable-next-line
+  }, [activeIndustries, activeTickers, activeSentiment, searchTerm])
 
   // Handle search input change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
