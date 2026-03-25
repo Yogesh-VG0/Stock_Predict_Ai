@@ -376,9 +376,8 @@ export default function LandingPage() {
               <br />
               <GradientText
                 text="Predictions & Analysis"
-                gradient="linear-gradient(90deg, #10b981 0%, #34d399 20%, #22d3ee 50%, #34d399 80%, #10b981 100%)"
-                neon
-                transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                gradient="linear-gradient(90deg, #10b981 0%, #34d399 25%, #22d3ee 50%, #34d399 75%, #10b981 100%)"
+                transition={{ duration: 5, repeat: Infinity, ease: "linear" }}
               />
             </motion.h1>
 
