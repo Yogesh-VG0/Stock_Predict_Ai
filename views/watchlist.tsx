@@ -28,6 +28,20 @@ interface Alert {
 // In-memory cache for the watchlist
 let cachedWatchlist: WatchlistItem[] | null = null;
 
+// Default watchlist stocks shown to new visitors / when auth fails
+const DEFAULT_WATCHLIST_SYMBOLS = [
+  { symbol: 'AAPL', name: 'Apple Inc.', sector: 'Technology' },
+  { symbol: 'MSFT', name: 'Microsoft Corp.', sector: 'Technology' },
+  { symbol: 'NVDA', name: 'NVIDIA Corp.', sector: 'Technology' },
+  { symbol: 'AMZN', name: 'Amazon.com Inc.', sector: 'Consumer Cyclical' },
+  { symbol: 'GOOGL', name: 'Alphabet Inc.', sector: 'Technology' },
+  { symbol: 'META', name: 'Meta Platforms Inc.', sector: 'Technology' },
+  { symbol: 'TSLA', name: 'Tesla Inc.', sector: 'Consumer Cyclical' },
+  { symbol: 'NFLX', name: 'Netflix Inc.', sector: 'Communication Services' },
+  { symbol: 'JPM', name: 'JPMorgan Chase', sector: 'Financial Services' },
+  { symbol: 'V', name: 'Visa Inc.', sector: 'Financial Services' },
+];
+
 export default function WatchlistPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([])
@@ -44,6 +58,29 @@ export default function WatchlistPage() {
     value: ''
   })
   const [alerts, setAlerts] = useState<Alert[]>([])
+
+  // Build default watchlist items from predefined symbols + live prices
+  const buildDefaultWatchlist = useCallback((): WatchlistItem[] => {
+    return DEFAULT_WATCHLIST_SYMBOLS.map(({ symbol, name, sector }) => {
+      const live = stockPrices[symbol];
+      return {
+        symbol,
+        name,
+        sector,
+        price: live?.price ?? 0,
+        change: live?.change ?? 0,
+        changePercent: live?.changePercent ?? 0,
+        volume: live?.volume ?? 0,
+        high: 0,
+        low: 0,
+        open: 0,
+        previousClose: 0,
+        tradeCount: 0,
+        timestamp: live?.timestamp ?? Date.now(),
+        sparklineData: [],
+      } as WatchlistItem;
+    });
+  }, [stockPrices]);
 
   // Fetch watchlist data
   const fetchWatchlist = useCallback(async (forceRefresh = false) => {
@@ -63,19 +100,23 @@ export default function WatchlistPage() {
       })
       const data: WatchlistData = await response.json()
       
-      if (data.success) {
-        cachedWatchlist = data.watchlist; // Cache the data
+      if (data.success && data.watchlist && data.watchlist.length > 0) {
+        cachedWatchlist = data.watchlist;
         setWatchlist(data.watchlist)
       } else {
-        setError('Failed to fetch watchlist')
+        // Auth succeeded but watchlist is empty — show defaults
+        const defaults = buildDefaultWatchlist();
+        setWatchlist(defaults);
       }
     } catch (error) {
       console.error('Error fetching watchlist:', error)
-      setError('Failed to connect to server')
+      // Fall back to default stocks so visitors see content immediately
+      const defaults = buildDefaultWatchlist();
+      setWatchlist(defaults);
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [buildDefaultWatchlist])
 
   // Update watchlist with real-time prices from centralized WebSocket service
   useEffect(() => {

@@ -1074,27 +1074,42 @@ const getLandingStats = async (req, res) => {
     let lastRunText = 'recently';
 
     if (availableTickers.length > 0) {
-      // Pick a random ticker for variety on each visit
-      const randomTicker = availableTickers[Math.floor(Math.random() * availableTickers.length)];
+      // Sample up to 10 random tickers and pick the one with the largest absolute prediction
+      const sampleSize = Math.min(10, availableTickers.length);
+      const shuffled = [...availableTickers].sort(() => Math.random() - 0.5);
+      const sampleTickers = shuffled.slice(0, sampleSize);
 
-      try {
-        const predictions = await mongoConnection.getLatestPredictions(randomTicker);
-        if (predictions) {
-          // Get the next_day prediction's price change
-          const nextDay = predictions.next_day || predictions['1_day'];
-          if (nextDay && nextDay.price_change !== undefined && nextDay.current_price) {
-            // price_change is in dollars — convert to percentage
-            const pctChange = (nextDay.price_change / nextDay.current_price) * 100;
-            const sign = pctChange >= 0 ? '+' : '';
-            topMover = {
-              symbol: randomTicker,
-              change: `${sign}${pctChange.toFixed(2)}%`
-            };
+      let bestAbsPct = 0;
+
+      for (const ticker of sampleTickers) {
+        try {
+          const predictions = await mongoConnection.getLatestPredictions(ticker);
+          if (!predictions) continue;
+
+          // Try all horizons — prefer 30_day (larger moves), then 7_day, then next_day
+          const horizons = [
+            predictions['30_day'],
+            predictions['7_day'],
+            predictions.next_day || predictions['1_day'],
+          ];
+
+          for (const horizon of horizons) {
+            if (horizon && horizon.price_change !== undefined && horizon.current_price) {
+              const pctChange = (horizon.price_change / horizon.current_price) * 100;
+              if (Math.abs(pctChange) > bestAbsPct) {
+                bestAbsPct = Math.abs(pctChange);
+                const sign = pctChange >= 0 ? '+' : '';
+                topMover = {
+                  symbol: ticker,
+                  change: `${sign}${pctChange.toFixed(2)}%`
+                };
+              }
+            }
           }
 
-          // Compute "Model ran Xh ago" from the prediction timestamp
+          // Compute "Model ran Xh ago" from any available timestamp
           const anyWindow = predictions.next_day || predictions['1_day'] || predictions['7_day'] || predictions['30_day'];
-          if (anyWindow && anyWindow.timestamp) {
+          if (anyWindow && anyWindow.timestamp && lastRunText === 'recently') {
             const predTime = new Date(anyWindow.timestamp);
             const now = new Date();
             const diffMs = now - predTime;
@@ -1110,9 +1125,9 @@ const getLandingStats = async (req, res) => {
               lastRunText = `${diffDays}d ago`;
             }
           }
+        } catch (predError) {
+          console.log(`⚠️ Could not fetch prediction for landing stats (${ticker}):`, predError.message);
         }
-      } catch (predError) {
-        console.log(`⚠️ Could not fetch prediction for landing stats (${randomTicker}):`, predError.message);
       }
     }
 

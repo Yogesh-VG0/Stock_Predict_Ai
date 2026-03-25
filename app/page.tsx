@@ -13,7 +13,7 @@ export const metadata: Metadata = {
     siteName: "StockPredict AI",
     images: [
       {
-        url: "/og-image.png",
+        url: "/opengraph-image",
         width: 1200,
         height: 630,
         alt: "StockPredict AI | AI-Powered Stock Predictions",
@@ -27,7 +27,7 @@ export const metadata: Metadata = {
     title: "StockPredict AI | AI-Powered Stock Predictions & Analysis",
     description:
       "Daily AI-powered stock predictions for S&P 100 companies using LightGBM ML models, SHAP explainability, and Gemini AI.",
-    images: ["/og-image.png"],
+    images: ["/opengraph-image"],
   },
   alternates: {
     canonical: "https://stockpredict.dev",

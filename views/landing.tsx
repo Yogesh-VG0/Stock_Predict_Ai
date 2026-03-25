@@ -22,6 +22,7 @@ import {
   Clock,
 } from "lucide-react"
 import DisclaimerModal from "@/components/disclaimer/disclaimer-modal"
+import { GradientText } from "@/components/ui/gradient-text"
 import {
   SiExpress,
   SiFastapi,
@@ -373,9 +374,12 @@ export default function LandingPage() {
             >
               AI-Powered Stock
               <br />
-              <span className="bg-gradient-to-r from-emerald-400 via-emerald-300 to-cyan-400 bg-clip-text text-transparent">
-                Predictions & Analysis
-              </span>
+              <GradientText
+                text="Predictions & Analysis"
+                gradient="linear-gradient(90deg, #10b981 0%, #34d399 20%, #22d3ee 50%, #34d399 80%, #10b981 100%)"
+                neon
+                transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+              />
             </motion.h1>
 
             <motion.p
