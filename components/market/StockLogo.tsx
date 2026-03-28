@@ -27,7 +27,7 @@ export default function StockLogo({ symbol, size = 24 }: StockLogoProps) {
   return (
     <img
       src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
-      alt={symbol}
+      alt={`${symbol} company logo`}
       width={size}
       height={size}
       loading="lazy"

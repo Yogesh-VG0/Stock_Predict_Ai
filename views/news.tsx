@@ -159,10 +159,11 @@ export default function NewsPage() {
   };
 
   // Refetch when filters/search change (but not on first load)
+  // Don't clear news before loading - let skeleton show while fetching
   useEffect(() => {
     if (!firstLoad) {
       setPage(1)
-      setNews([]) // Clear existing news when filters change
+      // Don't clear news here - let the loading skeleton overlay show instead
       fetchNews({ append: false, pageOverride: 1 })
     }
     // eslint-disable-next-line
@@ -222,7 +223,7 @@ export default function NewsPage() {
     }
   const setSentiment = (sentiment: string) => {
     setActiveSentiment((prev) => (prev === sentiment ? "" : sentiment));
-    setNews([]); // Clear existing news when sentiment changes
+    // Don't clear news - the useEffect will handle refetching with loading state
   }
 
   const getSentimentIcon = (sentiment: string) => {
@@ -375,7 +376,7 @@ export default function NewsPage() {
                               src={item.image_url && item.image_url.trim() !== ""
                                 ? item.image_url
                                 : "/news-placeholder.jpg"}
-                              alt=""
+                              alt={`News thumbnail for: ${item.title.slice(0, 50)}${item.title.length > 50 ? '...' : ''}`}
                               className="rounded-lg w-full h-32 object-cover bg-zinc-800"
                               onError={(e) => {
                                 const target = e.currentTarget;
@@ -449,7 +450,7 @@ export default function NewsPage() {
                           <div className="w-full md:w-48 flex-shrink-0">
                             <img
                               src={item.image_url}
-                              alt=""
+                              alt={`News thumbnail for: ${item.title.slice(0, 50)}${item.title.length > 50 ? '...' : ''}`}
                               className="rounded-lg w-full h-32 object-cover bg-zinc-800"
                               onError={(e) => {
                                 const target = e.currentTarget;

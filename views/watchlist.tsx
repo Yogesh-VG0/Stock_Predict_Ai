@@ -285,9 +285,15 @@ export default function WatchlistPage() {
     }
   }, [watchlist, alerts.length, checkAlerts]);
 
+  // Validate stock symbol format (1-5 uppercase letters, with optional dot for BRK.B style)
+  const isValidSymbol = (symbol: string): boolean => {
+    return /^[A-Z]{1,5}(\.[A-Z])?$/.test(symbol)
+  }
+
   // Add new alert
   const addAlert = () => {
     if (!alertForm.symbol || !alertForm.value) return;
+    if (!isValidSymbol(alertForm.symbol)) return;
     
     const newAlert: Alert = {
       id: Date.now().toString(),
@@ -343,9 +349,11 @@ export default function WatchlistPage() {
         >
           <button 
             onClick={() => setShowAddStock(!showAddStock)}
+            aria-expanded={showAddStock}
+            aria-controls="add-stock-form"
             className="bg-emerald-500 hover:bg-emerald-600 text-black rounded-md px-3 py-2 text-sm font-medium transition-colors flex items-center gap-1.5"
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-4 w-4" aria-hidden="true" />
             <span>Add Stock</span>
           </button>
         </motion.div>
@@ -693,8 +701,18 @@ export default function WatchlistPage() {
                 placeholder="e.g., AAPL, MSFT, TSLA"
                 value={alertForm.symbol}
                 onChange={(e) => setAlertForm({ ...alertForm, symbol: e.target.value.toUpperCase() })}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                pattern="[A-Z]{1,5}(\.[A-Z])?"
+                aria-label="Stock symbol"
+                aria-invalid={alertForm.symbol.length > 0 && !isValidSymbol(alertForm.symbol)}
+                className={`w-full bg-zinc-800 border rounded-md px-3 py-2 text-white placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
+                  alertForm.symbol.length > 0 && !isValidSymbol(alertForm.symbol) 
+                    ? 'border-red-500' 
+                    : 'border-zinc-700'
+                }`}
               />
+              {alertForm.symbol.length > 0 && !isValidSymbol(alertForm.symbol) && (
+                <p className="text-red-500 text-xs mt-1">Enter a valid stock symbol (1-5 letters)</p>
+              )}
             </div>
             
             <div>
@@ -727,7 +745,7 @@ export default function WatchlistPage() {
             <div className="flex gap-3 pt-2">
               <button
                 onClick={addAlert}
-                disabled={!alertForm.symbol || !alertForm.value}
+                disabled={!alertForm.symbol || !alertForm.value || !isValidSymbol(alertForm.symbol)}
                 className="flex-1 bg-emerald-500 hover:bg-emerald-600 disabled:bg-zinc-700 disabled:cursor-not-allowed text-black rounded-md px-4 py-2 text-sm font-medium transition-colors"
               >
                 Create Alert

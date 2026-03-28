@@ -55,8 +55,11 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const cacheRef = useRef<Record<string, { data: StockPrice; expiry: number }>>({})
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const secondaryFetchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const fallbackTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const lastFetchRef = useRef<number>(0)
   const subscribedStocksRef = useRef<Set<string>>(new Set())
+  const isMountedRef = useRef<boolean>(true)
   
   const CACHE_DURATION = 60 * 1000 // 1 minute cache
   const POLL_INTERVAL = 5000 // Poll every 5 seconds (reduced to avoid rate limits)
@@ -301,10 +304,12 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       }
       
       // STEP 2: Fetch SECONDARY stocks after a small delay to avoid rate limits
-      setTimeout(async () => {
+      secondaryFetchTimeoutRef.current = setTimeout(async () => {
+        if (!isMountedRef.current) return // Guard against unmounted state updates
         console.log('📊 Fetching secondary stocks...')
         const secondaryPrices = await fetchBatch(SECONDARY_STOCKS)
         
+        if (!isMountedRef.current) return // Guard against unmounted state updates
         if (Object.keys(secondaryPrices).length > 0) {
           setStockPrices(prev => ({ ...prev, ...secondaryPrices }))
           console.log(`✅ Loaded ${Object.keys(secondaryPrices).length} secondary stocks`)
@@ -349,7 +354,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         // Only use mock data if we couldn't get real data after timeout
         if (!hasRealData) {
           // Wait a bit more before falling back to mock
-          setTimeout(() => {
+          fallbackTimeoutRef.current = setTimeout(() => {
+            if (!isMountedRef.current) return
             setStockPrices(prev => {
               // Only initialize mock if we still have no real data
               if (Object.keys(prev).length === 0) {
@@ -363,7 +369,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       } catch (error) {
         console.warn('Error during initial connection:', error)
         // Fallback to mock data after error
-        setTimeout(() => {
+        fallbackTimeoutRef.current = setTimeout(() => {
+          if (!isMountedRef.current) return
           setStockPrices(prev => {
             if (Object.keys(prev).length === 0) {
               initializeMockData()
@@ -378,14 +385,23 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     connectAndFetch()
     
     return () => {
+      // Mark as unmounted to prevent state updates
+      isMountedRef.current = false
+      // Clear all timeouts and intervals
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current)
       }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current)
       }
+      if (secondaryFetchTimeoutRef.current) {
+        clearTimeout(secondaryFetchTimeoutRef.current)
+      }
+      if (fallbackTimeoutRef.current) {
+        clearTimeout(fallbackTimeoutRef.current)
+      }
     }
-  }, []) // Empty dependency array to run only once on mount
+  }, [])
 
   // Start/stop polling based on subscriptions
   useEffect(() => {
@@ -403,13 +419,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         clearInterval(pollIntervalRef.current)
       }
     }
-  }, [subscribedStocks.size, startPolling]) // Use .size instead of the Set object itself
+  }, [subscribedStocks.size, startPolling])
 
   // Periodic connection check
   useEffect(() => {
     const connectionCheckInterval = setInterval(() => {
       checkWebSocketStatus()
-    }, 30000) // Check every 30 seconds
+    }, 30000)
     
     return () => clearInterval(connectionCheckInterval)
   }, [checkWebSocketStatus])

@@ -25,29 +25,55 @@ export default function TradingViewAdvancedChart({
 
   const containerId = `tradingview-chart-${widgetKey}`
 
-  // Determine the correct exchange prefix
+  // Determine the correct exchange prefix based on actual stock exchange listings
   const getFullSymbol = (symbol: string) => {
+    // NYSE-listed stocks from the S&P 75 tracker list
     const nyseSymbols = [
-      "JPM", "DIS", "V", "PG", "JNJ", "XOM",
-      "BAC", "PFE", "KO", "VZ", "T", "CVX", "MRK",
-      "WFC", "C", "PEP", "HD", "MCD", "IBM",
-      "LLY", "MA", "UNH", "ABBV", "CRM", "BRK.B", "ORCL"
+      // Financials
+      "JPM", "BAC", "WFC", "GS", "MS", "AXP", "C", "BRK.B", "V", "MA",
+      // Healthcare
+      "JNJ", "UNH", "LLY", "PFE", "ABBV", "MRK", "AMGN", "CVS",
+      // Consumer Staples
+      "PG", "KO", "PEP", "MDLZ",
+      // Consumer Discretionary
+      "HD", "LOW", "NKE", "MCD", "DIS", "TGT",
+      // Energy
+      "XOM", "CVX",
+      // Industrials
+      "CAT", "HON", "BA", "RTX", "LMT", "DE", "GE", "FDX", "UPS",
+      // Communication
+      "VZ", "T",
+      // Other
+      "LIN", "NEE", "AMT",
+      // Tech on NYSE
+      "IBM", "CRM", "ORCL"
     ]
     
+    // NASDAQ-listed stocks from the S&P 75 tracker list
     const nasdaqSymbols = [
-      "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
-      "TSLA", "AVGO", "COST", "NFLX",
-      // WMT joined Nasdaq-100 on January 20, 2026
-      "WMT"
+      // Technology
+      "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "AMD", "INTC",
+      "CSCO", "ADBE", "QCOM", "TXN", "INTU", "AMAT", "PYPL", "PLTR",
+      // Consumer Discretionary
+      "AMZN", "TSLA", "NFLX", "SBUX", "BKNG",
+      // Healthcare
+      "GILD", "ISRG",
+      // Communication
+      "CMCSA", "CHTR", "TMUS",
+      // Consumer Staples (WMT joined Nasdaq-100 on January 20, 2026)
+      "WMT", "COST"
     ]
     
     if (symbol.includes(":")) return symbol
     
-    if (nyseSymbols.includes(symbol)) return `NYSE:${symbol}`
-    if (nasdaqSymbols.includes(symbol)) return `NASDAQ:${symbol}`
+    // Normalize BRK-B to BRK.B for TradingView
+    const normalizedSymbol = symbol === "BRK-B" ? "BRK.B" : symbol
     
-    // Default fallback - try NASDAQ first, then NYSE
-    return `NASDAQ:${symbol}`
+    if (nyseSymbols.includes(normalizedSymbol)) return `NYSE:${normalizedSymbol}`
+    if (nasdaqSymbols.includes(normalizedSymbol)) return `NASDAQ:${normalizedSymbol}`
+    
+    // Default fallback - try NYSE first for unknown symbols (more common for large caps)
+    return `NYSE:${normalizedSymbol}`
   }
 
   useEffect(() => {

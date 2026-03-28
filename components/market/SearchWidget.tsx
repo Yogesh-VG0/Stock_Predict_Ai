@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { Search, TrendingUp, TrendingDown } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -21,7 +21,10 @@ export default function SearchWidget() {
   const [results, setResults] = useState<SearchResult[]>([])
   const [loading, setLoading] = useState(false)
   const [showResults, setShowResults] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
   const searchRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
   const router = useRouter()
 
   // Search function using API
@@ -84,24 +87,74 @@ export default function SearchWidget() {
     return () => clearTimeout(delayedSearch)
   }, [query])
 
-  const handleStockSelect = (symbol: string) => {
+  const handleStockSelect = useCallback((symbol: string) => {
     setQuery("")
     setShowResults(false)
-    // Navigate to stock detail page like the sidebar does
+    setActiveIndex(-1)
     router.push(`/stocks/${symbol}`)
-  }
+  }, [router])
+
+  // Reset active index when results change
+  useEffect(() => {
+    setActiveIndex(-1)
+  }, [results])
+
+  // Keyboard navigation handler
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showResults || results.length === 0) return
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setActiveIndex(prev => (prev < results.length - 1 ? prev + 1 : 0))
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setActiveIndex(prev => (prev > 0 ? prev - 1 : results.length - 1))
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (activeIndex >= 0 && activeIndex < results.length) {
+          handleStockSelect(results[activeIndex].symbol)
+        }
+        break
+      case 'Escape':
+        setShowResults(false)
+        setActiveIndex(-1)
+        break
+    }
+  }, [showResults, results, activeIndex, handleStockSelect])
+
+  // Scroll active item into view
+  useEffect(() => {
+    if (activeIndex >= 0 && listRef.current) {
+      const activeItem = listRef.current.children[activeIndex] as HTMLElement
+      if (activeItem) {
+        activeItem.scrollIntoView({ block: 'nearest' })
+      }
+    }
+  }, [activeIndex])
+
+  const listboxId = "search-results-listbox"
 
   return (
-    <div ref={searchRef} className="relative w-full max-w-md">
+    <div ref={searchRef} className="relative w-full max-w-md" role="combobox" aria-expanded={showResults} aria-haspopup="listbox" aria-owns={listboxId}>
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" />
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" aria-hidden="true" />
         <Input
+          ref={inputRef}
           type="text"
           placeholder="Search stocks..."
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
           className="pl-10 bg-zinc-900 border-zinc-700 text-white placeholder-zinc-400 focus:border-blue-500"
           onFocus={() => query && setShowResults(true)}
+          role="searchbox"
+          aria-label="Search stocks"
+          aria-autocomplete="list"
+          aria-controls={showResults ? listboxId : undefined}
+          aria-activedescendant={activeIndex >= 0 ? `search-option-${activeIndex}` : undefined}
         />
       </div>
       
@@ -109,14 +162,27 @@ export default function SearchWidget() {
         <Card className="absolute top-full left-0 right-0 mt-1 z-50 bg-zinc-900 border-zinc-700 max-h-80 overflow-y-auto">
           <CardContent className="p-0">
             {loading ? (
-              <div className="p-4 text-center text-zinc-400">Searching...</div>
+              <div className="p-4 text-center text-zinc-400" role="status" aria-live="polite">Searching...</div>
             ) : results.length > 0 ? (
-              <div className="divide-y divide-zinc-700">
-                {results.map((stock) => (
-                  <div
+              <ul 
+                ref={listRef}
+                id={listboxId}
+                role="listbox" 
+                aria-label="Stock search results"
+                className="divide-y divide-zinc-700"
+              >
+                {results.map((stock, index) => (
+                  <li
                     key={stock.symbol}
+                    id={`search-option-${index}`}
+                    role="option"
+                    aria-selected={index === activeIndex}
                     onClick={() => handleStockSelect(stock.symbol)}
-                    className="p-3 hover:bg-zinc-800 cursor-pointer transition-colors"
+                    onMouseEnter={() => setActiveIndex(index)}
+                    className={cn(
+                      "p-3 cursor-pointer transition-colors",
+                      index === activeIndex ? "bg-zinc-800" : "hover:bg-zinc-800"
+                    )}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
@@ -147,15 +213,15 @@ export default function SearchWidget() {
                         </div>
                       )}
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             ) : (
-              <div className="p-4 text-center text-zinc-400">No results found</div>
+              <div className="p-4 text-center text-zinc-400" role="status">No results found</div>
             )}
           </CardContent>
         </Card>
       )}
     </div>
   )
-} 
+}
