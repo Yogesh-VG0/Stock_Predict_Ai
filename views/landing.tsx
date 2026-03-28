@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 import DisclaimerModal from "@/components/disclaimer/disclaimer-modal"
 import { GradientText } from "@/components/ui/gradient-text"
+import { ModelPerformanceCard } from "@/components/market/ModelPerformanceCard"
 import {
   SiExpress,
   SiFastapi,
@@ -730,6 +731,11 @@ export default function LandingPage() {
                   Open Dashboard
                   <ArrowRight className="h-4 w-4 group-hover:translate-x-1 transition-transform" aria-hidden="true" />
                 </Link>
+
+                {/* Model Performance Card */}
+                <div className="mt-10 max-w-3xl mx-auto">
+                  <ModelPerformanceCard />
+                </div>
               </div>
             </div>
           </AnimatedSection>
