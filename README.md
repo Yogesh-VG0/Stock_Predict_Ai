@@ -25,18 +25,18 @@
 ## 📸 Screenshots
 
 <p align="center">
-  <img src="public/screenshots/dashboard.png" alt="Dashboard - Stock predictions overview" width="100%" />
-  <br/><em>Dashboard with real-time stock predictions and market sentiment</em>
+  <img src="public/screenshots/landing_page.png" alt="Landing Page" width="100%" />
+  <br/><em>Landing page with AI-powered stock predictions overview</em>
 </p>
 
 <p align="center">
-  <img src="public/screenshots/stock-detail.png" alt="Stock Detail Page" width="100%" />
-  <br/><em>Detailed stock analysis with AI explanations and TradingView charts</em>
+  <img src="public/screenshots/stockpredict-ai.png" alt="Market Dashboard" width="100%" />
+  <br/><em>Market dashboard with real-time prices, Fear & Greed Index, and top movers</em>
 </p>
 
 <p align="center">
-  <img src="public/screenshots/predictions.png" alt="Predictions Grid" width="100%" />
-  <br/><em>All 75 stock predictions with confidence scores and price targets</em>
+  <img src="public/screenshots/stock-details_page.png" alt="Stock Detail Page" width="100%" />
+  <br/><em>Detailed stock analysis with TradingView charts and AI predictions</em>
 </p>
 
 ---
