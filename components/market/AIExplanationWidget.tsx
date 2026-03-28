@@ -53,7 +53,7 @@ const FormatText = ({ text }: { text: string }) => {
   if (!text) return null
 
   // Remove markdown headers like ### but keep the text
-  let processed = text.replace(/^#{1,4}\s+/gm, '')
+  const processed = text.replace(/^#{1,4}\s+/gm, '')
 
   // Split by bold (**text**)
   const parts = processed.split(/(\*\*.*?\*\*)/g)

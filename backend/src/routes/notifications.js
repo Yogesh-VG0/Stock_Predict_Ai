@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const notificationService = require('../services/notificationService');
+const { requireAuth } = require('../middleware/auth');
 
 // GET /api/notifications - Get recent notifications
 router.get('/', async (req, res) => {
@@ -47,8 +48,8 @@ router.get('/unread-count', async (req, res) => {
   }
 });
 
-// POST /api/notifications/check-market - Trigger market session check (internal use)
-router.post('/check-market', async (req, res) => {
+// POST /api/notifications/check-market - Trigger market session check (requires auth)
+router.post('/check-market', requireAuth, async (req, res) => {
   try {
     const notifications = await notificationService.checkMarketSessionNotifications();
     res.json({
@@ -60,7 +61,7 @@ router.post('/check-market', async (req, res) => {
     console.error('Error checking market notifications:', error.message);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: 'Failed to check market notifications'
     });
   }
 });

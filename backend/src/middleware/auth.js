@@ -1,8 +1,14 @@
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
-const JWT_SECRET = process.env.JWT_SECRET_KEY || 'stockpredict-dev-secret-change-in-production';
-const TOKEN_EXPIRY = '90d'; // Anonymous sessions last 90 days
+// SECURITY: Fail fast if JWT secret is not configured
+if (!process.env.JWT_SECRET_KEY) {
+  console.error('❌ FATAL: JWT_SECRET_KEY environment variable is required');
+  process.exit(1);
+}
+
+const JWT_SECRET = process.env.JWT_SECRET_KEY;
+const TOKEN_EXPIRY = '14d'; // Reduced from 90d for security
 
 /**
  * Issue a new anonymous session token.

@@ -73,8 +73,8 @@ function getSessionSegments(): SessionSegment[] {
   const segments: SessionSegment[] = [];
   let lastEnd = 0;
   for (const session of SESSIONS) {
-    let segStart = session.start;
-    let segEnd = session.end;
+    const segStart = session.start;
+    const segEnd = session.end;
     if (session.start < session.end) {
       // Normal session
       // Only add a closed segment if it's a small gap (<10 minutes)
