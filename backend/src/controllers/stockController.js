@@ -309,7 +309,7 @@ const TRACKED_EXCHANGES = {
   ABBV: 'NYSE',
   KO: 'NYSE',
   CRM: 'NYSE',
-  BRK.B: 'NYSE',
+  'BRK.B': 'NYSE',
   LLY: 'NYSE',
 };
 
