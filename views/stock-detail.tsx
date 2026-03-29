@@ -267,12 +267,12 @@ export default function StockDetail({ }: StockDetailProps) {
     if (!searchQuery) return
 
     let symbol = getSymbolFromCompanyName(searchQuery) || searchQuery.toUpperCase()
-    // Accept any valid-looking ticker symbol (1-5 uppercase letters)
-    if (/^[A-Z]{1,5}$/.test(symbol) || /^[A-Z]+\.[A-Z]$/.test(symbol)) {
+    // Accept broader real-world ticker formats, including OTC and class shares
+    if (/^[A-Z0-9.\-]{1,10}$/.test(symbol)) {
       setSelectedStock(symbol)
       setSearchQuery("")
     } else {
-      alert(`Invalid symbol: ${searchQuery}. Enter a valid ticker like AAPL, PLTR, TSLA, etc.`)
+      alert(`Invalid symbol: ${searchQuery}. Enter a valid ticker like AAPL, BRK.B, BRK-B, ONDS, or OTC tickers up to 10 characters.`)
     }
   }
 
@@ -466,7 +466,7 @@ export default function StockDetail({ }: StockDetailProps) {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
         <Suspense fallback={<ChartSkeleton />}>
           <div className="h-[350px] sm:h-[500px]">
-            <TradingViewAdvancedChart symbol={selectedStock} height={typeof window !== 'undefined' && window.innerWidth < 640 ? 350 : 500} />
+            <TradingViewAdvancedChart symbol={selectedStock} exchange={(stockData as any)?.exchange} height={typeof window !== 'undefined' && window.innerWidth < 640 ? 350 : 500} />
           </div>
         </Suspense>
       </motion.div>
@@ -494,7 +494,7 @@ export default function StockDetail({ }: StockDetailProps) {
                   <div className="text-zinc-500 text-sm">Loading company profile...</div>
                 </div>
               }>
-                <TradingViewCompanyProfile symbol={selectedStock} height={400} />
+                <TradingViewCompanyProfile symbol={selectedStock} exchange={(stockData as any)?.exchange} height={400} />
               </Suspense>
             </CardContent>
           </Card>

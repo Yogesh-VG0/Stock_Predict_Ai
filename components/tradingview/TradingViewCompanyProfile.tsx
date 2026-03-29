@@ -2,61 +2,19 @@
 
 import { useEffect, useRef, memo, useMemo } from "react"
 import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
+import { getPreferredTradingViewSymbol } from "@/lib/tradingview-symbol"
 
 interface TradingViewCompanyProfileProps {
   symbol: string
+  exchange?: string
   height?: number
 }
 
-// Shared exchange mapping for TradingView widgets
-const NYSE_SYMBOLS = new Set([
-  // Financials
-  "JPM", "BAC", "WFC", "GS", "MS", "AXP", "C", "BRK.B", "V", "MA",
-  // Healthcare
-  "JNJ", "UNH", "LLY", "PFE", "ABBV", "MRK", "AMGN", "CVS",
-  // Consumer Staples
-  "PG", "KO", "PEP", "MDLZ",
-  // Consumer Discretionary
-  "HD", "LOW", "NKE", "MCD", "DIS", "TGT",
-  // Energy
-  "XOM", "CVX",
-  // Industrials
-  "CAT", "HON", "BA", "RTX", "LMT", "DE", "GE", "FDX", "UPS",
-  // Communication
-  "VZ", "T",
-  // Other
-  "LIN", "NEE", "AMT",
-  // Tech on NYSE
-  "IBM", "CRM", "ORCL"
-])
-
-const NASDAQ_SYMBOLS = new Set([
-  // Technology
-  "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "AMD", "INTC",
-  "CSCO", "ADBE", "QCOM", "TXN", "INTU", "AMAT", "PYPL", "PLTR",
-  // Consumer Discretionary
-  "AMZN", "TSLA", "NFLX", "SBUX", "BKNG",
-  // Healthcare
-  "GILD", "ISRG",
-  // Communication
-  "CMCSA", "CHTR", "TMUS",
-  // Consumer Staples
-  "WMT", "COST"
-])
-
-function getFullSymbol(symbol: string): string {
-  if (symbol.includes(":")) return symbol
-  const normalized = symbol === "BRK-B" ? "BRK.B" : symbol
-  if (NYSE_SYMBOLS.has(normalized)) return `NYSE:${normalized}`
-  if (NASDAQ_SYMBOLS.has(normalized)) return `NASDAQ:${normalized}`
-  return `NYSE:${normalized}`
-}
-
-function TradingViewCompanyProfile({ symbol, height = 550 }: TradingViewCompanyProfileProps) {
+function TradingViewCompanyProfile({ symbol, exchange, height = 550 }: TradingViewCompanyProfileProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const prevSymbolRef = useRef<string>("")
   
-  const fullSymbol = useMemo(() => getFullSymbol(symbol), [symbol])
+  const fullSymbol = useMemo(() => getPreferredTradingViewSymbol(symbol, exchange), [symbol, exchange])
 
   useEffect(() => {
     const container = containerRef.current

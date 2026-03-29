@@ -285,6 +285,34 @@ const COMPANY_DATA = {
 
 const ML_BACKEND_URL = process.env.ML_BACKEND_URL || 'http://localhost:8000';
 
+const TRACKED_EXCHANGES = {
+  AAPL: 'NASDAQ',
+  MSFT: 'NASDAQ',
+  NVDA: 'NASDAQ',
+  AMZN: 'NASDAQ',
+  GOOGL: 'NASDAQ',
+  META: 'NASDAQ',
+  TSLA: 'NASDAQ',
+  AVGO: 'NASDAQ',
+  WMT: 'NYSE',
+  COST: 'NASDAQ',
+  JPM: 'NYSE',
+  V: 'NYSE',
+  MA: 'NYSE',
+  NFLX: 'NASDAQ',
+  XOM: 'NYSE',
+  ORCL: 'NYSE',
+  PG: 'NYSE',
+  JNJ: 'NYSE',
+  UNH: 'NYSE',
+  HD: 'NYSE',
+  ABBV: 'NYSE',
+  KO: 'NYSE',
+  CRM: 'NYSE',
+  BRK.B: 'NYSE',
+  LLY: 'NYSE',
+};
+
 const getStockDetails = async (req, res) => {
   try {
     const { symbol } = req.params;
@@ -334,6 +362,7 @@ const getStockDetails = async (req, res) => {
 
       stockDetails = {
         symbol: upperSymbol,
+        exchange: TRACKED_EXCHANGES[upperSymbol] || undefined,
         ...companyData,
         isTracked: true,
         aiAnalysis
@@ -352,6 +381,7 @@ const getStockDetails = async (req, res) => {
           stockDetails = {
             symbol: upperSymbol,
             name: profile.name,
+            exchange: profile.exchange || undefined,
             sector: profile.finnhubIndustry || 'Unknown',
             industry: profile.finnhubIndustry || 'Unknown',
             description: `${profile.name} (${upperSymbol}) is listed on ${profile.exchange || 'N/A'}. Market cap: $${profile.marketCapitalization ? (profile.marketCapitalization / 1000).toFixed(1) + 'B' : 'N/A'}. Country: ${profile.country || 'N/A'}.`,
@@ -368,6 +398,7 @@ const getStockDetails = async (req, res) => {
           stockDetails = {
             symbol: upperSymbol,
             name: upperSymbol,
+            exchange: undefined,
             sector: 'Unknown',
             industry: 'Unknown',
             description: `View the live chart for ${upperSymbol} below.`,
@@ -386,6 +417,7 @@ const getStockDetails = async (req, res) => {
         stockDetails = {
           symbol: upperSymbol,
           name: upperSymbol,
+          exchange: undefined,
           sector: 'Unknown',
           industry: 'Unknown',
           description: `View the live chart for ${upperSymbol} below.`,

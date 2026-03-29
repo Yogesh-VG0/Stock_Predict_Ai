@@ -315,6 +315,7 @@ export function getSymbolFromCompanyName(companyName: string): string | null {
 export interface StockDetails {
   symbol: string;
   name: string;
+  exchange?: string;
   sector: string;
   industry: string;
   description: string;
@@ -807,4 +808,5 @@ export async function subscribeToUpdates(symbols: string[]): Promise<{ success: 
     return { success: false };
   }
 }
+
 

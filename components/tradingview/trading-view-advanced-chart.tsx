@@ -4,9 +4,11 @@ import { useEffect, useRef, useState } from "react"
 import { motion } from "framer-motion"
 import { Loader2 } from "lucide-react"
 import WidgetScrollWrapper from "@/components/ui/widget-scroll-wrapper"
+import { getPreferredTradingViewSymbol } from "@/lib/tradingview-symbol"
 
 interface TradingViewAdvancedChartProps {
   symbol: string
+  exchange?: string
   height?: number
   autosize?: boolean
   className?: string
@@ -14,6 +16,7 @@ interface TradingViewAdvancedChartProps {
 
 export default function TradingViewAdvancedChart({
   symbol,
+  exchange,
   height = 500,
   autosize = false,
   className = "",
@@ -24,57 +27,6 @@ export default function TradingViewAdvancedChart({
   const [isReady, setIsReady] = useState(false)
 
   const containerId = `tradingview-chart-${widgetKey}`
-
-  // Determine the correct exchange prefix based on actual stock exchange listings
-  const getFullSymbol = (symbol: string) => {
-    // NYSE-listed stocks from the S&P 75 tracker list
-    const nyseSymbols = [
-      // Financials
-      "JPM", "BAC", "WFC", "GS", "MS", "AXP", "C", "BRK.B", "V", "MA",
-      // Healthcare
-      "JNJ", "UNH", "LLY", "PFE", "ABBV", "MRK", "AMGN", "CVS",
-      // Consumer Staples
-      "PG", "KO", "PEP", "MDLZ",
-      // Consumer Discretionary
-      "HD", "LOW", "NKE", "MCD", "DIS", "TGT",
-      // Energy
-      "XOM", "CVX",
-      // Industrials
-      "CAT", "HON", "BA", "RTX", "LMT", "DE", "GE", "FDX", "UPS",
-      // Communication
-      "VZ", "T",
-      // Other
-      "LIN", "NEE", "AMT",
-      // Tech on NYSE
-      "IBM", "CRM", "ORCL"
-    ]
-    
-    // NASDAQ-listed stocks from the S&P 75 tracker list
-    const nasdaqSymbols = [
-      // Technology
-      "AAPL", "MSFT", "NVDA", "GOOGL", "META", "AVGO", "AMD", "INTC",
-      "CSCO", "ADBE", "QCOM", "TXN", "INTU", "AMAT", "PYPL", "PLTR",
-      // Consumer Discretionary
-      "AMZN", "TSLA", "NFLX", "SBUX", "BKNG",
-      // Healthcare
-      "GILD", "ISRG",
-      // Communication
-      "CMCSA", "CHTR", "TMUS",
-      // Consumer Staples (WMT joined Nasdaq-100 on January 20, 2026)
-      "WMT", "COST"
-    ]
-    
-    if (symbol.includes(":")) return symbol
-    
-    // Normalize BRK-B to BRK.B for TradingView
-    const normalizedSymbol = symbol === "BRK-B" ? "BRK.B" : symbol
-    
-    if (nyseSymbols.includes(normalizedSymbol)) return `NYSE:${normalizedSymbol}`
-    if (nasdaqSymbols.includes(normalizedSymbol)) return `NASDAQ:${normalizedSymbol}`
-    
-    // Default fallback - try NYSE first for unknown symbols (more common for large caps)
-    return `NYSE:${normalizedSymbol}`
-  }
 
   useEffect(() => {
     if (!window.TradingView) {
@@ -101,7 +53,7 @@ export default function TradingViewAdvancedChart({
     try {
       containerRef.current.innerHTML = ""
 
-      const fullSymbol = getFullSymbol(symbol)
+      const fullSymbol = getPreferredTradingViewSymbol(symbol, exchange)
 
       new window.TradingView.widget({
         container_id: containerId,
@@ -163,7 +115,7 @@ export default function TradingViewAdvancedChart({
       console.error("TradingView Chart init error:", error)
       setIsLoading(false)
     }
-  }, [isReady, widgetKey, symbol, height, autosize, containerId])
+  }, [isReady, widgetKey, symbol, exchange, height, autosize, containerId])
 
   return (
     <WidgetScrollWrapper className={className}>
