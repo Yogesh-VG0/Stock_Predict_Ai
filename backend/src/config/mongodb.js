@@ -5,7 +5,31 @@ const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 
 // MongoDB connection string from environment variable
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/stock_predictor';
+const RAW_MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/stock_predictor';
+
+// Ensure the URI always targets the 'stock_predictor' database.
+// The ML pipeline stores data in 'stock_predictor', so the backend must query
+// the same database. When the URI omits a database name (e.g. ends with '/'),
+// mongoose defaults to 'test', causing all lookups to miss.
+const DEFAULT_DB = 'stock_predictor';
+
+function ensureDatabaseInUri(uri) {
+  try {
+    const url = new URL(uri);
+    // pathname is '/' when no database is specified, or '/dbname'
+    if (!url.pathname || url.pathname === '/') {
+      url.pathname = `/${DEFAULT_DB}`;
+      return url.toString();
+    }
+    return uri;
+  } catch {
+    // If URL parsing fails (e.g. non-standard URI), append naively
+    if (uri.endsWith('/')) return `${uri}${DEFAULT_DB}`;
+    return uri;
+  }
+}
+
+const MONGODB_URI = ensureDatabaseInUri(RAW_MONGODB_URI);
 
 // Normalize ticker for MongoDB queries: the ML pipeline stores BRK-B (hyphen)
 // but Finnhub/frontend uses BRK.B (dot). Convert dots to hyphens for DB lookups.
@@ -30,10 +54,13 @@ class MongoDBConnection {
       this.connection = await mongoose.connect(MONGODB_URI, {
         serverSelectionTimeoutMS: 10000, // 10 second timeout
         connectTimeoutMS: 10000,
+        dbName: DEFAULT_DB,  // Explicit safety net — always use stock_predictor
       });
 
       this.db = this.connection.connection.db;
       this.isConnected = true;
+
+      console.log(`📦 Using database: ${this.db.databaseName}`);
 
       // Set up connection event handlers
       mongoose.connection.on('disconnected', () => {
@@ -75,6 +102,18 @@ class MongoDBConnection {
       await this.connection.connection.close();
       console.log('MongoDB connection closed');
     }
+  }
+
+  /**
+   * Returns the underlying native MongoDB Db instance.
+   * Used by stockController.getModelPerformance for direct collection access.
+   */
+  getDb() {
+    if (!this.isConnected || !this.db) {
+      console.warn('⚠️ MongoDB not connected — getDb() returning null');
+      return null;
+    }
+    return this.db;
   }
 
   async getStoredExplanation(ticker, window = 'comprehensive') {
