@@ -25,6 +25,7 @@ interface ModelPerformance {
     spy_return: number
     period: string
   }
+  data_source?: 'live_backtest' | 'fallback_defaults'
 }
 
 export function ModelPerformanceCard() {

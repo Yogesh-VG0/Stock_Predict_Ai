@@ -386,6 +386,29 @@ def main():
                 print(f"  [!] SANITY WARNING: poor performance (Sharpe={sharpe:.2f}, win_rate={win_rate:.1%})")
             print("=" * 40)
 
+            # Persist backtest results to MongoDB for the landing page
+            if not args.no_mongo and mongo_client:
+                try:
+                    mongo_client.store_prediction_metrics(
+                        ticker="__PORTFOLIO__",
+                        window=hz,
+                        metrics={
+                            "total_return": round(result.get("total_return", 0) * 100, 2),
+                            "sharpe_ratio": round(result.get("sharpe_ratio", 0), 2),
+                            "win_rate": round(ts.get("win_rate", 0.5) * 100, 1),
+                            "max_drawdown": round(result.get("max_drawdown", 0) * 100, 2),
+                            "n_trades": n_trades,
+                            "spy_return": round(result.get("spy_return", 0) * 100, 2),
+                            "spy_sharpe": round(result.get("spy_sharpe", 0), 2),
+                            "period_start": result.get("start_date"),
+                            "period_end": result.get("end_date"),
+                            "market_neutral": result.get("market_neutral", False),
+                        },
+                    )
+                    logger.info("Stored backtest metrics for %s to prediction_metrics", hz)
+                except Exception as e:
+                    logger.warning("Failed to store backtest metrics for %s: %s", hz, repr(e))
+
         if not any_backtest_ok:
             logger.error("All backtests failed.")
             health.backtest_status = "FAILED (all horizons)"

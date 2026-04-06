@@ -1,6 +1,6 @@
 # StockPredict AI — Complete Project Documentation
 
-> **Last updated**: 2026-03-13  
+> **Last updated**: 2026-04-06  
 > **Model version**: v10.1.0 (LightGBM + LSTM hybrid, cross-sectional ranking)
 
 ---
@@ -330,7 +330,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| **Frontend** | Next.js 14 + React 18 | UI framework |
+| **Frontend** | Next.js 15 + React 18 | UI framework |
 | **Routing** | Next.js App Router (`app/`) | Full-stack routing, layout preservation, server/client boundaries |
 | **Styling** | Tailwind CSS + Shadcn/UI | Component styling |
 | **Charts** | TradingView Widgets (external) + ECharts (Sankey) | Stock charts + Financial flow visualization |
@@ -1012,7 +1012,7 @@ The ML pipeline predicts **stock price returns** (not absolute prices) for 75 S&
 
 #### Step 3: Feature Engineering (`data/features_minimal.py`)
 - Reads price data, sentiment, insider trades, macro indicators, earnings, fundamentals, and short interest from MongoDB
-- Computes 77 features organized into categories:
+- Computes ~77 base features organized into categories (with LSTM temporal embeddings, the total feature space reaches ~113):
 
 **Price & Return Features:**
 | Feature | Description |
@@ -2652,7 +2652,7 @@ If the GitHub VM crashes halfway through Batch #5:
 
 ---
 
-*End of documentation. Last updated 2026-03-04.*
+*End of documentation. Last updated 2026-04-06.*
 
 ---
 

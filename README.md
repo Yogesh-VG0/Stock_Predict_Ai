@@ -62,29 +62,31 @@
 │              Frontend (Next.js 15)                   │
 │         Vercel · TradingView · ECharts              │
 └────────────────────────┬────────────────────────────┘
-                         │
+                         │ Vercel rewrites /api/* →
 ┌────────────────────────▼────────────────────────────┐
 │            Node.js Backend (Express)                 │
 │     Koyeb · API Gateway · Finnhub WebSocket         │
 └────────────────────────┬────────────────────────────┘
-                         │
+                         │ Reads stored predictions
 ┌────────────────────────▼────────────────────────────┐
-│            ML Backend (FastAPI + Python)             │
-│   LightGBM · LSTM · SHAP · Groq AI · Sentiment      │
-└────────────────────────┬────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────┐
-│              MongoDB Atlas + Redis                   │
+│               MongoDB Atlas (M0 Free)                │
 │      Predictions · Sentiment · Historical Data       │
+└────────────────────────┬────────────────────────────┘
+                         │ Written daily by
+┌────────────────────────▼────────────────────────────┐
+│          ML Pipeline (Python · GitHub Actions)       │
+│   LightGBM · LSTM · SHAP · Groq AI · Sentiment      │
 └─────────────────────────────────────────────────────┘
 ```
+
+> **Important**: The ML pipeline does **not** run as a live server in production. It runs exclusively as a **daily GitHub Actions workflow** that trains models, generates predictions, and writes results to MongoDB. The Node.js backend then reads those pre-computed results and serves them to users.
 
 ---
 
 ## 🧠 How Predictions Work
 
 1. **Data Collection** — Fetch OHLCV, sentiment from 10+ sources, macro indicators, insider trades
-2. **Feature Engineering** — Build 113 numeric features (price, volume, sentiment, technicals, fundamentals)
+2. **Feature Engineering** — Build ~77 base features (+ LSTM embeddings → ~113 total)
 3. **Model Training** — LightGBM with LSTM temporal embeddings, walk-forward validation
 4. **Prediction** — Cross-sectional ranking selects top quintile stocks
 5. **Explanation** — SHAP decomposes prediction; Groq AI writes human-readable insight
@@ -103,7 +105,7 @@
 | Layer | Technologies |
 |-------|-------------|
 | **Frontend** | Next.js 15, React 18, TypeScript, Tailwind, Shadcn/UI, TradingView |
-| **Backend** | Node.js, Express, FastAPI, MongoDB, Redis |
+| **Backend** | Node.js, Express, MongoDB |
 | **ML/AI** | LightGBM, PyTorch (LSTM), SHAP, Groq (Llama 3.1), FinBERT |
 | **Infrastructure** | Vercel, Koyeb, GitHub Actions, MongoDB Atlas |
 
@@ -111,24 +113,27 @@
 
 ## ⚡ Daily Pipeline
 
-Runs automatically via GitHub Actions after market close (~2 hours):
+Runs automatically via GitHub Actions after market close (~2 hours total):
 
 1. **Sentiment** — Fetch & score news from 10+ sources
 2. **Training** — Engineer features, train LightGBM + LSTM
 3. **Predictions** — Generate forecasts for all 75 tickers
-4. **Explanations** — SHAP analysis + Groq AI writing
-5. **Evaluation** — Compare predictions vs actual outcomes
+4. **Verification** — Assert canary tickers have fresh predictions
+5. **Explanations** — SHAP analysis + Groq AI writing
+6. **Evaluation** — Compare past predictions vs actual outcomes
+7. **Drift Monitoring** — Check for prediction distribution shifts
+
+> The pipeline includes **quality gates** that fail the job if <80% of predictions succeed or >20% of data fetches fail. Thresholds are configurable via environment variables.
 
 ---
 
 ## 💸 Cost: $0/month
 
 Runs entirely on free tiers:
-- **Vercel** (frontend)
-- **Koyeb** (backends, scale-to-zero)
-- **MongoDB Atlas** (M0 free)
-- **Redis Cloud** (free)
-- **Groq** (14.4K requests/day free)
+- **Vercel** (frontend hosting)
+- **Koyeb** (Node.js backend, scale-to-zero)
+- **MongoDB Atlas** (M0 free cluster, 512MB)
+- **Groq** (14.4K requests/day free — primary AI explainer)
 - **GitHub Actions** (2,000 min/month free)
 
 ---

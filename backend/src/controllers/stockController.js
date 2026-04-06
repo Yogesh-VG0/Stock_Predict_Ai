@@ -1184,83 +1184,104 @@ const getModelPerformance = async (req, res) => {
   try {
     const db = mongoConnection.getDb();
     if (!db) {
-      return res.json({ error: 'Database not connected', metrics: getDefaultMetrics() });
+      return res.json(getDefaultMetrics());
     }
 
-    // Try to get stored model metrics from prediction_metrics collection
+    // Read portfolio-level backtest metrics written by run_pipeline.py
     const metricsCollection = db.collection('prediction_metrics');
-    const latestMetrics = await metricsCollection.find({})
+    const storedMetrics = await metricsCollection.find({ ticker: '__PORTFOLIO__' })
       .sort({ timestamp: -1 })
-      .limit(10)
+      .limit(3)  // One per horizon: next_day, 7_day, 30_day
       .toArray();
 
-    // Also get aggregate stats from predictions
+    // Build a lookup: window -> metrics
+    const byWindow = {};
+    for (const doc of storedMetrics) {
+      if (doc.window && !byWindow[doc.window]) {
+        byWindow[doc.window] = doc.metrics || {};
+        byWindow[doc.window]._timestamp = doc.timestamp;
+      }
+    }
+
+    const hasStoredData = Object.keys(byWindow).length > 0;
+
+    // Also get aggregate stats from recent predictions for confidence
     const predictionsCollection = db.collection('stock_predictions');
     const recentPredictions = await predictionsCollection.find({})
       .sort({ timestamp: -1 })
       .limit(100)
       .toArray();
 
-    // Calculate aggregate metrics
-    let avgConfidence = 0;
-    let totalPredictions = recentPredictions.length;
+    // Calculate per-horizon average confidence
     let horizonStats = { next_day: { count: 0, avgConf: 0 }, '7_day': { count: 0, avgConf: 0 }, '30_day': { count: 0, avgConf: 0 } };
-
     for (const pred of recentPredictions) {
       const conf = pred.confidence || 0;
-      avgConfidence += conf;
-      
       const window = pred.window || 'next_day';
       if (horizonStats[window]) {
         horizonStats[window].count++;
         horizonStats[window].avgConf += conf;
       }
     }
-
-    if (totalPredictions > 0) {
-      avgConfidence /= totalPredictions;
-    }
-
     for (const hz of Object.keys(horizonStats)) {
       if (horizonStats[hz].count > 0) {
         horizonStats[hz].avgConf /= horizonStats[hz].count;
       }
     }
 
-    // Build response with backtest-like metrics (from stored data or defaults)
+    // Helper to get metric for a window (from stored data)
+    const getMetric = (window, key, fallback) => {
+      if (byWindow[window] && byWindow[window][key] !== undefined && byWindow[window][key] !== null) {
+        return byWindow[window][key];
+      }
+      return fallback;
+    };
+
+    // Derive benchmark from stored 30_day metrics (best horizon)
+    const spyReturn = getMetric('30_day', 'spy_return', 2.92);
+    const periodStart = getMetric('30_day', 'period_start', null);
+    const periodEnd = getMetric('30_day', 'period_end', null);
+    const benchmarkPeriod = (periodStart && periodEnd)
+      ? `${periodStart.slice(0, 10)} to ${periodEnd.slice(0, 10)}`
+      : 'Last backtest period';
+
+    // Determine last_updated from stored timestamp
+    const lastUpdated = (byWindow['30_day'] && byWindow['30_day']._timestamp)
+      ? new Date(byWindow['30_day']._timestamp).toISOString()
+      : new Date().toISOString();
+
     const metrics = {
       model_version: 'v10.2.0',
-      last_updated: new Date().toISOString(),
-      total_predictions: totalPredictions,
-      avg_confidence: (avgConfidence * 100).toFixed(1),
+      last_updated: lastUpdated,
+      total_predictions: recentPredictions.length,
+      avg_confidence: ((horizonStats.next_day.avgConf + horizonStats['7_day'].avgConf + horizonStats['30_day'].avgConf) / 3 * 100).toFixed(1),
       horizons: {
         next_day: {
           predictions: horizonStats.next_day.count,
           avg_confidence: (horizonStats.next_day.avgConf * 100).toFixed(1),
-          // Backtest results - these would come from stored backtest data
-          sharpe_ratio: latestMetrics.find(m => m.window === 'next_day')?.sharpe_ratio || -0.46,
-          win_rate: latestMetrics.find(m => m.window === 'next_day')?.win_rate || 48.2,
-          total_return: latestMetrics.find(m => m.window === 'next_day')?.total_return || -3.5
+          sharpe_ratio: getMetric('next_day', 'sharpe_ratio', -0.46),
+          win_rate: getMetric('next_day', 'win_rate', 48.2),
+          total_return: getMetric('next_day', 'total_return', -3.5)
         },
         '7_day': {
           predictions: horizonStats['7_day'].count,
           avg_confidence: (horizonStats['7_day'].avgConf * 100).toFixed(1),
-          sharpe_ratio: latestMetrics.find(m => m.window === '7_day')?.sharpe_ratio || -0.48,
-          win_rate: latestMetrics.find(m => m.window === '7_day')?.win_rate || 46.5,
-          total_return: latestMetrics.find(m => m.window === '7_day')?.total_return || -2.1
+          sharpe_ratio: getMetric('7_day', 'sharpe_ratio', -0.48),
+          win_rate: getMetric('7_day', 'win_rate', 46.5),
+          total_return: getMetric('7_day', 'total_return', -2.1)
         },
         '30_day': {
           predictions: horizonStats['30_day'].count,
           avg_confidence: (horizonStats['30_day'].avgConf * 100).toFixed(1),
-          sharpe_ratio: latestMetrics.find(m => m.window === '30_day')?.sharpe_ratio || 1.66,
-          win_rate: latestMetrics.find(m => m.window === '30_day')?.win_rate || 61.5,
-          total_return: latestMetrics.find(m => m.window === '30_day')?.total_return || 7.64
+          sharpe_ratio: getMetric('30_day', 'sharpe_ratio', 1.66),
+          win_rate: getMetric('30_day', 'win_rate', 61.5),
+          total_return: getMetric('30_day', 'total_return', 7.64)
         }
       },
       benchmark: {
-        spy_return: 2.92,
-        period: '2024-01-01 to 2024-12-31'
-      }
+        spy_return: spyReturn,
+        period: benchmarkPeriod
+      },
+      data_source: hasStoredData ? 'live_backtest' : 'fallback_defaults'
     };
 
     res.json(metrics);
@@ -1270,7 +1291,7 @@ const getModelPerformance = async (req, res) => {
   }
 };
 
-// Default metrics when database unavailable
+// Default metrics when database unavailable or no backtest data exists yet
 function getDefaultMetrics() {
   return {
     model_version: 'v10.2.0',
@@ -1282,7 +1303,8 @@ function getDefaultMetrics() {
       '7_day': { predictions: 75, avg_confidence: '40.0', sharpe_ratio: -0.48, win_rate: 46.5, total_return: -2.1 },
       '30_day': { predictions: 75, avg_confidence: '65.0', sharpe_ratio: 1.66, win_rate: 61.5, total_return: 7.64 }
     },
-    benchmark: { spy_return: 2.92, period: '2024-01-01 to 2024-12-31' }
+    benchmark: { spy_return: 2.92, period: 'Awaiting first backtest run' },
+    data_source: 'fallback_defaults'
   };
 }
 
