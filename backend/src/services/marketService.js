@@ -17,6 +17,8 @@ const EXCHANGE = 'US';
 
 // In-memory fallback cache
 const holidaysMemoryCache = {};
+const fearGreedMemoryCache = { data: null, expiresAt: 0 };
+const FEAR_GREED_CACHE_TTL_MS = 15 * 60 * 1000;
 
 // Static NYSE market holidays (fallback when API is unavailable)
 const STATIC_NYSE_HOLIDAYS = {
@@ -224,27 +226,227 @@ async function fetchMarketStatus() {
   };
 }
 
-// Fetch Fear & Greed Index from RapidAPI
+function clamp(value, min = 0, max = 100) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getFearGreedLabel(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return 'Unavailable';
+  const score = Number(value);
+  if (score <= 20) return 'Extreme Fear';
+  if (score <= 40) return 'Fear';
+  if (score <= 60) return 'Neutral';
+  if (score <= 80) return 'Greed';
+  return 'Extreme Greed';
+}
+
+function buildFearGreedPoint(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) {
+    return { value: null, valueText: 'Unavailable' };
+  }
+
+  const rounded = Math.round(clamp(Number(value)));
+  return { value: rounded, valueText: getFearGreedLabel(rounded) };
+}
+
+function average(values) {
+  const nums = values.filter(v => Number.isFinite(v));
+  if (!nums.length) return null;
+  return nums.reduce((sum, value) => sum + value, 0) / nums.length;
+}
+
+function extractYahooCloses(data) {
+  const quote = data?.chart?.result?.[0]?.indicators?.quote?.[0];
+  if (!quote?.close) return [];
+  return quote.close.map(Number).filter(Number.isFinite);
+}
+
+async function fetchYahooCloses(symbol, range = '2y') {
+  const encoded = encodeURIComponent(symbol);
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encoded}?range=${range}&interval=1d`;
+  const response = await axios.get(url, {
+    timeout: 8000,
+    headers: {
+      'User-Agent': 'StockPredictAI/1.0 (+https://stockpredict.dev)',
+      Accept: 'application/json,text/plain,*/*',
+    },
+  });
+
+  return extractYahooCloses(response.data);
+}
+
+function momentumScore(closes, offset = 0) {
+  const end = closes.length - 1 - offset;
+  if (end < 20) return null;
+
+  const latest = closes[end];
+  const window = closes.slice(Math.max(0, end - 124), end + 1);
+  const sma = average(window);
+  if (!Number.isFinite(latest) || !sma) return null;
+
+  // Above the 125-day moving average = greed; below it = fear.
+  const pctFromAverage = ((latest - sma) / sma) * 100;
+  return clamp(50 + pctFromAverage * 4);
+}
+
+function volatilityScore(closes, offset = 0) {
+  const end = closes.length - 1 - offset;
+  if (end < 10) return null;
+
+  const latest = closes[end];
+  const window = closes.slice(Math.max(0, end - 49), end + 1);
+  const sma = average(window);
+  if (!Number.isFinite(latest) || !sma) return null;
+
+  // Lower VIX vs its 50-day average = greed; elevated VIX = fear.
+  const pctBelowAverage = ((sma - latest) / sma) * 100;
+  return clamp(50 + pctBelowAverage * 5);
+}
+
+function combineMarketScores(momentum, volatility) {
+  const hasMomentum = Number.isFinite(momentum);
+  const hasVolatility = Number.isFinite(volatility);
+
+  if (hasMomentum && hasVolatility) return momentum * 0.65 + volatility * 0.35;
+  if (hasMomentum) return momentum;
+  if (hasVolatility) return volatility;
+  return null;
+}
+
+function scoreAtOffset(spxCloses, vixCloses, offset) {
+  return combineMarketScores(
+    momentumScore(spxCloses, offset),
+    volatilityScore(vixCloses, offset),
+  );
+}
+
+async function fetchFearGreedMarketProxy() {
+  const [spxCloses, vixCloses] = await Promise.all([
+    fetchYahooCloses('^GSPC', '2y'),
+    fetchYahooCloses('^VIX', '2y'),
+  ]);
+
+  if (!spxCloses.length && !vixCloses.length) {
+    throw new Error('Yahoo Finance returned no market data');
+  }
+
+  const now = scoreAtOffset(spxCloses, vixCloses, 0);
+  if (now === null) {
+    throw new Error('Insufficient market data to build Fear & Greed proxy');
+  }
+
+  return {
+    fgi: {
+      now: buildFearGreedPoint(now),
+      previousClose: buildFearGreedPoint(scoreAtOffset(spxCloses, vixCloses, 1)),
+      oneWeekAgo: buildFearGreedPoint(scoreAtOffset(spxCloses, vixCloses, 5)),
+      oneMonthAgo: buildFearGreedPoint(scoreAtOffset(spxCloses, vixCloses, 21)),
+      oneYearAgo: buildFearGreedPoint(scoreAtOffset(spxCloses, vixCloses, 252)),
+    },
+    lastUpdated: {
+      epochUnixSeconds: Math.floor(Date.now() / 1000),
+      humanDate: new Date().toISOString(),
+    },
+    source: 'market_proxy_yahoo_finance',
+    methodology: 'Composite market sentiment proxy using S&P 500 momentum versus its 125-day average and VIX versus its 50-day average.',
+  };
+}
+
+function cacheFearGreedData(data) {
+  fearGreedMemoryCache.data = data;
+  fearGreedMemoryCache.expiresAt = Date.now() + FEAR_GREED_CACHE_TTL_MS;
+  return data;
+}
+
+function getHistoryPoint(recent, daysAgo) {
+  if (!Array.isArray(recent) || !recent.length) return null;
+
+  const targetTime = Date.now() - daysAgo * 24 * 60 * 60 * 1000;
+  let closest = recent[0];
+  let closestDiff = Math.abs(new Date(closest.date).getTime() - targetTime);
+
+  for (const point of recent) {
+    const diff = Math.abs(new Date(point.date).getTime() - targetTime);
+    if (diff < closestDiff) {
+      closest = point;
+      closestDiff = diff;
+    }
+  }
+
+  return closest;
+}
+
+function normalizeFearGreedChartResponse(payload) {
+  const currentScore = Number(payload?.score?.score);
+  if (!Number.isFinite(currentScore)) {
+    throw new Error('feargreedchart.com response missing score.score');
+  }
+
+  const recent = Array.isArray(payload?.recent)
+    ? payload.recent
+        .map(point => ({ date: point.date, score: Number(point.score) }))
+        .filter(point => point.date && Number.isFinite(point.score))
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    : [];
+
+  const previous = recent.length > 1 ? recent[recent.length - 2] : getHistoryPoint(recent, 1);
+  const weekAgo = getHistoryPoint(recent, 7);
+  const monthAgo = getHistoryPoint(recent, 30);
+  const yearAgo = getHistoryPoint(recent, 365);
+  const ts = Number(payload?.ts) || Date.now();
+
+  return {
+    fgi: {
+      now: buildFearGreedPoint(currentScore),
+      previousClose: buildFearGreedPoint(previous?.score),
+      oneWeekAgo: buildFearGreedPoint(weekAgo?.score),
+      oneMonthAgo: buildFearGreedPoint(monthAgo?.score),
+      oneYearAgo: buildFearGreedPoint(yearAgo?.score),
+    },
+    components: payload?.score?.components || [],
+    market: payload?.market || {},
+    sectors: payload?.sectors || {},
+    backtest: payload?.backtest || {},
+    recent: recent.slice(-370),
+    lastUpdated: {
+      epochUnixSeconds: Math.floor(ts / 1000),
+      humanDate: new Date(ts).toISOString(),
+    },
+    source: 'feargreedchart.com',
+  };
+}
+
+async function fetchFearGreedChartIndex() {
+  const response = await axios.get('https://feargreedchart.com/api/?action=all', {
+    timeout: 8000,
+    headers: {
+      'User-Agent': 'StockPredictAI/1.0 (+https://stockpredict.dev)',
+      Accept: 'application/json,text/plain,*/*',
+    },
+  });
+
+  return normalizeFearGreedChartResponse(response.data);
+}
+
+// Fetch Fear & Greed Index from a no-auth public JSON endpoint. If it is
+// temporarily unavailable, fall back to the local market proxy so the dashboard
+// still renders live sentiment instead of an empty state.
 async function fetchFearGreedIndex() {
+  if (fearGreedMemoryCache.data && Date.now() < fearGreedMemoryCache.expiresAt) {
+    return fearGreedMemoryCache.data;
+  }
+
   try {
-    const rapidApiKey = process.env.RAPIDAPI_KEY;
-    if (!rapidApiKey) {
-      console.warn('⚠️ RAPIDAPI_KEY not configured - using fallback Fear & Greed data');
+    return cacheFearGreedData(await fetchFearGreedChartIndex());
+  } catch (error) {
+    console.warn('⚠️ feargreedchart.com unavailable, using market proxy:', error?.response?.data || error.message);
+
+    try {
+      return cacheFearGreedData(await fetchFearGreedMarketProxy());
+    } catch (fallbackError) {
+      console.error('Error fetching Fear & Greed Index:', fallbackError?.response?.data || fallbackError.message);
       return null;
     }
-
-    const response = await axios.get('https://fear-and-greed-index.p.rapidapi.com/v1/fgi', {
-      headers: {
-        'x-rapidapi-key': rapidApiKey,
-        'x-rapidapi-host': 'fear-and-greed-index.p.rapidapi.com',
-      },
-      timeout: 10000
-    });
-    
-    return response.data;
-  } catch (error) {
-    console.error('Error fetching Fear & Greed Index:', error?.response?.data || error.message);
-    return null;
   }
 }
 

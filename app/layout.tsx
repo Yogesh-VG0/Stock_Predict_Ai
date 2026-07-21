@@ -1,5 +1,5 @@
 import type React from "react"
-import type { Metadata } from "next"
+import type { Metadata, Viewport } from "next"
 import { Inter } from "next/font/google"
 import "./globals.css"
 import { WebSocketProvider } from "@/hooks/use-websocket-context"
@@ -81,6 +81,9 @@ export const metadata: Metadata = {
     shortcut: "/favicon.ico?v=2",
     apple: "/apple-touch-icon.png?v=2",
   },
+}
+
+export const viewport: Viewport = {
   themeColor: "#0f172a",
 }
 

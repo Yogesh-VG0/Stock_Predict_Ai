@@ -3,6 +3,7 @@ const mongoConnection = require('../config/mongodb');
 const { normalizeTickerForDB } = require('../config/mongodb');
 const massiveService = require('../services/massiveService');
 const fmpService = require('../services/fmpService');
+const fundamentalsService = require('../services/fundamentalsService');
 
 // Company overview data mapping for all 25 tickers
 const COMPANY_DATA = {
@@ -1093,6 +1094,25 @@ const getSankeyData = async (req, res) => {
   }
 };
 
+// Get durable fundamentals data from official SEC APIs + company/Yahoo RSS.
+// This powers the Fundamentals page without relying on discontinued iframe widgets.
+const getFundamentalsOverview = async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const ticker = symbol.toUpperCase();
+    const overview = await fundamentalsService.getFundamentalsOverview(ticker);
+
+    res.json({ success: true, ...overview });
+  } catch (error) {
+    console.error(`Error fetching fundamentals overview for ${req.params.symbol}:`, error.message);
+    res.status(502).json({
+      success: false,
+      error: 'Failed to fetch fundamentals overview',
+      message: error.message,
+    });
+  }
+};
+
 // Get landing page stats (real data for "See It In Action" pills)
 const getLandingStats = async (req, res) => {
   try {
@@ -1320,6 +1340,7 @@ module.exports = {
   getTechnicalIndicators,
   searchStocks,
   getSankeyData,
+  getFundamentalsOverview,
   getLandingStats,
   getModelPerformance
 }; 

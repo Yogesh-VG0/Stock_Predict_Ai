@@ -65,7 +65,7 @@ export default function Layout({ children }: LayoutProps) {
                 transition={{ duration: 0.3, ease: "easeInOut" }}
                 className="fixed md:relative z-30"
               >
-                <Sidebar onClose={() => setSidebarOpen(false)} />
+                <Sidebar />
               </motion.div>
             )}
           </AnimatePresence>
@@ -74,7 +74,7 @@ export default function Layout({ children }: LayoutProps) {
         {/* Mobile sidebar: always mounted, Shadcn sheet handles open/close */}
         {isMobile && (
           <div className="z-30 md:hidden">
-            <Sidebar onClose={() => setSidebarOpen(false)} />
+            <Sidebar />
           </div>
         )}
 

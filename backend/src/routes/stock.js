@@ -12,6 +12,7 @@ const {
   getTechnicalIndicators,
   searchStocks,
   getSankeyData,
+  getFundamentalsOverview,
   getLandingStats,
   getModelPerformance
 } = require('../controllers/stockController');
@@ -59,6 +60,9 @@ router.get('/landing/stats', getLandingStats);
 
 // Model performance / backtest metrics — MUST be before /:symbol catch-all
 router.get('/model/performance', getModelPerformance);
+
+// Official SEC/RSS fundamentals overview — MUST be before /:symbol catch-all
+router.get('/:symbol/fundamentals', getFundamentalsOverview);
 
 // Get Sankey financial flow data — MUST be before /:symbol catch-all
 router.get('/:symbol/sankey', getSankeyData);

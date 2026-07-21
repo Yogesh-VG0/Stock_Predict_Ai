@@ -1,0 +1,28 @@
+name: GitHub Workflow Immortality
+
+on:
+  schedule:
+    # Reset GitHub's scheduled-workflow inactivity timer once a month.
+    - cron: "20 0 1 * *"
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    name: Keep scheduled workflows enabled
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+    steps:
+      - name: Explain missing PAT secret
+        if: ${{ env.PERSONAL_ACCESS_TOKEN == '' }}
+        run: |
+          echo "::warning::PERSONAL_ACCESS_TOKEN is not configured. Create a PAT with Actions write access and save it as this repository secret so scheduled workflows can be re-enabled automatically."
+
+      - name: Keep cron-based GitHub workflows alive
+        if: ${{ env.PERSONAL_ACCESS_TOKEN != '' }}
+        uses: PhrozenByte/gh-workflow-immortality@v1
+        with:
+          secret: ${{ env.PERSONAL_ACCESS_TOKEN }}
+          repos: ${{ github.repository }}

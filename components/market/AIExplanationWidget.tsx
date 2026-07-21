@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import {
   Brain,
@@ -16,9 +16,7 @@ import {
   Target,
   Zap,
   Newspaper,
-  Users,
   BarChart3,
-  Globe,
   Activity,
   ArrowUpRight,
   ArrowDownRight,
@@ -108,13 +106,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (ticker) {
-      loadAIExplanation()
-    }
-  }, [ticker])
-
-  const loadAIExplanation = async () => {
+  const loadAIExplanation = useCallback(async () => {
     setIsLoading(true)
     setError(null)
     try {
@@ -139,7 +131,13 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [ticker])
+
+  useEffect(() => {
+    if (ticker) {
+      loadAIExplanation()
+    }
+  }, [ticker, loadAIExplanation])
 
   const generateFreshExplanation = async () => {
     setIsGenerating(true)
@@ -184,7 +182,6 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
   const sevenDay = explanation?.prediction_summary?.['7_day']
   const thirtyDay = explanation?.prediction_summary?.['30_day']
   const confidence = Math.max(nextDay?.confidence ?? 0, sevenDay?.confidence ?? 0, thirtyDay?.confidence ?? 0)
-  const blended = explanation?.data_summary?.blended_sentiment ?? 0
   const dataSources = explanation?.metadata?.data_sources ?? []
 
   const getOutlookColor = (outlook: string) => {
@@ -247,7 +244,7 @@ export default function AIExplanationWidget({ ticker, currentPrice, recentNews }
     // Try structured parsing first
     for (const [pattern, key] of sectionPatterns) {
       const match = clean.match(new RegExp(pattern.source + '([\\s\\S]*?)(?=' +
-        sectionPatterns.filter(([_, k]) => k !== key).map(([p]) => p.source).join('|') + '|$)', 'i'))
+        sectionPatterns.filter((entry) => entry[1] !== key).map(([p]) => p.source).join('|') + '|$)', 'i'))
       if (match && match[1]) {
         const content = match[1].trim()
         switch (key) {

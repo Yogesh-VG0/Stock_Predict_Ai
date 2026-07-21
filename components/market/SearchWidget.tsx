@@ -138,7 +138,7 @@ export default function SearchWidget() {
   const listboxId = "search-results-listbox"
 
   return (
-    <div ref={searchRef} className="relative w-full max-w-md" role="combobox" aria-expanded={showResults} aria-haspopup="listbox" aria-owns={listboxId}>
+    <div ref={searchRef} className="relative w-full max-w-md" role="combobox" aria-expanded={showResults} aria-haspopup="listbox" aria-controls={listboxId} aria-owns={listboxId}>
       <div className="relative">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" aria-hidden="true" />
         <Input

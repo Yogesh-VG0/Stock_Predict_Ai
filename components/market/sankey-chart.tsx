@@ -1,8 +1,9 @@
 "use client";
 
 import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import Image from "next/image";
 import ReactECharts from "echarts-for-react";
-import { Download, ZoomIn, ZoomOut, RotateCcw, Move } from "lucide-react";
+import { Download, Move } from "lucide-react";
 
 type NodeKind = "segment" | "revenue" | "expense" | "profit" | "tax" | "neutral";
 
@@ -81,7 +82,6 @@ export default function SankeyChart({
 }) {
     const [isMobile, setIsMobile] = useState(false);
     const [isTablet, setIsTablet] = useState(false);
-    const [windowWidth, setWindowWidth] = useState(0);
     const [isMounted, setIsMounted] = useState(false);
     const chartRef = useRef<ReactECharts>(null);
 
@@ -105,7 +105,6 @@ export default function SankeyChart({
         setIsMounted(true);
         const onResize = () => {
             const width = window.innerWidth;
-            setWindowWidth(width);
             setIsMobile(width < 480);
             setIsTablet(width < 768 && width >= 480);
         };
@@ -299,9 +298,12 @@ export default function SankeyChart({
                             alignItems: "center",
                             boxShadow: "0 6px 20px rgba(0,0,0,0.5)",
                         }}>
-                            <img
+                            <Image
                                 src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
                                 alt={symbol}
+                                width={26}
+                                height={26}
+                                unoptimized
                                 style={{ width: 26, height: 26, borderRadius: 5, objectFit: "contain" }}
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
                             />

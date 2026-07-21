@@ -113,7 +113,7 @@ function HoverWrapper({
 
   // ── Mobile: long-press (500 ms) to activate ──
   const handleTouchStart = useCallback(
-    (e: React.TouchEvent) => {
+    () => {
       lastTouchRef.current = Date.now()
 
       if (!hasShownHint) {

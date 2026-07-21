@@ -88,7 +88,7 @@ export default function DisclaimerModal() {
                   StockPredict AI is for <strong className="text-white">educational purposes only</strong> and does not provide investment advice. Predictions may be wrong; markets involve risk and you can lose money.
                 </p>
                 <p className="text-sm sm:text-base text-zinc-300 leading-relaxed mb-6">
-                  By continuing, you agree you're responsible for your decisions and you've read the{" "}
+                  By continuing, you agree you&apos;re responsible for your decisions and you&apos;ve read the{" "}
                   <button
                     onClick={handleViewDisclaimer}
                     className="text-emerald-400 hover:text-emerald-300 underline transition-colors text-left"

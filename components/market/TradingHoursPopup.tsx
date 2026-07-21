@@ -104,7 +104,6 @@ interface TradingHoursPopupProps {
 
 export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupProps) {
   const [dragMinutes, setDragMinutes] = useState<number | null>(null)
-  const [isDragging, setIsDragging] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [now, setNow] = useState(new Date())
   const timelineRef = useRef<HTMLDivElement>(null)
@@ -148,7 +147,6 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
       const startMinutes = Math.round(startPct * 1440)
       
       setDragMinutes(startMinutes)
-      setIsDragging(true)
       dragStateRef.current = { isDragging: true, rect }
       
       const handleMouseMove = (moveEvent: MouseEvent) => {
@@ -161,7 +159,6 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
       }
       
       const handleMouseUp = () => {
-        setIsDragging(false)
         setDragMinutes(null)
         dragStateRef.current = { isDragging: false, rect: null }
         document.removeEventListener("mousemove", handleMouseMove)
@@ -191,7 +188,6 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
       const startMinutes = Math.round(startPct * 1440)
       
       setDragMinutes(startMinutes)
-      setIsDragging(true)
       dragStateRef.current = { isDragging: true, rect }
       
       const handleTouchMove = (moveEvent: TouchEvent) => {
@@ -205,7 +201,6 @@ export default function TradingHoursPopup({ open, onClose }: TradingHoursPopupPr
       }
       
       const handleTouchEnd = () => {
-        setIsDragging(false)
         setDragMinutes(null)
         dragStateRef.current = { isDragging: false, rect: null }
         document.removeEventListener("touchmove", handleTouchMove)

@@ -27,19 +27,6 @@ function getSessionLabel(session: string | null) {
   }
 }
 
-function getNextSessionLabel(nextSession: string | null) {
-  switch (nextSession) {
-    case 'pre-market':
-      return 'Pre-market';
-    case 'regular':
-      return 'Regular';
-    case 'after-hours':
-      return 'After-hours';
-    default:
-      return '';
-  }
-}
-
 // Calculate market status based on current time (EST)
 function calculateMarketStatus(): string {
   const now = new Date()
@@ -139,6 +126,8 @@ export default function Navbar({ sidebarOpen, toggleSidebar }: NavbarProps) {
               }
             }}
             className="p-2 rounded-md hover:bg-zinc-800 transition-colors"
+            aria-label={sidebarOpen ? "Close sidebar" : "Open sidebar"}
+            aria-expanded={sidebarOpen}
           >
             <Menu className="h-5 w-5" />
           </button>

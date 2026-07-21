@@ -314,13 +314,13 @@ GitHub Actions wakes up and starts the daily pipeline.
 | Technical indicators (RSI, MACD) | `TechnicalIndicators` | `GET /api/stock/:symbol/indicators` | financialdata.net API (or calculated) | `financialdata.net/api/v1/stock-prices` |
 | News feed | `NewsPage` | `GET /api/news/unified` | Marketaux, Finnhub, TickerTick APIs | Multiple (aggregated) |
 | RSS news on stock page | `StockDetail` page | `GET /api/news/rss?symbol=X` | Yahoo Finance + Seeking Alpha RSS | RSS feed URLs |
-| Fear & Greed gauge | `MarketSentimentBanner` | `GET /api/market/sentiment` | RapidAPI Fear & Greed | `fear-and-greed-index.p.rapidapi.com` |
+| Fear & Greed gauge | `MarketSentimentBanner` | `GET /api/market/sentiment` | feargreedchart.com API, Yahoo Finance proxy fallback | `feargreedchart.com/api`, Yahoo chart API |
 | Market open/close status | `Navbar` | `GET /api/market/status` | Calendarific holidays | `calendarific.com/api/v2/holidays` |
 | Trading hours bar | `TradingHoursBar` | None (client-side) | None (calculates from clock) | None |
 | Watchlist + alerts | `WatchlistPage` | `GET/POST/DELETE /api/watchlist/*` | In-memory Map (Node) | Finnhub WebSocket |
 | Notification bell | `NotificationWidget` | `GET /api/notifications` | MongoDB `notifications` | None |
 | TradingView chart | `TradingViewAdvancedChart` | None (direct embed) | TradingView CDN | TradingView widget API |
-| Fundamentals page | `FundamentalsPage` | None (iframe embed) | Jika.io CDN | Jika.io widgets |
+| Fundamentals page | `FundamentalsPage` | `GET /api/stock/:symbol/fundamentals` | SEC CompanyFacts/Submissions + company/Yahoo RSS | SEC `data.sec.gov`, RSS feeds, TradingView widgets |
 | Predictions overview | `PredictionsPage` | `GET /api/stock/batch/available` | MongoDB `prediction_explanations` | None |
 | Sankey financial flow chart | `SankeyView` + `SankeyChart` | `GET /api/stock/:symbol/sankey` | FMP API (income statement, product segmentation), Redis cache | FMP `/income-statement/`, `/revenue-product-segmentation/` |
 
@@ -361,7 +361,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **FMP** | Income statements, product segmentation, Sankey data, earnings, dividends, analyst estimates, ratings, SEC filings | Node backend + ML backend | `/income-statement/`, `/revenue-product-segmentation/`, `/dividend/`, `/earnings/`, `/analyst-estimates/`, `/ratings-snapshot/`, `/price-target-summary/`, `/price-target-consensus/`, `/grades-consensus/`, `/sec_filings/` | `FMP_API_KEY` | Stable API endpoint, 250 calls/day limit; in-memory cache (12hr), Redis cache (14 days for Sankey); negative caching for unavailable data | `income_statement` (raw), `revenue_product_segmentation`, Sankey data (`sankey:v1:{symbol}:ttm`) in Redis + MongoDB |
 | **Marketaux** | Financial news articles | Node backend + ML backend | `/v1/news/all` | `MARKETAUX_API_KEY` | Per-plan limits | ML: within `sentiment` collection; Node: returned to frontend only |
 | **TickerTick** | News aggregation | Node backend | `/feed` | None (free) | 10 req/min (enforced in code) | Not stored (returned to frontend only) |
-| **RapidAPI** | Fear & Greed Index | Node backend | `/v1/fgi` | `RAPIDAPI_KEY` | Per-plan limits | Not stored (returned to frontend only) |
+| **feargreedchart.com** | Fear & Greed Index | Node backend | `/api/?action=all` | None | 15-minute server-side cache; fair-use polling | Not stored (15-minute in-memory app cache) |
 | **Calendarific** | US market holidays | Node backend | `/v2/holidays` | `CALENDARIFIC_API_KEY` | Per-plan limits | Redis `us_holidays_{year}` (1yr TTL) + in-memory |
 | **financialdata.net** | Stock prices for technical indicators | Node backend | `/api/v1/stock-prices` | `FINANCIALDATA_API_KEY` | Free: 300 req/day; 5 calls/min enforced | In-memory cache only (24hr indicators, 12hr prices) |
 | **Groq / Llama 3** | AI-powered stock-specific explanation generation (Primary) | ML backend (GitHub Actions) | `/v1/chat/completions` API (llama-3.1-8b-instant primary, 70b fallback) | `GROQ_API_KEY` | Free Tier: 30 RPM, 14.4K RPD, 500K TPD (much higher daily token budget) | `prediction_explanations` (MongoDB) |
@@ -373,7 +373,7 @@ GitHub Actions wakes up and starts the daily pipeline.
 | **Reddit** | Social sentiment (PRAW) | ML backend | Reddit API via PRAW library | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | Handled by PRAW library | Within `sentiment` collection (MongoDB) |
 | **NewsAPI** | Sector/industry news | Node backend | `/v2/everything` | `NEWSAPI_KEY` | Free: 100 req/day | Not stored (returned to frontend only) |
 | **TradingView** | Chart widgets, heatmaps, economic calendar | Frontend (browser) | Widget embed scripts | None (free widget tier) | N/A (client-side) | Not stored |
-| **Jika.io** | Financial fundamentals embeds | Frontend (browser) | iframe embeds | None | N/A | Not stored |
+| **SEC EDGAR APIs** | Fundamentals page financials and recent filings | Node backend | CompanyFacts + Submissions JSON | `SEC_USER_AGENT` identification only | Public fair-use API; backend cache prevents repeat browser calls | Not stored (6-hour in-memory app cache) |
 
 ### Where API Keys Come From
 
@@ -613,13 +613,23 @@ All API keys are stored as **GitHub Secrets** and passed to the workflow as envi
 - **Stored**: NOT stored — returned to frontend only
 - **Used by**: News page (unified feed)
 
-#### RapidAPI — Fear & Greed Index
+#### feargreedchart.com — Fear & Greed Index
 
-- **Endpoint**: `GET https://fear-and-greed-index.p.rapidapi.com/v1/fgi`
+- **Endpoint**: `GET https://feargreedchart.com/api/?action=all`
 - **Runs in**: Node backend (`marketService.js`)
-- **Fields used**: Entire `response.data` object
-- **Stored**: NOT stored — returned to frontend only
+- **Fields used**: `score.score`, `score.components`, `recent`, `market`, `sectors`, `backtest`, `ts`
+- **Stored**: NOT stored permanently — cached in memory for 15 minutes to respect provider fair-use guidance
+- **Fallback**: If the public API is unavailable, the backend computes a Yahoo Finance market proxy from S&P 500 momentum and VIX volatility
 - **Used by**: Market Sentiment Banner component
+
+#### SEC CompanyFacts/Submissions — Fundamentals Page
+
+- **Endpoint**: `GET https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json` and `GET https://data.sec.gov/submissions/CIK{cik}.json`
+- **Runs in**: Node backend (`fundamentalsService.js`)
+- **Fields used**: Revenue, gross profit, operating income, net income, assets, liabilities, equity, operating cash flow, recent filing metadata
+- **Stored**: NOT stored permanently — cached in memory for 6 hours; recent company/RSS updates are merged into the response
+- **Required config**: `SEC_USER_AGENT` should identify the app/contact for SEC fair-use compliance
+- **Used by**: Fundamentals page financial metrics, revenue/net-income chart, and SEC filings table
 
 #### Calendarific — US Holidays
 
@@ -1368,6 +1378,17 @@ A prediction only generates a `trade_recommended = True` signal when:
 - **Concurrency**: Only one run at a time (`cancel-in-progress: false`)
 - **Timeout**: 350 minutes max (accommodates SHAP + AI explanation generation for 75 tickers)
 
+### Workflow Keepalive / `PERSONAL_ACCESS_TOKEN`
+
+**File**: `.github/workflows/gh-workflow-immortality.yml`
+
+GitHub can disable scheduled workflows after long repository inactivity. The keepalive workflow runs monthly and can re-enable cron-based workflows when a repository secret named `PERSONAL_ACCESS_TOKEN` is configured.
+
+- Create a fine-grained GitHub Personal Access Token for this repository.
+- Grant **Actions: Read and write** access. If GitHub requires repository metadata access, leave the default **Metadata: Read-only** permission enabled.
+- Save the token in **GitHub repo → Settings → Secrets and variables → Actions → New repository secret** as `PERSONAL_ACCESS_TOKEN`.
+- Do **not** put this token in `.env`, `.env.example`, or source code.
+
 ### Step-by-Step Execution
 
 ```
@@ -1572,6 +1593,7 @@ Removing React Router and using the App Router as the sole routing system yields
 /api/stock/:symbol/predictions   GET  → ML predictions (from LightGBM predictor)
 /api/stock/:symbol/explanation   GET  → Stored AI explanation (from Groq/Gemini explainer)
 /api/stock/:symbol/indicators    GET  → Technical indicators
+/api/stock/:symbol/fundamentals  GET  → SEC fundamentals, filings, and company/RSS updates
 /api/stock/:symbol/sankey        GET  → Sankey financial flow data (from FMP income statement)
 
 /api/watchlist/:userId          GET     → Get user's watchlist
@@ -1591,6 +1613,7 @@ Removing React Router and using the App Router as the sole routing system yields
 |---------|---------|
 | `websocketService` | Finnhub WebSocket for real-time prices |
 | `aggregateNewsService` | Merges news from Finnhub, Marketaux, TickerTick, RSS |
+| `fundamentalsService` | SEC CompanyFacts/Submissions and company/RSS update aggregation for the Fundamentals page |
 | `fmpService` | FMP API integration for income statements, product segmentation, and Sankey data generation |
 | `massiveService` | Technical indicators (RSI, MACD, SMA, EMA) with fallback calculation |
 | `marketService` | Market status, holidays, Fear & Greed Index |
@@ -1982,7 +2005,7 @@ Models are **retrained daily** in GitHub Actions. However, the drift monitor pro
 | `app/sankey/page.tsx` | Route `/sankey` | `Page` |
 | `app/stocks/[symbol]/page.tsx` | Route `/stocks/[symbol]` | `Page` |
 | `app/watchlist/page.tsx` | Route `/watchlist` | `Page` |
-| `views/fundamentals.tsx` | View: Financial fundamentals (Jika.io) | `FundamentalsPage` |
+| `views/fundamentals.tsx` | View: SEC/RSS fundamentals, filings, and TradingView widgets | `FundamentalsPage` |
 | `views/home.tsx` | View: Market dashboard | `HomePage` |
 | `views/landing.tsx` | View: Landing page info | `LandingPage` |
 | `views/news.tsx` | View: Aggregated market news | `NewsPage` |
@@ -2070,10 +2093,10 @@ MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/stock_predictor
 # API Keys (Node Backend)
 FINNHUB_API_KEY=your_finnhub_key
 CALENDARIFIC_API_KEY=your_calendarific_key
-RAPIDAPI_KEY=your_rapidapi_key
 MARKETAUX_API_KEY=your_marketaux_key
 NEWSAPI_KEY=your_newsapi_key
 FINANCIALDATA_API_KEY=your_financialdata_key
+SEC_USER_AGENT=StockPredictAI/1.0 contact@yourdomain.com
 
 # API Keys (ML Backend)
 FRED_API_KEY=your_fred_key

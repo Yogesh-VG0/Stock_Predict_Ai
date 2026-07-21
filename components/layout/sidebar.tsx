@@ -1,6 +1,7 @@
 "use client"
 
 import { useMemo, useState, useCallback } from "react"
+import Image from "next/image"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { motion } from "framer-motion"
@@ -9,7 +10,6 @@ import {
   LineChart,
   Newspaper,
   Star,
-  X,
   TrendingUp,
   TrendingDown,
 } from "lucide-react"
@@ -72,24 +72,20 @@ function StockLogo({ symbol, isLoading }: { symbol: string; isLoading: boolean }
   }
 
   return (
-    <img
+    <Image
       src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
       alt={symbol}
       width={24}
       height={24}
+      unoptimized
       loading="lazy"
-      decoding="async"
       className="w-6 h-6 rounded-full bg-zinc-900 object-contain flex-shrink-0"
       onError={handleError}
     />
   )
 }
 
-interface SidebarProps {
-  onClose: () => void
-}
-
-export default function Sidebar({ onClose }: SidebarProps) {
+export default function Sidebar() {
   const pathname = usePathname()
   const { stockPrices } = useWebSocket()
   const { isMobile, setOpenMobile } = useSidebar()

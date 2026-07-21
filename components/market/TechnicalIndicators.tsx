@@ -1,10 +1,9 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { motion } from "framer-motion"
 import {
   TrendingUp,
-  TrendingDown,
   Activity,
   BarChart2,
   ArrowUpRight,
@@ -64,7 +63,7 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchIndicators = async () => {
+  const fetchIndicators = useCallback(async () => {
     // Check prefetch cache first for instant loading
     const cached = getCachedData<any>(`indicators-${symbol}`)
     if (cached && cached.success !== false) {
@@ -91,9 +90,9 @@ export default function TechnicalIndicators({ symbol }: TechnicalIndicatorsProps
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [symbol])
 
-  useEffect(() => { fetchIndicators() }, [symbol])
+  useEffect(() => { fetchIndicators() }, [fetchIndicators])
 
   // ── Signal helpers ──
   const signalColor = (s: string) => {

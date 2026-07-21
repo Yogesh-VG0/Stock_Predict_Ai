@@ -261,8 +261,8 @@ export async function getStockPrice(symbol: string): Promise<{ price: number; ch
           };
         }
       }
-    } catch (predErr) {
-      console.log(`Prediction-based price fallback failed for ${symbol}`);
+    } catch (error) {
+      console.log(`Prediction-based price fallback failed for ${symbol}:`, error);
     }
 
     return null;
@@ -333,6 +333,56 @@ export interface StockDetails {
   };
 }
 
+export interface FundamentalsMetric {
+  value: number;
+  period?: string;
+  fiscalYear?: number | string | null;
+  fiscalPeriod?: string | null;
+  end?: string;
+  filed?: string;
+  factName?: string;
+}
+
+export interface FundamentalsQuarter {
+  date: string;
+  period: string;
+  fiscalYear?: number | string | null;
+  fiscalPeriod?: string | null;
+  revenue: number | null;
+  netIncome: number | null;
+}
+
+export interface FundamentalsFiling {
+  form: string;
+  filingDate: string;
+  reportDate?: string;
+  accessionNumber?: string;
+  primaryDocument?: string;
+  description: string;
+  url: string;
+}
+
+export interface FundamentalsUpdate {
+  title: string;
+  url: string;
+  published_at: string;
+  source: string;
+  snippet?: string;
+}
+
+export interface FundamentalsOverview {
+  success: boolean;
+  symbol: string;
+  cik: string;
+  companyName: string;
+  source: string;
+  annualMetrics: Record<string, FundamentalsMetric | null>;
+  quarterly: FundamentalsQuarter[];
+  filings: FundamentalsFiling[];
+  updates: FundamentalsUpdate[];
+  lastUpdated: string;
+}
+
 export async function getStockDetails(symbol: string): Promise<StockDetails | null> {
   try {
     const response = await fetch(`${API_BASE_URL}/api/stock/${symbol}`, { cache: 'no-store' });
@@ -343,6 +393,25 @@ export async function getStockDetails(symbol: string): Promise<StockDetails | nu
     return data;
   } catch (error) {
     console.error('Error fetching stock details:', error);
+    return null;
+  }
+}
+
+export async function getFundamentalsOverview(symbol: string): Promise<FundamentalsOverview | null> {
+  try {
+    await backendReady()
+    const response = await fetch(`${NODE_BACKEND_URL}/api/stock/${symbol.toUpperCase()}/fundamentals`, {
+      cache: 'no-store',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch fundamentals overview: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error fetching fundamentals overview:', error);
     return null;
   }
 }
@@ -458,8 +527,8 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
           };
         }
       }
-    } catch (storedError) {
-      console.log(`No stored explanation found for ${ticker}, will try generation`);
+    } catch (error) {
+      console.log(`No stored explanation found for ${ticker}, will try generation:`, error);
     }
 
     // PRIORITY 2: Try Node.js backend stored explanation endpoint
@@ -472,8 +541,8 @@ export async function getComprehensiveAIExplanation(ticker: string, date?: strin
           return data;
         }
       }
-    } catch (nodeError) {
-      console.log('Node.js backend stored explanation not available');
+    } catch (error) {
+      console.log('Node.js backend stored explanation not available:', error);
     }
 
     // PRIORITY 3: Only generate if no stored data exists (this is expensive!)
@@ -808,5 +877,3 @@ export async function subscribeToUpdates(symbols: string[]): Promise<{ success: 
     return { success: false };
   }
 }
-
-

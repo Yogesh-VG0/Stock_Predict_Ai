@@ -22,7 +22,7 @@ interface MarketSentimentBannerProps {
 
 export default function MarketSentimentBanner({ className }: MarketSentimentBannerProps) {
   const [sentiment, setSentiment] = useState<"bullish" | "bearish" | "neutral">("neutral")
-  const [fgi, setFgi] = useState<{ value: number; valueText: string } | null>(null)
+  const [fgi, setFgi] = useState<{ value: number; valueText: string; source?: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
@@ -39,7 +39,7 @@ export default function MarketSentimentBanner({ className }: MarketSentimentBann
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const data = await res.json()
           if (data && data.fgi && data.fgi.now && data.fgi.now.value !== null) {
-            setFgi({ value: data.fgi.now.value, valueText: data.fgi.now.valueText })
+            setFgi({ value: data.fgi.now.value, valueText: data.fgi.now.valueText, source: data.source })
             setSentiment(mapValueTextToSentiment(data.fgi.now.valueText))
             setError(null)
             setLoading(false)
@@ -89,6 +89,8 @@ export default function MarketSentimentBanner({ className }: MarketSentimentBann
     }
   }
 
+  const sentimentLabel = fgi?.source?.includes("proxy") ? "Market Mood Proxy" : "Fear & Greed Index"
+
   return (
     <motion.div
       initial={{ opacity: 0, y: -10 }}
@@ -116,10 +118,13 @@ export default function MarketSentimentBanner({ className }: MarketSentimentBann
                 <span className="font-medium capitalize">{sentiment} Market</span>
               </div>
               <div className="text-sm text-zinc-400">
-                <span className="font-medium text-white">Fear & Greed Index:</span>{" "}
+                <span className="font-medium text-white">{sentimentLabel}:</span>{" "}
                 {error && <span className="text-red-500">{error}</span>}
                 {!error && fgi && (
-                  <span>{fgi.value} ({fgi.valueText})</span>
+                  <span>
+                    {fgi.value} ({fgi.valueText})
+                    {fgi.source?.includes("proxy") && <span className="text-zinc-500"> · live estimate</span>}
+                  </span>
                 )}
               </div>
             </>

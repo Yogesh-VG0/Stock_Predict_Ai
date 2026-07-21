@@ -10,7 +10,6 @@ declare global {
 
 export default function TradingViewScriptLoader() {
   const [isLoaded, setIsLoaded] = useState(false)
-  const [hasError, setHasError] = useState(false)
 
   useEffect(() => {
     // Skip if already loaded or if we're in SSR
@@ -28,7 +27,6 @@ export default function TradingViewScriptLoader() {
     }
     script.onerror = () => {
       console.error("Failed to load TradingView script")
-      setHasError(true)
     }
 
     document.head.appendChild(script)

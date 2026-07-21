@@ -85,7 +85,6 @@ export function ModelPerformanceCard() {
         {(['30_day', '7_day', 'next_day'] as const).map((horizon) => {
           const data = metrics.horizons[horizon]
           const isPositive = data.total_return > 0
-          const beatsBenchmark = data.total_return > metrics.benchmark.spy_return
 
           return (
             <div

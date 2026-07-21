@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useCallback } from "react"
+import Image from "next/image"
 
 interface StockLogoProps {
   symbol: string
@@ -25,13 +26,13 @@ export default function StockLogo({ symbol, size = 24 }: StockLogoProps) {
   }
 
   return (
-    <img
+    <Image
       src={`https://raw.githubusercontent.com/davidepalazzo/ticker-logos/main/ticker_icons/${symbol}.png`}
       alt={`${symbol} company logo`}
       width={size}
       height={size}
+      unoptimized
       loading="lazy"
-      decoding="async"
       className="rounded-full bg-zinc-900 object-contain flex-shrink-0"
       style={{ width: size, height: size }}
       onError={handleError}
