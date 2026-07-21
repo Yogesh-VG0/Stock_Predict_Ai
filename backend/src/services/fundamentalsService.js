@@ -57,7 +57,12 @@ const COMPANY_RSS_FEEDS = {
 };
 
 const FACT_DEFINITIONS = {
-  revenue: ['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues', 'SalesRevenueNet'],
+  revenue: [
+    'RevenueFromContractWithCustomerExcludingAssessedTax',
+    'Revenues',
+    'RevenuesNetOfInterestExpense',
+    'SalesRevenueNet',
+  ],
   grossProfit: ['GrossProfit'],
   operatingIncome: ['OperatingIncomeLoss'],
   netIncome: ['NetIncomeLoss', 'ProfitLoss'],
@@ -68,6 +73,7 @@ const FACT_DEFINITIONS = {
 };
 
 const IMPORTANT_FORMS = new Set(['10-K', '10-Q', '8-K', 'DEF 14A', 'S-8', '4']);
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function cacheGet(key) {
   const entry = cache.get(key);
@@ -128,13 +134,33 @@ async function getCikForSymbol(symbol) {
   return String(match.cik_str).padStart(10, '0');
 }
 
-function getFactUnits(companyFacts, factNames, unit = 'USD') {
+function selectUnit(units, preferredUnit = 'USD') {
+  if (!units) return null;
+  if (Array.isArray(units?.[preferredUnit])) return preferredUnit;
+
+  const unitKeys = Object.keys(units).filter(key => Array.isArray(units[key]));
+  const preferred = preferredUnit.toUpperCase();
+  return unitKeys.find(key => key.toUpperCase() === preferred)
+    || unitKeys.find(key => key.toUpperCase().includes(preferred) && !key.includes('/'))
+    || unitKeys[0]
+    || null;
+}
+
+function getFactUnitCandidates(companyFacts, factNames, preferredUnit = 'USD') {
   const usGaap = companyFacts?.facts?.['us-gaap'] || {};
-  for (const factName of factNames) {
+  return factNames.flatMap((factName, priority) => {
     const units = usGaap[factName]?.units;
-    if (Array.isArray(units?.[unit])) return { factName, items: units[unit] };
-  }
-  return { factName: null, items: [] };
+    const unit = selectUnit(units, preferredUnit);
+    if (!unit) return [];
+    return [{ factName, unit, priority, items: units[unit] }];
+  });
+}
+
+function compatibleFactGroup(factName) {
+  if (factName === 'RevenuesNetOfInterestExpense') return 'bank-net-revenue';
+  if (['RevenueFromContractWithCustomerExcludingAssessedTax', 'Revenues', 'SalesRevenueNet'].includes(factName)) return 'standard-revenue';
+  if (['NetIncomeLoss', 'ProfitLoss'].includes(factName)) return 'net-income';
+  return factName || 'unknown';
 }
 
 function parseQuarterFromFrame(frame) {
@@ -143,68 +169,264 @@ function parseQuarterFromFrame(frame) {
   return { fiscalYear: Number(match[1]), fiscalPeriod: `Q${match[2]}`, period: `${match[1]} Q${match[2]}` };
 }
 
-function normalizeFactItem(item, factName) {
+function dateTime(value) {
+  const time = new Date(value || '').getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function durationDays(item) {
+  const start = dateTime(item.start);
+  const end = dateTime(item.end);
+  if (start === null || end === null || end <= start) return null;
+  return Math.round((end - start) / DAY_MS);
+}
+
+function isQuarterDuration(item) {
+  const days = durationDays(item);
+  if (days !== null) return days >= 55 && days <= 125;
+  return Boolean(parseQuarterFromFrame(item.frame));
+}
+
+function isAnnualDurationOrInstant(item) {
+  const days = durationDays(item);
+  if (days === null) return true;
+  return days >= 250 && days <= 400;
+}
+
+function normalizeFactItem(item, factName, unit = 'USD') {
   const quarter = parseQuarterFromFrame(item.frame);
+  const fp = String(item.fp || '').toUpperCase();
+  const fy = Number(item.fy);
+  const quarterlyDuration = isQuarterDuration(item);
+  const fiscalPeriod = /^Q[1-4]$/.test(fp)
+    ? fp
+    : quarter?.fiscalPeriod || (item.form === '10-K' && fp === 'FY' && quarterlyDuration ? 'Q4' : null);
+  const fiscalYear = Number.isFinite(fy) ? fy : quarter?.fiscalYear || null;
+
   return {
     factName,
+    unit,
     value: Number(item.val),
+    start: item.start,
     end: item.end,
     filed: item.filed,
     form: item.form,
-    fiscalYear: quarter?.fiscalYear || item.fy || null,
-    fiscalPeriod: quarter?.fiscalPeriod || item.fp || null,
-    period: quarter?.period || `${item.fy || ''} ${item.fp || ''}`.trim(),
+    frame: item.frame,
+    fiscalYear,
+    fiscalPeriod,
+    period: fiscalYear && fiscalPeriod ? `${fiscalYear} ${fiscalPeriod}` : quarter?.period || `${item.fy || ''} ${item.fp || ''}`.trim(),
+    durationDays: durationDays(item),
   };
 }
 
 function latestAnnualMetric(companyFacts, factNames) {
-  const { factName, items } = getFactUnits(companyFacts, factNames);
-  const annual = items
-    .filter(item => Number.isFinite(Number(item.val)) && (item.form === '10-K' || item.fp === 'FY'))
-    .map(item => normalizeFactItem(item, factName))
-    .sort((a, b) => new Date(b.filed || b.end).getTime() - new Date(a.filed || a.end).getTime());
+  const candidates = getFactUnitCandidates(companyFacts, factNames);
+  const annual = candidates
+    .flatMap(({ factName, unit, priority, items }) => items
+      .filter(item => Number.isFinite(Number(item.val)) && (item.form === '10-K' || item.fp === 'FY') && isAnnualDurationOrInstant(item))
+      .map(item => ({ ...normalizeFactItem(item, factName, unit), priority })))
+    .sort((a, b) => {
+      const endDiff = (dateTime(b.end) || 0) - (dateTime(a.end) || 0);
+      if (endDiff !== 0) return endDiff;
+      const filedDiff = (dateTime(b.filed) || 0) - (dateTime(a.filed) || 0);
+      if (filedDiff !== 0) return filedDiff;
+      return a.priority - b.priority;
+    });
 
   return annual[0] || null;
 }
 
+function annualMetricMap(companyFacts, factNames) {
+  const candidates = getFactUnitCandidates(companyFacts, factNames);
+  const byYearFactAndUnit = new Map();
+
+  for (const { factName, unit, priority, items } of candidates) {
+    for (const item of items) {
+      if (!Number.isFinite(Number(item.val))) continue;
+      if (!(item.form === '10-K' || String(item.fp || '').toUpperCase() === 'FY')) continue;
+      if (!isAnnualDurationOrInstant(item)) continue;
+
+      const normalized = { ...normalizeFactItem(item, factName, unit), priority };
+      if (!normalized.fiscalYear) continue;
+
+      const key = `${normalized.fiscalYear}-${compatibleFactGroup(normalized.factName)}-${normalized.unit}`;
+      const existing = byYearFactAndUnit.get(key);
+      const candidate = {
+        ...normalized,
+        score: 100 + Math.max(0, factNames.length - priority),
+      };
+
+      if (isBetterQuarterlyCandidate(candidate, existing)) {
+        byYearFactAndUnit.set(key, candidate);
+      }
+    }
+  }
+
+  return byYearFactAndUnit;
+}
+
+function quarterlyCandidateScore(item) {
+  let score = 0;
+  const days = durationDays(item);
+  const fp = String(item.fp || '').toUpperCase();
+
+  if (days !== null && days >= 55 && days <= 125) score += 50;
+  if (parseQuarterFromFrame(item.frame)) score += 20;
+  if (/^Q[1-4]$/.test(fp)) score += 15;
+  if (item.form === '10-Q') score += 10;
+  if (item.form === '10-K') score += 6;
+  if (item.filed) score += 2;
+  return score;
+}
+
+function isBetterQuarterlyCandidate(next, existing) {
+  if (!existing) return true;
+  if (next.score !== existing.score) return next.score > existing.score;
+
+  const nextEnd = dateTime(next.end) || 0;
+  const existingEnd = dateTime(existing.end) || 0;
+  if (nextEnd !== existingEnd) return nextEnd > existingEnd;
+
+  return (dateTime(next.filed) || 0) > (dateTime(existing.filed) || 0);
+}
+
+function quarterlyKey(item) {
+  if (item.fiscalYear && /^Q[1-4]$/.test(String(item.fiscalPeriod || ''))) {
+    return `${item.fiscalYear}-${item.fiscalPeriod}`;
+  }
+
+  return item.end || item.period || item.frame || null;
+}
+
 function quarterlyMetricMap(companyFacts, factNames) {
-  const { factName, items } = getFactUnits(companyFacts, factNames);
+  const candidates = getFactUnitCandidates(companyFacts, factNames);
   const byKey = new Map();
 
-  for (const item of items) {
-    if (!Number.isFinite(Number(item.val))) continue;
-    const parsed = parseQuarterFromFrame(item.frame);
-    if (!parsed && !(item.form === '10-Q' && /^Q[1-3]$/.test(String(item.fp || '')))) continue;
+  for (const { factName, unit, priority, items } of candidates) {
+    for (const item of items) {
+      if (!Number.isFinite(Number(item.val))) continue;
+      if (String(item.fp || '').toUpperCase() === 'FY') continue;
+      if (!isQuarterDuration(item)) continue;
 
-    const normalized = normalizeFactItem(item, factName);
-    const key = normalized.end || normalized.period;
-    if (!key) continue;
+      const normalized = normalizeFactItem(item, factName, unit);
+      const key = quarterlyKey(normalized);
+      if (!key) continue;
 
-    const existing = byKey.get(key);
-    if (!existing || new Date(normalized.filed || normalized.end).getTime() > new Date(existing.filed || existing.end).getTime()) {
-      byKey.set(key, normalized);
+      const existing = byKey.get(key);
+      const candidate = {
+        ...normalized,
+        priority,
+        score: quarterlyCandidateScore(item) + Math.max(0, factNames.length - priority),
+      };
+      if (isBetterQuarterlyCandidate(candidate, existing)) {
+        byKey.set(key, candidate);
+      }
     }
   }
 
   return byKey;
 }
 
+function annualKeyForQuarter(item) {
+  if (!item?.fiscalYear || !item.factName || !item.unit) return null;
+  return `${item.fiscalYear}-${compatibleFactGroup(item.factName)}-${item.unit}`;
+}
+
+function addDerivedFourthQuarters(quarterly, annualByFactAndUnit) {
+  const fiscalYears = new Set(
+    [...quarterly.values()]
+      .map(item => item.fiscalYear)
+      .filter(Boolean)
+  );
+
+  for (const fiscalYear of fiscalYears) {
+    const q4Key = `${fiscalYear}-Q4`;
+    if (quarterly.has(q4Key)) continue;
+
+    const q1 = quarterly.get(`${fiscalYear}-Q1`);
+    const q2 = quarterly.get(`${fiscalYear}-Q2`);
+    const q3 = quarterly.get(`${fiscalYear}-Q3`);
+    if (!q1 || !q2 || !q3) continue;
+
+    const q1AnnualKey = annualKeyForQuarter(q1);
+    const q2AnnualKey = annualKeyForQuarter(q2);
+    const q3AnnualKey = annualKeyForQuarter(q3);
+    if (!q1AnnualKey || q1AnnualKey !== q2AnnualKey || q1AnnualKey !== q3AnnualKey) continue;
+
+    const annualItem = annualByFactAndUnit.get(q1AnnualKey);
+    if (!annualItem) continue;
+
+    const derivedValue = annualItem.value - q1.value - q2.value - q3.value;
+    if (!Number.isFinite(derivedValue)) continue;
+
+    // Some SEC facts are restated or use non-comparable units. Avoid showing
+    // nonsensical derived Q4 values if the annual and quarterly values clearly
+    // do not reconcile.
+    const annualAbs = Math.abs(annualItem.value) || 1;
+    if (Math.abs(derivedValue) > annualAbs * 1.5) continue;
+
+    quarterly.set(q4Key, {
+      ...annualItem,
+      value: derivedValue,
+      fiscalPeriod: 'Q4',
+      period: `${fiscalYear} Q4`,
+      derived: true,
+      derivation: 'FY minus Q1-Q3 SEC XBRL facts',
+      score: 85,
+    });
+  }
+
+  return quarterly;
+}
+
+function quarterSortValue(row) {
+  const fiscalYear = Number(row.fiscalYear) || 0;
+  const fiscalQuarter = Number(String(row.fiscalPeriod || '').replace('Q', '')) || 0;
+  if (fiscalYear && fiscalQuarter) {
+    // Return a date-like value, not a small ordinal, so mixed rows with only
+    // end dates still sort correctly against fiscal-year/quarter rows.
+    return Date.UTC(fiscalYear, fiscalQuarter * 3 - 1, 1);
+  }
+
+  const byEnd = dateTime(row.end || row.date);
+  return byEnd !== null ? byEnd : 0;
+}
+
 function buildQuarterlySeries(companyFacts) {
-  const revenue = quarterlyMetricMap(companyFacts, FACT_DEFINITIONS.revenue);
-  const netIncome = quarterlyMetricMap(companyFacts, FACT_DEFINITIONS.netIncome);
+  const revenue = addDerivedFourthQuarters(
+    quarterlyMetricMap(companyFacts, FACT_DEFINITIONS.revenue),
+    annualMetricMap(companyFacts, FACT_DEFINITIONS.revenue),
+  );
+  const netIncome = addDerivedFourthQuarters(
+    quarterlyMetricMap(companyFacts, FACT_DEFINITIONS.netIncome),
+    annualMetricMap(companyFacts, FACT_DEFINITIONS.netIncome),
+  );
   const keys = [...new Set([...revenue.keys(), ...netIncome.keys()])]
-    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+    .map(key => {
+      const rev = revenue.get(key);
+      const net = netIncome.get(key);
+      const base = rev || net;
+      return { key, rev, net, base };
+    })
+    .sort((a, b) => quarterSortValue({ ...a.base, date: a.key }) - quarterSortValue({ ...b.base, date: b.key }))
     .slice(-8);
 
-  return keys.map(key => {
-    const rev = revenue.get(key);
-    const net = netIncome.get(key);
-    const base = rev || net;
+  return keys.map(({ key, rev, net, base }) => {
     return {
-      date: key,
+      date: base?.end || key,
       period: base?.period || key,
       fiscalYear: base?.fiscalYear || null,
       fiscalPeriod: base?.fiscalPeriod || null,
+      end: base?.end || null,
+      filed: base?.filed || null,
+      revenueFactName: rev?.factName || null,
+      netIncomeFactName: net?.factName || null,
+      revenueUnit: rev?.unit || null,
+      netIncomeUnit: net?.unit || null,
+      revenueDerived: Boolean(rev?.derived),
+      netIncomeDerived: Boolean(net?.derived),
+      revenueDerivation: rev?.derivation || null,
+      netIncomeDerivation: net?.derivation || null,
       revenue: rev?.value ?? null,
       netIncome: net?.value ?? null,
     };
@@ -224,6 +446,7 @@ function buildAnnualMetrics(companyFacts) {
           end: item.end,
           filed: item.filed,
           factName: item.factName,
+          unit: item.unit,
         }
       : null;
   }

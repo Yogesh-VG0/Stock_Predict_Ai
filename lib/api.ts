@@ -341,6 +341,7 @@ export interface FundamentalsMetric {
   end?: string;
   filed?: string;
   factName?: string;
+  unit?: string;
 }
 
 export interface FundamentalsQuarter {
@@ -348,6 +349,16 @@ export interface FundamentalsQuarter {
   period: string;
   fiscalYear?: number | string | null;
   fiscalPeriod?: string | null;
+  end?: string | null;
+  filed?: string | null;
+  revenueFactName?: string | null;
+  netIncomeFactName?: string | null;
+  revenueUnit?: string | null;
+  netIncomeUnit?: string | null;
+  revenueDerived?: boolean;
+  netIncomeDerived?: boolean;
+  revenueDerivation?: string | null;
+  netIncomeDerivation?: string | null;
   revenue: number | null;
   netIncome: number | null;
 }

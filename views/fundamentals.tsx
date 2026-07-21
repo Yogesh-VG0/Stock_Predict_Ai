@@ -64,12 +64,22 @@ function sanitizeSymbol(value: string) {
 }
 
 function formatCurrency(value?: number | null) {
-  if (!Number.isFinite(value || 0) || !value) return "—"
+  if (value === null || value === undefined || !Number.isFinite(value)) return "—"
+  const sign = value < 0 ? "-" : ""
   const abs = Math.abs(value)
-  if (abs >= 1e12) return `$${(value / 1e12).toFixed(2)}T`
-  if (abs >= 1e9) return `$${(value / 1e9).toFixed(2)}B`
-  if (abs >= 1e6) return `$${(value / 1e6).toFixed(2)}M`
-  return `$${value.toLocaleString()}`
+  if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(2)}T`
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`
+  return `${sign}$${abs.toLocaleString()}`
+}
+
+function isFiniteNumber(value?: number | null) {
+  return typeof value === "number" && Number.isFinite(value)
+}
+
+function formatQuarterLabel(row: FundamentalsQuarter) {
+  if (row.fiscalPeriod && row.fiscalYear) return `${row.fiscalPeriod} ${row.fiscalYear}`
+  return row.period || formatDate(row.date)
 }
 
 function formatDate(value?: string) {
@@ -92,6 +102,7 @@ function normalizeWebsiteUrl(website?: string) {
 function FinancialBarChart({ quarters }: { quarters: FundamentalsQuarter[] }) {
   const rows = quarters.filter((item) => item.revenue !== null || item.netIncome !== null).slice(-8)
   const maxValue = Math.max(...rows.flatMap((row) => [Math.abs(row.revenue || 0), Math.abs(row.netIncome || 0)]), 1)
+  const scaleLabel = maxValue >= 1e12 ? "USD trillions" : maxValue >= 1e9 ? "USD billions" : "USD millions"
 
   if (!rows.length) {
     return (
@@ -104,38 +115,98 @@ function FinancialBarChart({ quarters }: { quarters: FundamentalsQuarter[] }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-4 text-xs text-zinc-400">
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-blue-500" /> Revenue</span>
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Net income</span>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-zinc-400">
+        <div className="flex flex-wrap items-center gap-4">
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-blue-500" /> Revenue</span>
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-emerald-500" /> Net income</span>
+          <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-red-500" /> Loss</span>
+        </div>
+        <span className="rounded-full border border-zinc-800 bg-zinc-950/70 px-2 py-1 text-[11px] text-zinc-500">
+          Scale: {scaleLabel} · values shown per quarter
+        </span>
       </div>
       <div className="overflow-x-auto pb-2">
-        <div className="flex min-w-[620px] items-end gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+        <div className="flex min-w-[760px] items-end gap-3 rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
           {rows.map((row) => {
-            const revenueHeight = Math.max(4, Math.round(((row.revenue || 0) / maxValue) * 180))
-            const netIncomeHeight = Math.max(4, Math.round((Math.abs(row.netIncome || 0) / maxValue) * 180))
+            const revenueHeight = isFiniteNumber(row.revenue) ? Math.max(6, Math.round((Math.abs(row.revenue || 0) / maxValue) * 160)) : 0
+            const netIncomeHeight = isFiniteNumber(row.netIncome) ? Math.max(6, Math.round((Math.abs(row.netIncome || 0) / maxValue) * 160)) : 0
+            const netIncomeIsLoss = (row.netIncome || 0) < 0
+            const label = formatQuarterLabel(row)
             return (
               <div key={`${row.date}-${row.period}`} className="flex flex-1 flex-col items-center gap-2">
-                <div className="flex h-48 items-end gap-1.5">
-                  <div
-                    className="w-5 rounded-t bg-blue-500/80 shadow-lg shadow-blue-500/10"
-                    style={{ height: revenueHeight }}
-                    title={`Revenue: ${formatCurrency(row.revenue)}`}
-                  />
-                  <div
-                    className="w-5 rounded-t bg-emerald-500/80 shadow-lg shadow-emerald-500/10"
-                    style={{ height: netIncomeHeight }}
-                    title={`Net income: ${formatCurrency(row.netIncome)}`}
-                  />
+                <div className="flex min-h-[44px] flex-col items-center justify-end text-center text-[11px] leading-tight">
+                  <span className="font-semibold text-blue-300">{formatCurrency(row.revenue)}</span>
+                  <span className={netIncomeIsLoss ? "font-semibold text-red-300" : "font-semibold text-emerald-300"}>
+                    {formatCurrency(row.netIncome)}
+                  </span>
+                </div>
+                <div className="relative flex h-48 items-end gap-2 border-b border-zinc-800/80 px-1">
+                  {isFiniteNumber(row.revenue) ? (
+                    <div
+                      className="w-7 rounded-t bg-blue-500/85 shadow-lg shadow-blue-500/10"
+                      style={{ height: revenueHeight }}
+                      title={`${label} revenue: ${formatCurrency(row.revenue)}${row.revenueDerived ? ` (${row.revenueDerivation || "derived"})` : ""}`}
+                      aria-label={`${label} revenue ${formatCurrency(row.revenue)}`}
+                    />
+                  ) : (
+                    <div className="flex h-10 w-7 items-center justify-center rounded border border-dashed border-zinc-800 text-[10px] text-zinc-600">N/A</div>
+                  )}
+                  {isFiniteNumber(row.netIncome) ? (
+                    <div
+                      className={`w-7 rounded-t shadow-lg ${netIncomeIsLoss ? "bg-red-500/85 shadow-red-500/10" : "bg-emerald-500/85 shadow-emerald-500/10"}`}
+                      style={{ height: netIncomeHeight }}
+                      title={`${label} net income: ${formatCurrency(row.netIncome)}${row.netIncomeDerived ? ` (${row.netIncomeDerivation || "derived"})` : ""}`}
+                      aria-label={`${label} net income ${formatCurrency(row.netIncome)}`}
+                    />
+                  ) : (
+                    <div className="flex h-10 w-7 items-center justify-center rounded border border-dashed border-zinc-800 text-[10px] text-zinc-600">N/A</div>
+                  )}
                 </div>
                 <div className="text-center text-[11px] leading-tight text-zinc-500">
                   <div className="font-medium text-zinc-300">{row.fiscalPeriod || row.period}</div>
                   <div>{row.fiscalYear || formatDate(row.date)}</div>
+                  {(row.revenueDerived || row.netIncomeDerived) && (
+                    <div className="mt-1 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">derived</div>
+                  )}
                 </div>
               </div>
             )
           })}
         </div>
       </div>
+      <div className="overflow-x-auto rounded-lg border border-zinc-800">
+        <table className="min-w-full divide-y divide-zinc-800 text-left text-xs">
+          <thead className="bg-zinc-900/70 text-zinc-500">
+            <tr>
+              <th className="px-3 py-2 font-semibold uppercase tracking-wider">Quarter</th>
+              <th className="px-3 py-2 font-semibold uppercase tracking-wider">Revenue</th>
+              <th className="px-3 py-2 font-semibold uppercase tracking-wider">Net income</th>
+              <th className="px-3 py-2 font-semibold uppercase tracking-wider">SEC fact</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-800 bg-zinc-950/40">
+            {rows.map((row) => (
+              <tr key={`table-${row.date}-${row.period}`}>
+                <td className="whitespace-nowrap px-3 py-2 font-medium text-zinc-200">{formatQuarterLabel(row)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-blue-300">
+                  {formatCurrency(row.revenue)} {row.revenueDerived && <span className="text-amber-300">*</span>}
+                </td>
+                <td className={`whitespace-nowrap px-3 py-2 ${(row.netIncome || 0) < 0 ? "text-red-300" : "text-emerald-300"}`}>
+                  {formatCurrency(row.netIncome)} {row.netIncomeDerived && <span className="text-amber-300">*</span>}
+                </td>
+                <td className="max-w-[280px] truncate px-3 py-2 text-zinc-500" title={[row.revenueFactName, row.netIncomeFactName].filter(Boolean).join(" / ")}>
+                  {[row.revenueFactName, row.netIncomeFactName].filter(Boolean).join(" / ") || "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rows.some((row) => row.revenueDerived || row.netIncomeDerived) && (
+        <p className="text-xs leading-relaxed text-amber-300/80">
+          * Some Q4 values are derived as full fiscal-year SEC facts minus Q1–Q3, because many companies report full-year XBRL facts instead of standalone Q4 values.
+        </p>
+      )}
     </div>
   )
 }
